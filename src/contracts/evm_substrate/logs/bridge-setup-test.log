@@ -1,0 +1,300 @@
+finished watchdog conf
+--- Starting Bridge Setup and Test ---
+Setting up provider and signer...
+Using signer address: 0x41d06a54D85EE34c0Ca7c21979eE87b9817cde5b
+Validating P3D precompile address...
+✓ P3D precompile address validation passed: 0x0000000000000000000000000000000000000802
+Loading deployed contract addresses...
+CounterstakeFactory: 0xBDe856499b710dc8E428a6B616A4260AAFa60dd0
+AssistantFactory: 0x5b74685B32cdaA74a030DA14F15F56CcfB5cA1Bc
+Oracle: 0xAc647d0caB27e912C844F27716154f54EDD519cE
+Loading contract ABIs...
+Creating contract instances...
+Testing Oracle price configuration...
+  ✓ Oracle prices retrieved:
+    - USDT vs P3D: (1000000000000000000, 1400000000000000)
+    - USDC vs P3D: (0, 0)
+    - BUSD vs P3D: (0, 0)
+Setting up Oracle price feeds...
+    ✓ USDT vs P3D price already set: (1000000000000000000, 1400000000000000)
+  Setting up USDC vs P3D price feed...
+    ✓ USDC vs P3D price set: (1, 0.0014)
+  Setting up BUSD vs P3D price feed...
+    ✓ BUSD vs P3D price set: (1, 0.0014)
+  Setting up wrapped token price feeds...
+    ✓ wUSDT vs P3D price set: (1, 0.0014)
+    ✓ wUSDC vs P3D price set: (1, 0.0014)
+    ✓ wBUSD vs P3D price set: (1, 0.0014)
+  Setting up _NATIVE_ vs wrapped token symbol price feeds...
+    ✓ _NATIVE_ vs wUSDT price set: (1000000000000000000, 1400000000000000)
+    ✓ _NATIVE_ vs wUSDC price set: (1000000000000000000, 1400000000000000)
+    ✓ _NATIVE_ vs wBUSD price set: (1000000000000000000, 1400000000000000)
+  Setting up P3D vs _NATIVE_ price feed...
+    ✓ P3D vs _NATIVE_ price set: (1000000000000000000, 1000000000000000000)
+  Setting up Foreign token vs _NATIVE_ price feeds...
+    ✓ wUSDT vs _NATIVE_ price set: (1000000000000000000, 1000000000000000000)
+    ✓ wUSDC vs _NATIVE_ price set: (1000000000000000000, 1000000000000000000)
+    ✓ wBUSD vs _NATIVE_ price set: (1000000000000000000, 1000000000000000000)
+  Setting up _NATIVE_ vs wrapped token symbol price feeds for export assets...
+    ✓ _NATIVE_ vs wP3D price set: (1.0, 1.0) = 1 wP3D per _NATIVE_
+    ✓ _NATIVE_ vs wFIRE price set: (0.5, 1.0) = 0.5 wFIRE per _NATIVE_
+    ✓ _NATIVE_ vs wWATER price set: (2.5, 1.0) = 2.5 wWATER per _NATIVE_
+  Setting up reverse price feeds for export assets (symbol vs _NATIVE_)...
+    ✓ wP3D vs _NATIVE_ price set: (1.0, 1.0) = 1 _NATIVE_ per wP3D
+    ✓ wFIRE vs _NATIVE_ price set: (2000000.0, 1.0) = 2 _NATIVE_ per wFIRE
+    ✓ wWATER vs _NATIVE_ price set: (400000.0, 1.0) = 0.4 _NATIVE_ per wWATER
+  Setting up Local token vs _NATIVE_ price feeds...
+    ✓ FIRE vs _NATIVE_ price set: (2000000.0, 1.0) = 2 _NATIVE_ per FIRE
+    ✓ WATER vs _NATIVE_ price set: (400000.0, 1.0) = 0.4 _NATIVE_ per WATER
+  Setting up _NATIVE_ vs unwrapped token price feeds...
+    ✓ _NATIVE_ vs FIRE price set: (0.000005, 1.0) = 0.5 FIRE per _NATIVE_
+    ✓ _NATIVE_ vs WATER price set: (0.0000025, 1.0) = 2.5 WATER per _NATIVE_
+  ✓ All required Oracle price feeds configured
+Creating Import Wrapper bridge (Ethereum -> 3DPass) for USDT using existing precompile...
+  ✓ USDT Import Wrapper bridge created: 0x6359F737F32BFd1862FfAfd9C2F888DfAdC8B7CF
+  ✓ Using existing precompile: 0xfBFBfbFA000000000000000000000000000000de
+Creating Import Wrapper bridge (Ethereum -> 3DPass) for USDC using existing precompile...
+  ✓ USDC Import Wrapper bridge created: 0x14982dc69e62508b3e4848129a55d6B1960b4Db0
+  ✓ Using existing precompile: 0xFbfbFBfA0000000000000000000000000000006f
+Creating Import Wrapper bridge (BSC -> 3DPass) for BUSD using existing precompile...
+  ✓ BUSD Import Wrapper bridge created: 0xAd913348E7B63f44185D5f6BACBD18d7189B2F1B
+  ✓ Using existing precompile: 0xFbFBFBfA0000000000000000000000000000014D
+Verifying precompiled ERC20 contracts...
+  ✓ wUSDT precompile symbol: wUSDT
+  ✓ wUSDC precompile symbol: wUSDC
+  ✓ wBUSD precompile symbol: wBUSD
+  ✓ FIRE precompile symbol: FIRE
+  ✓ WATER precompile symbol: WATER
+  ✓ Verified 5/5 precompiled ERC20 contracts
+Creating Export bridges (3DPass -> External Networks)...
+Creating Export bridge (3DPass -> Ethereum) for P3D...
+  ✓ P3D Export bridge created: 0x626D4E8c191c36B5937fD73A2A1B774C2361EA80
+Creating Export bridge (3DPass -> Ethereum) for FIRE...
+  ✓ FIRE Export bridge created: 0xFaF7C72bE647BC86106993E861C48b6c24a3cAd6
+Creating Export bridge (3DPass -> Ethereum) for WATER...
+  ✓ WATER Export bridge created: 0xeaeF21F2C0bcE1487Eaf9622b91600155B181a4b
+Creating Import Wrapper Assistants...
+  ✓ USDT Import Wrapper Assistant created: 0x0FAF9b7Cf0e62c6889486cE906d05A7a813a7cc5
+  ✓ USDC Import Wrapper Assistant created: 0xdf8D6962ADC7f29b6F9272376fE51D55B76B0fc5
+  ✓ BUSD Import Wrapper Assistant created: 0xA32ea7688b2937eeaf3f74804fbAFB70D0fc4FE3
+Creating Export Assistants...
+  ✓ P3D Export Assistant created: 0x747B60493839a26E20d191F6dC960C8C79C159AE
+  ✓ FIRE Export Assistant created: 0x8893d06fDfBd4B5696407413840bC2F333b33ca8
+  ✓ WATER Export Assistant created: 0x18d62db034579BCAcfB1e527647658f1AbAD0536
+Testing bridge functionality...
+  ✓ USDT Import bridge settings retrieved
+    - Home network: Ethereum
+    - Home asset: 0xdAC17F958D2ee523a2206206994597C13D831ec7
+    - Precompile address: 0xfBFBfbFA000000000000000000000000000000de
+    - Oracle address: 0xAc647d0caB27e912C844F27716154f54EDD519cE
+    - Governance address: 0xe8E8eAb629d7e324cB97381f70E2FcD869fb6DdE
+    - Stake token: 0x0000000000000000000000000000000000000802
+    - Ratio: 110/100
+    - Counterstake coefficient: 160/100
+    - Large threshold: 10000.0
+    - Min stake: 0.0
+    - Min price 20: 0.0
+    - Challenging periods: 10000000000000000000000
+    - Large challenging periods: undefined
+  ✓ USDC Import bridge settings retrieved
+    - Home network: Ethereum
+    - Home asset: 0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48
+    - Precompile address: 0xFbfbFBfA0000000000000000000000000000006f
+    - Oracle address: 0xAc647d0caB27e912C844F27716154f54EDD519cE
+    - Governance address: 0xAB5EA2f8AaF0981AE8Dd73f08bb2b8CF7d29efB8
+    - Stake token: 0x0000000000000000000000000000000000000802
+    - Ratio: 110/100
+    - Counterstake coefficient: 160/100
+    - Large threshold: 10000.0
+    - Min stake: 0.0
+    - Min price 20: 0.0
+    - Challenging periods: 10000000000000000000000
+    - Large challenging periods: undefined
+  ✓ BUSD Import bridge settings retrieved
+    - Home network: BSC
+    - Home asset: 0xe9e7CEA3DedcA5984780Bafc599bD69ADd087D56
+    - Precompile address: 0xFbFBFBfA0000000000000000000000000000014D
+    - Oracle address: 0xAc647d0caB27e912C844F27716154f54EDD519cE
+    - Governance address: 0xdf9A824C19D67D465a32f505eB1b2578AFd6f5BE
+    - Stake token: 0x0000000000000000000000000000000000000802
+    - Ratio: 110/100
+    - Counterstake coefficient: 160/100
+    - Large threshold: 10000.0
+    - Min stake: 0.0
+    - Min price 20: 0.0
+    - Challenging periods: 10000000000000000000000
+    - Large challenging periods: undefined
+  ✓ P3D Export bridge settings retrieved
+    - Foreign network: Ethereum
+    - Foreign asset: 0x742d35Cc6634C0532925a3b8D9a4F8A6c4f0E4A7
+    - Governance address: 0x825146e9a584FE48f6DfF43830732989b9FCe3E0
+    - Stake token: 0x0000000000000000000000000000000000000802
+    - Ratio: 110/100
+    - Counterstake coefficient: 160/100
+    - Large threshold: 10000.0
+    - Min stake: 0.0
+    - Challenging periods: 10000000000000000000000
+    - Large challenging periods: undefined
+  ✓ FIRE Export bridge settings retrieved
+    - Foreign network: Ethereum
+    - Foreign asset: 0x8F9B2e7D4A3C1F5E6B8A9D2C4E7F1A3B5C8D9E0F
+    - Governance address: 0x1Bf72a3bC5f9f8c837CA2AD303E15D80bAaA6FE0
+    - Stake token: 0xFbfBFBfA000000000000000000000000000001bC
+    - Ratio: 110/100
+    - Counterstake coefficient: 160/100
+    - Large threshold: 10000.0
+    - Min stake: 0.0
+    - Challenging periods: 10000000000000000000000
+    - Large challenging periods: undefined
+  ✓ WATER Export bridge settings retrieved
+    - Foreign network: Ethereum
+    - Foreign asset: 0x1A2B3C4D5E6F7A8B9C0D1E2F3A4B5C6D7E8F9A0B
+    - Governance address: 0xFB63F89949DEEdb302b6179998F6Fa1f19104B29
+    - Stake token: 0xfBFBFBfa0000000000000000000000000000022b
+    - Ratio: 110/100
+    - Counterstake coefficient: 160/100
+    - Large threshold: 10000.0
+    - Min stake: 0.0
+    - Challenging periods: 10000000000000000000000
+    - Large challenging periods: undefined
+Testing Oracle integration...
+  ✓ Oracle prices retrieved:
+    - USDT vs P3D: (1000000000000000000, 1400000000000000)
+    - USDC vs P3D: (1000000000000000000, 1400000000000000)
+    - BUSD vs P3D: (1000000000000000000, 1400000000000000)
+    - P3D vs _NATIVE_: (1000000000000000000, 1000000000000000000)
+    - wUSDT vs P3D: (1000000000000000000, 1400000000000000)
+    - wUSDC vs P3D: (1000000000000000000, 1400000000000000)
+    - wBUSD vs P3D: (1000000000000000000, 1400000000000000)
+    - _NATIVE_ vs wP3D: (1.0, 1.0) = 1.0 wP3D per _NATIVE_
+    - _NATIVE_ vs wFIRE: (1.0, 2000000.0) = 0.5 wFIRE per _NATIVE_
+    - _NATIVE_ vs wWATER: (1.0, 400000.0) = 2.5 wWATER per _NATIVE_
+    - wP3D vs _NATIVE_: (1.0, 1.0) = 1.0 _NATIVE_ per wP3D
+    - wFIRE vs _NATIVE_: (2000000.0, 1.0) = 2.0 _NATIVE_ per wFIRE
+    - wWATER vs _NATIVE_: (400000.0, 1.0) = 0.4 _NATIVE_ per wWATER
+Testing P3D precompile integration...
+  ✓ P3D precompile integration verified:
+    - Name: P3D token
+    - Symbol: P3D
+    - Decimals: 18
+    - Balance: 0.155013634448223637 P3D
+✅ ERC20 Precompile accessible: P3D token (P3D)
+    - Precompile accessibility: ✅ Verified
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  🎉 BRIDGE SETUP AND TEST SUMMARY
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+📋 TEST RESULTS:
+  ✅ USDT Import bridge created and tested
+  ✅ USDC Import bridge created and tested
+  ✅ BUSD Import bridge created and tested
+  ✅ Import Wrapper Assistants created
+  ✅ Export bridges created
+  ✅ Export Assistants created
+  ✅ Oracle integration verified
+  ✅ P3D precompile integration verified
+  ✅ All bridge functionality tests passed
+
+🌉 BRIDGE INSTANCES CREATED:
+  📥 USDT Import Bridge (Ethereum → 3DPass):
+     Address: 0x6359F737F32BFd1862FfAfd9C2F888DfAdC8B7CF
+     Foreign Asset: 0xfBFBfbFA000000000000000000000000000000de wUSDT on 3DPass
+     Home Asset: 0xdAC17F958D2ee523a2206206994597C13D831ec7 (USDT on Ethereum)
+     Stake Token: P3D 0x0000000000000000000000000000000000000802
+     Is Issuer/Burner: Yes
+  📥 USDC Import Bridge (Ethereum → 3DPass):
+     Address: 0x14982dc69e62508b3e4848129a55d6B1960b4Db0
+     Foreign Asset: 0xFbfbFBfA0000000000000000000000000000006f (wUSDC on 3DPass)
+     Home Asset: 0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48 (USDC on Ethereum)
+     Stake Token: P3D 0x0000000000000000000000000000000000000802
+     Is Issuer/Burner: Yes
+  📥 BUSD Import Bridge (BSC → 3DPass):
+     Address: 0xAd913348E7B63f44185D5f6BACBD18d7189B2F1B
+     Foreign Asset: 0xFbFBFBfA0000000000000000000000000000014D (wBUSD on 3DPass)
+     Home Asset: 0xe9e7CEA3DedcA5984780Bafc599bD69ADd087D56 (BUSD on BSC)
+     Stake Token: P3D 0x0000000000000000000000000000000000000802
+     Is Issuer/Burner: Yes
+  📤 P3D Export Bridge (3DPass → Ethereum):
+     Address: 0x626D4E8c191c36B5937fD73A2A1B774C2361EA80
+     Home Asset: P3D 0x0000000000000000000000000000000000000802 (P3D on 3DPass)
+     Foreign Asset: 0x742d35Cc6634C0532925a3b8D9a4F8A6c4f0E4A7 (wP3D on Ethereum)
+     Stake Token: P3D 0x0000000000000000000000000000000000000802
+     Is Issuer/Burner: No
+  📤 FIRE Export Bridge (3DPass → Ethereum):
+     Address: 0xFaF7C72bE647BC86106993E861C48b6c24a3cAd6
+     Home Asset: 0xFbfBFBfA000000000000000000000000000001bC (FIRE on 3DPass)
+     Foreign Asset: 0x8F9B2e7D4A3C1F5E6B8A9D2C4E7F1A3B5C8D9E0F (wFIRE on Ethereum)
+     Stake Token: FIRE 0xFbfBFBfA000000000000000000000000000001bC
+     Is Issuer/Burner: No
+  📤 WATER Export Bridge (3DPass → Ethereum):
+     Address: 0xeaeF21F2C0bcE1487Eaf9622b91600155B181a4b
+     Home Asset: 0xfBFBFBfa0000000000000000000000000000022b (WATER on 3DPass)
+     Foreign Asset: 0x1A2B3C4D5E6F7A8B9C0D1E2F3A4B5C6D7E8F9A0B (wWATER on Ethereum)
+     Stake Token: WATER 0xfBFBFBfa0000000000000000000000000000022b
+     Is Issuer/Burner: No
+
+🤖 ASSISTANT ERC20 CONTRACTS CREATED:
+  📥 Import Wrapper Assistants:
+     • USDT Import Wrapper Assistant: 0x0FAF9b7Cf0e62c6889486cE906d05A7a813a7cc5
+         Share symbol: USDTIA
+         Share name: USDT import assistant
+     • USDC Import Wrapper Assistant: 0xdf8D6962ADC7f29b6F9272376fE51D55B76B0fc5
+         Share symbol: USDCIA
+         Share name: USDC import assistant
+     • BUSD Import Wrapper Assistant: 0xA32ea7688b2937eeaf3f74804fbAFB70D0fc4FE3
+         Share symbol: BUSDIA
+         Share name: BUSD import assistant
+  📤 Export Assistants:
+     • P3D Export Assistant: 0x747B60493839a26E20d191F6dC960C8C79C159AE
+         Share symbol: P3DEA
+         Share name: P3D export assistant
+     • FIRE Export Assistant: 0x8893d06fDfBd4B5696407413840bC2F333b33ca8
+         Share symbol: FIREA
+         Share name: FIRE export assistant
+     • WATER Export Assistant: 0x18d62db034579BCAcfB1e527647658f1AbAD0536
+         Share symbol: WATEA
+         Share name: WATER export assistant
+
+🔗 COMPLETE WRAPPED ARCHITECTURE:
+  📥 Import Wrapper Bridges (using existing precompiles):
+     • USDT: 0x6359F737F32BFd1862FfAfd9C2F888DfAdC8B7CF → 0xfBFBfbFA000000000000000000000000000000de
+     • USDC: 0x14982dc69e62508b3e4848129a55d6B1960b4Db0 → 0xFbfbFBfA0000000000000000000000000000006f
+     • BUSD: 0xAd913348E7B63f44185D5f6BACBD18d7189B2F1B → 0xFbFBFBfA0000000000000000000000000000014D
+  📤 Export Bridges (using native token precompiles):
+     • P3D: 0x626D4E8c191c36B5937fD73A2A1B774C2361EA80 → 0x742d35Cc6634C0532925a3b8D9a4F8A6c4f0E4A7
+     • FIRE: 0xFaF7C72bE647BC86106993E861C48b6c24a3cAd6 → 0x8F9B2e7D4A3C1F5E6B8A9D2C4E7F1A3B5C8D9E0F
+     • WATER: 0xeaeF21F2C0bcE1487Eaf9622b91600155B181a4b → 0x1A2B3C4D5E6F7A8B9C0D1E2F3A4B5C6D7E8F9A0B
+
+✅ ARCHITECTURE SUMMARY:
+  • All bridges use existing precompile addresses
+  • All assistants use existing precompile addresses
+  • No duplicate tokens created
+  • Role-based mint/burn control
+  • Clean, consistent approach
+
+🏗️  INFRASTRUCTURE CONTRACTS:
+  🏭 CounterstakeFactory: 0xBDe856499b710dc8E428a6B616A4260AAFa60dd0
+  🤖 AssistantFactory: 0x5b74685B32cdaA74a030DA14F15F56CcfB5cA1Bc
+  🔮 Oracle: 0xAc647d0caB27e912C844F27716154f54EDD519cE
+  🪙 P3D Precompile: 0x0000000000000000000000000000000000000802
+
+🎯 BRIDGE CAPABILITIES:
+  ✅ Cross-chain transfers from Ethereum to 3DPass (USDT, USDC)
+  ✅ Cross-chain transfers from BSC to 3DPass (BUSD)
+  ✅ Cross-chain transfers from 3DPass to Ethereum (P3D, FIRE, WATER)
+  ✅ Native token staking for bridge security (P3D, FIRE, WATER)
+  ✅ Oracle price feeds for accurate conversions
+  ✅ Import wrapper assistants for automated processing
+  ✅ Export assistants for automated processing
+  ✅ Governance and voting mechanisms
+
+🚀 READY FOR PRODUCTION:
+  The 3DPass bridge is now fully operational and ready to handle
+  bidirectional cross-chain transfers between Ethereum, BSC, and 3DPass networks.
+  Import bridges support external tokens (USDT, USDC, BUSD) coming into 3DPass.
+  Export bridges support native 3DPass tokens (P3D, FIRE, WATER) going to Ethereum.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  🎉 BRIDGE SETUP AND TEST COMPLETE
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━

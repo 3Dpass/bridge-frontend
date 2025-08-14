@@ -1,0 +1,88 @@
+[36m--- Starting Counterstake Core Infrastructure Deployment with P3D Support ---[0m
+[32m✓ P3D precompile address validation passed: 0x0000000000000000000000000000000000000802[0m
+[0mDeploying using account: 0x41d06a54D85EE34c0Ca7c21979eE87b9817cde5b[0m
+[0mDeploying CounterstakeLibrary...[0m
+[0mDeploying CounterstakeLibrary...[0m
+[0m  [32m✓ Deployed CounterstakeLibrary to: 0x8418d6a653bA7b9C714048FE1F1aB0cC50A66741[0m[0m
+[0mDeploying Oracle...[0m
+[0mDeploying Oracle...[0m
+[0m  [32m✓ Deployed Oracle to: 0xAc647d0caB27e912C844F27716154f54EDD519cE[0m[0m
+[0mSetting price to the Oracle for (wUSDT, _NATIVE_)...[0m
+[0m  ✓ Price set to the Oracle for wUSDT[0m
+[0mSetting price to the Oracle for (_NATIVE_, wUSDT)...[0m
+[0m  ✓ Price set to the Oracle for _NATIVE_[0m
+[0mSetting price to the Oracle for (P3D, _NATIVE_)...[0m
+[0m  ✓ Price set to the Oracle for P3D[0m
+[0mSetting price to the Oracle for (_NATIVE, P3D)...[0m
+[0m  ✓ Price set to the Oracle for _NATIVE[0m
+[0mSetting price to the Oracle for (ETH, P3D)...[0m
+[0m  ✓ Price set to the Oracle for ETH[0m
+[0mSetting price to the Oracle for (ETH, _NATIVE_)...[0m
+[0m  ✓ Price set to the Oracle for ETH vs _NATIVE_[0m
+[0mSetting price to the Oracle for (ETH, wUSDT)...[0m
+[0m  ✓ Price set to the Oracle for ETH vs wUSDT[0m
+[0mSetting price to the Oracle for (wUSDT, ETH)...[0m
+[0m  ✓ Price set to the Oracle for wUSDT vs ETH[0m
+[0mDebug: Testing all required oracle price combinations...[0m
+[0m  ✓ P3D vs _NATIVE_: (1000000000000000000, 1000000000000000000)[0m
+[0m  ✓ _NATIVE_ vs P3D: (1000000000000000000, 1000000000000000000)[0m
+[0m  ✓ wUSDT vs _NATIVE_: (1400000000000000, 1000000000000000000)[0m
+[0m  ✓ _NATIVE_ vs wUSDT: (1000000000000000000, 1400000000000000)[0m
+[0m  ✓ ETH vs P3D: (1000000000000000000, 1400000000000000)[0m
+[0m  ✓ ETH vs wUSDT: (1400000000000000, 1000000000000000000)[0m
+[0m  ✓ ETH vs _NATIVE_: (1000000000000000000, 1000000000000000000)[0m
+[0mDeploying VotedValue contracts...[0m
+[0mDeploying VotedValueUint...[0m
+[0m  [32m✓ Deployed VotedValueUint to: 0x747b7E251814105E43f0121599595197FF0Eb5CB[0m[0m
+[0mDeploying VotedValueUintArray...[0m
+[0m  [32m✓ Deployed VotedValueUintArray to: 0x0c7c965fB12eaC3c2fBAB958444cafb027d6cE45[0m[0m
+[0mDeploying VotedValueAddress...[0m
+[0m  [32m✓ Deployed VotedValueAddress to: 0x2CA310AF11b7923D1a65240B317551a264C8AA2C[0m[0m
+[0mDeploying VotedValueFactory...[0m
+[0m  [32m✓ Deployed VotedValueFactory to: 0x91B557D6c2Bcb0e1169CF54006AB20c29091b1f2[0m[0m
+[0mDeploying Governance contracts...[0m
+[32m✓ Using P3D precompile address (0x0000000000000000000000000000000000000802) for Governance voting token[0m
+[32m✓ P3D precompile address validation passed: 0x0000000000000000000000000000000000000802[0m
+[0mDeploying Governance...[0m
+[0m  [32m✓ Deployed Governance to: 0x546Df99e8a2884e2497EcFDd27c4507A2BDaFd83[0m[0m
+[0mDeploying GovernanceFactory...[0m
+[0m  [32m✓ Deployed GovernanceFactory to: 0x943e8fcbA7C432D0C1adf61dC43C33273111e168[0m[0m
+[0mDeploying Export...[0m
+[32m✓ Using P3D precompile address (0x0000000000000000000000000000000000000802) for Export stake token[0m
+[32m✓ P3D precompile address validation passed: 0x0000000000000000000000000000000000000802[0m
+[0mDeploying Export...[0m
+[0m  [32m✓ Deployed Export to: 0x9667d9EBfFc048b7C488fA581772469FA77ed256[0m[0m
+[0mDeploying ImportWrapper...[0m
+[32m✓ Using P3D precompile address (0x0000000000000000000000000000000000000802) for ImportWrapper stake token[0m
+[32m✓ P3D precompile address validation passed: 0x0000000000000000000000000000000000000802[0m
+[0mDeploying ImportWrapper...[0m
+[0m  [32m✓ Deployed ImportWrapper to: 0x668ED8d390ac39da0e707Ae4408764a1f74a99E4[0m[0m
+[0mDeploying CounterstakeFactory...[0m
+[0mDeploying CounterstakeFactory...[0m
+[0m  [32m✓ Deployed CounterstakeFactory to: 0xBDe856499b710dc8E428a6B616A4260AAFa60dd0[0m[0m
+[0mDeploying Assistant contracts...[0m
+[0mTesting ImportWrapper responsiveness...[0m
+[0m  ✓ ImportWrapper settings test passed: tokenAddr=0x0000000000000000000000000000000000000802[0m
+[0m  ✓ ImportWrapper precompileAddress test passed: 0xfBFBfbFA000000000000000000000000000000de[0m
+[0m  ✓ ImportWrapper home_network test passed: Ethereum[0m
+[0m  ✓ ImportWrapper home_asset test passed: 0xdAC17F958D2ee523a2206206994597C13D831ec7[0m
+[0mDeploying ExportAssistant...[0m
+[0m  [32m✓ Deployed ExportAssistant to: 0x1445f694117d847522b81A97881850DbB965db9A[0m[0m
+[0mDeploying ImportWrapperAssistant...[0m
+[0m  [32m✓ Deployed ImportWrapperAssistant to: 0x7C7AFc2871E65B031F7834c4b6198Bf978c49Cc5[0m[0m
+[0mDeploying AssistantFactory...[0m
+[0mDeploying AssistantFactory...[0m
+[0m  [32m✓ Deployed AssistantFactory to: 0x5b74685B32cdaA74a030DA14F15F56CcfB5cA1Bc[0m[0m
+[36m
+--- Deployment Summary ---[0m
+[0mCounterstakeFactory: 0xBDe856499b710dc8E428a6B616A4260AAFa60dd0[0m
+[0mAssistantFactory:    0x5b74685B32cdaA74a030DA14F15F56CcfB5cA1Bc[0m
+[0mOracle:              0xAc647d0caB27e912C844F27716154f54EDD519cE[0m
+[0mP3D Precompile:      0x0000000000000000000000000000000000000802[0m
+[36m
+--- Updating conf.js ---[0m
+[0mLoaded existing conf.js from /Users/jm/3DP-bridge/counterstake-bridge/conf.js[0m
+[0m[32m✓ Successfully updated /Users/jm/3DP-bridge/counterstake-bridge/conf.js[0m[0m
+[32m
+--- Deployment and Configuration Complete ---[0m
+[32m✓ All contracts deployed with P3D precompile support[0m
