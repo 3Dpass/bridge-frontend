@@ -57,9 +57,15 @@
 [32m✓ P3D precompile address validation passed: 0x0000000000000000000000000000000000000802[0m
 [0mDeploying ImportWrapper...[0m
 [0m  [32m✓ Deployed ImportWrapper to: 0x668ED8d390ac39da0e707Ae4408764a1f74a99E4[0m[0m
+[0mDeploying BridgesRegistry...[0m
+[0mBridgesRegistry contract: loaded[0m
+[0mBridgesRegistry contractName: BridgesRegistry[0m
+[0mDeploying BridgesRegistry...[0m
+[0m  [32m✓ Deployed BridgesRegistry to: 0xBDe856499b710dc8E428a6B616A4260AAFa60dd0[0m[0m
 [0mDeploying CounterstakeFactory...[0m
+[0mbridgesRegistry.address: 0xBDe856499b710dc8E428a6B616A4260AAFa60dd0[0m
 [0mDeploying CounterstakeFactory...[0m
-[0m  [32m✓ Deployed CounterstakeFactory to: 0xBDe856499b710dc8E428a6B616A4260AAFa60dd0[0m[0m
+[0m  [32m✓ Deployed CounterstakeFactory to: 0x1445f694117d847522b81A97881850DbB965db9A[0m[0m
 [0mDeploying Assistant contracts...[0m
 [0mTesting ImportWrapper responsiveness...[0m
 [0m  ✓ ImportWrapper settings test passed: tokenAddr=0x0000000000000000000000000000000000000802[0m
@@ -67,16 +73,19 @@
 [0m  ✓ ImportWrapper home_network test passed: Ethereum[0m
 [0m  ✓ ImportWrapper home_asset test passed: 0xdAC17F958D2ee523a2206206994597C13D831ec7[0m
 [0mDeploying ExportAssistant...[0m
-[0m  [32m✓ Deployed ExportAssistant to: 0x1445f694117d847522b81A97881850DbB965db9A[0m[0m
+[0m  [32m✓ Deployed ExportAssistant to: 0x7C7AFc2871E65B031F7834c4b6198Bf978c49Cc5[0m[0m
 [0mDeploying ImportWrapperAssistant...[0m
-[0m  [32m✓ Deployed ImportWrapperAssistant to: 0x7C7AFc2871E65B031F7834c4b6198Bf978c49Cc5[0m[0m
+[0m  [32m✓ Deployed ImportWrapperAssistant to: 0x5b74685B32cdaA74a030DA14F15F56CcfB5cA1Bc[0m[0m
 [0mDeploying AssistantFactory...[0m
 [0mDeploying AssistantFactory...[0m
-[0m  [32m✓ Deployed AssistantFactory to: 0x5b74685B32cdaA74a030DA14F15F56CcfB5cA1Bc[0m[0m
+[0m  [32m✓ Deployed AssistantFactory to: 0x20bc80863d472aBafE45a6c6Fad87236960f6ac2[0m[0m
+[0mSetting factory addresses in BridgesRegistry...[0m
+[0m  ✓ Factory addresses set in BridgesRegistry[0m
 [36m
 --- Deployment Summary ---[0m
-[0mCounterstakeFactory: 0xBDe856499b710dc8E428a6B616A4260AAFa60dd0[0m
-[0mAssistantFactory:    0x5b74685B32cdaA74a030DA14F15F56CcfB5cA1Bc[0m
+[0mBridgesRegistry:     0xBDe856499b710dc8E428a6B616A4260AAFa60dd0[0m
+[0mCounterstakeFactory: 0x1445f694117d847522b81A97881850DbB965db9A[0m
+[0mAssistantFactory:    0x20bc80863d472aBafE45a6c6Fad87236960f6ac2[0m
 [0mOracle:              0xAc647d0caB27e912C844F27716154f54EDD519cE[0m
 [0mP3D Precompile:      0x0000000000000000000000000000000000000802[0m
 [36m

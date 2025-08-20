@@ -250,11 +250,12 @@ export const NETWORKS = {
       decimals: 18,
     },
     contracts: {
-      // Updated contract addresses from deployment logs
-      exportFactory: '0xBDe856499b710dc8E428a6B616A4260AAFa60dd0', // CounterstakeFactory from deployment
-      importFactory: '0xBDe856499b710dc8E428a6B616A4260AAFa60dd0', // Same factory for both
+      // Updated contract addresses from bridge-setup-test.log and deploy-counterstake.log
+      bridgesRegistry: '0xBDe856499b710dc8E428a6B616A4260AAFa60dd0', // BridgesRegistry from deployment
+      exportFactory: '0x1445f694117d847522b81A97881850DbB965db9A', // CounterstakeFactory from deployment
+      importFactory: '0x1445f694117d847522b81A97881850DbB965db9A', // Same factory for both
       oracle: '0xAc647d0caB27e912C844F27716154f54EDD519cE', // Oracle from deployment
-      assistantFactory: '0x5b74685B32cdaA74a030DA14F15F56CcfB5cA1Bc', // AssistantFactory from deployment
+      assistantFactory: '0x20bc80863d472aBafE45a6c6Fad87236960f6ac2', // AssistantFactory from deployment
     },
     tokens: {
       P3D: {
@@ -310,7 +311,7 @@ export const NETWORKS = {
     bridges: {
       // Export bridges (3DPass -> External)
       P3D_EXPORT: {
-        address: '0x626D4E8c191c36B5937fD73A2A1B774C2361EA80',
+        address: '0x696CD5949EA4baBB3eB76D5231595C7e8eFa9206',
         type: 'export',
         homeNetwork: '3DPass',
         homeTokenSymbol: 'P3D',
@@ -324,7 +325,7 @@ export const NETWORKS = {
         isIssuerBurner: false
       },
       FIRE_EXPORT: {
-        address: '0xFaF7C72bE647BC86106993E861C48b6c24a3cAd6',
+        address: '0x418Fbe90f5fD7095Fd4cde851c8375Df085ed61A',
         type: 'export',
         homeNetwork: '3DPass',
         homeTokenSymbol: 'FIRE',
@@ -338,7 +339,7 @@ export const NETWORKS = {
         isIssuerBurner: false
       },
       WATER_EXPORT: {
-        address: '0xeaeF21F2C0bcE1487Eaf9622b91600155B181a4b',
+        address: '0xF79be90A608c26CA1f995a40BE57DB28de8e5DB4',
         type: 'export',
         homeNetwork: '3DPass',
         homeTokenSymbol: 'WATER',
@@ -352,9 +353,9 @@ export const NETWORKS = {
         isIssuerBurner: false
       }
     },
-    // Import Wrapped bridges (3DPass -> External)
+    // Import Wrapper bridges (External -> 3DPass)
     USDT_IMPORT: {
-      address: '0x6359F737F32BFd1862FfAfd9C2F888DfAdC8B7CF',
+      address: '0x8Ec164093319EAD78f6E289bb688Bef3c8ce9B0F',
       type: 'import_wrapper',
       homeNetwork: 'Ethereum',
       homeTokenSymbol: 'USDT',
@@ -365,10 +366,10 @@ export const NETWORKS = {
       stakeTokenSymbol: 'P3D',
       stakeTokenAddress: P3D_PRECOMPILE_ADDRESS,
       description: 'USDT Import Wrapper Bridge (Ethereum → 3DPass)',
-      isIssuerBurner: false
+      isIssuerBurner: true
     },
     USDC_IMPORT: {
-      address: '0x14982dc69e62508b3e4848129a55d6B1960b4Db0',
+      address: '0x1A85BD09E186b6EDc30D08Abb43c673A9636Cc4E',
       type: 'import_wrapper',
       homeNetwork: 'Ethereum',
       homeTokenSymbol: 'USDC',
@@ -379,10 +380,10 @@ export const NETWORKS = {
       stakeTokenSymbol: 'P3D',
       stakeTokenAddress: P3D_PRECOMPILE_ADDRESS,
       description: 'USDC Import Wrapper Bridge (Ethereum → 3DPass)',
-      isIssuerBurner: false
+      isIssuerBurner: true
     },
     BUSD_IMPORT: {
-      address: '0xAd913348E7B63f44185D5f6BACBD18d7189B2F1B',
+      address: '0xccDdB081d48D7F312846ea4ECF18A963455c3C71',
       type: 'import_wrapper',
       homeNetwork: 'BNB Smart Chain',
       homeTokenSymbol: 'BUSD',
@@ -393,21 +394,70 @@ export const NETWORKS = {
       stakeTokenSymbol: 'P3D',
       stakeTokenAddress: P3D_PRECOMPILE_ADDRESS,
       description: 'BUSD Import Wrapper Bridge (BNB Smart Chain → 3DPass)',
-      isIssuerBurner: false
+      isIssuerBurner: true
     },
     // Assistant contracts deployed on 3DPass
     assistants: {
-    // Export Assistants
+      // Import Wrapper Assistants
+      USDT_IMPORT_ASSISTANT: {
+        address: '0xeA2F6788D252772a4DDaa376F4da5a3c54bc01f0',
+        type: 'import_wrapper',
+        bridgeAddress: '0x8Ec164093319EAD78f6E289bb688Bef3c8ce9B0F',
+        homeNetwork: 'Ethereum',
+        homeTokenSymbol: 'USDT',
+        homeTokenAddress: '0xdAC17F958D2ee523a2206206994597C13D831ec7',
+        foreignNetwork: '3DPass',
+        foreignTokenSymbol: 'wUSDT',
+        foreignTokenAddress: '0xfBFBfbFA000000000000000000000000000000de',
+        stakeTokenSymbol: 'P3D',
+        stakeTokenAddress: P3D_PRECOMPILE_ADDRESS,
+        description: 'USDT Import Wrapper Assistant',
+        shareSymbol: 'USDTIA',
+        shareName: 'USDT import assistant'
+      },
+      USDC_IMPORT_ASSISTANT: {
+        address: '0x7bEB3f6940689A9A9C66C7A2C2D9A704b8c95B0E',
+        type: 'import_wrapper',
+        bridgeAddress: '0x1A85BD09E186b6EDc30D08Abb43c673A9636Cc4E',
+        homeNetwork: 'Ethereum',
+        homeTokenSymbol: 'USDC',
+        homeTokenAddress: '0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48',
+        foreignNetwork: '3DPass',
+        foreignTokenSymbol: 'wUSDC',
+        foreignTokenAddress: '0xFbfbFBfA0000000000000000000000000000006f',
+        stakeTokenSymbol: 'P3D',
+        stakeTokenAddress: P3D_PRECOMPILE_ADDRESS,
+        description: 'USDC Import Wrapper Assistant',
+        shareSymbol: 'USDCIA',
+        shareName: 'USDC import assistant'
+      },
+      BUSD_IMPORT_ASSISTANT: {
+        address: '0x49B602cE8794003e8CC62bf61CA5dA7f9F543233',
+        type: 'import_wrapper',
+        bridgeAddress: '0xccDdB081d48D7F312846ea4ECF18A963455c3C71',
+        homeNetwork: 'BNB Smart Chain',
+        homeTokenSymbol: 'BUSD',
+        homeTokenAddress: '0xe9e7CEA3DedcA5984780Bafc599bD69ADd087D56',
+        foreignNetwork: '3DPass',
+        foreignTokenSymbol: 'wBUSD',
+        foreignTokenAddress: '0xFbFBFBfA0000000000000000000000000000014D',
+        stakeTokenSymbol: 'P3D',
+        stakeTokenAddress: P3D_PRECOMPILE_ADDRESS,
+        description: 'BUSD Import Wrapper Assistant',
+        shareSymbol: 'BUSDIA',
+        shareName: 'BUSD import assistant'
+      },
+      // Export Assistants
       P3D_EXPORT_ASSISTANT: {
-        address: '0x747B60493839a26E20d191F6dC960C8C79C159AE',
-      type: 'export',
-        bridgeAddress: '0x626D4E8c191c36B5937fD73A2A1B774C2361EA80',
+        address: '0x373EB437066D13761926B4F20a4A93aBdECbCDbf',
+        type: 'export',
+        bridgeAddress: '0x696CD5949EA4baBB3eB76D5231595C7e8eFa9206',
         homeNetwork: '3DPass',
         homeTokenSymbol: 'P3D',
         homeTokenAddress: P3D_PRECOMPILE_ADDRESS,
         foreignNetwork: 'Ethereum',
         foreignTokenSymbol: 'wP3D',
-        foreignTokenAddress: '0x1234567890123456789012345678901234567890',
+        foreignTokenAddress: '0x742d35Cc6634C0532925a3b8D9a4F8A6c4f0E4A7',
         stakeTokenSymbol: 'P3D',
         stakeTokenAddress: P3D_PRECOMPILE_ADDRESS,
         description: 'P3D Export Assistant',
@@ -415,15 +465,15 @@ export const NETWORKS = {
         shareName: 'P3D export assistant'
       },
       FIRE_EXPORT_ASSISTANT: {
-        address: '0x8893d06fDfBd4B5696407413840bC2F333b33ca8',
-      type: 'export',
-        bridgeAddress: '0xFaF7C72bE647BC86106993E861C48b6c24a3cAd6',
+        address: '0x4d6BE61c3040245A88B6e4Fb92DCFb5ae9077127',
+        type: 'export',
+        bridgeAddress: '0x418Fbe90f5fD7095Fd4cde851c8375Df085ed61A',
         homeNetwork: '3DPass',
         homeTokenSymbol: 'FIRE',
         homeTokenAddress: '0xFbfBFBfA000000000000000000000000000001bC',
         foreignNetwork: 'Ethereum',
         foreignTokenSymbol: 'wFIRE',
-        foreignTokenAddress: '0x2345678901234567890123456789012345678901',
+        foreignTokenAddress: '0x8F9B2e7D4A3C1F5E6B8A9D2C4E7F1A3B5C8D9E0F',
         stakeTokenSymbol: 'FIRE',
         stakeTokenAddress: '0xFbfBFBfA000000000000000000000000000001bC',
         description: 'FIRE Export Assistant',
@@ -431,15 +481,15 @@ export const NETWORKS = {
         shareName: 'FIRE export assistant'
       },
       WATER_EXPORT_ASSISTANT: {
-        address: '0x18d62db034579BCAcfB1e527647658f1AbAD0536',
-      type: 'export',
-        bridgeAddress: '0xeaeF21F2C0bcE1487Eaf9622b91600155B181a4b',
+        address: '0x826bB653e078D65FaFea3978d3481eea0727B0F5',
+        type: 'export',
+        bridgeAddress: '0xF79be90A608c26CA1f995a40BE57DB28de8e5DB4',
         homeNetwork: '3DPass',
         homeTokenSymbol: 'WATER',
         homeTokenAddress: '0xfBFBFBfa0000000000000000000000000000022b',
         foreignNetwork: 'Ethereum',
         foreignTokenSymbol: 'wWATER',
-        foreignTokenAddress: '0x3456789012345678901234567890123456789012',
+        foreignTokenAddress: '0x1A2B3C4D5E6F7A8B9C0D1E2F3A4B5C6D7E8F9A0B',
         stakeTokenSymbol: 'WATER',
         stakeTokenAddress: '0xfBFBFBfa0000000000000000000000000000022b',
         description: 'WATER Export Assistant',

@@ -239,8 +239,8 @@ const ClaimList = () => {
       return false;
     }
     
-    // Check if current user is the sender (the person who initiated the claim)
-    if (!account || !claim.senderAddress) {
+    // Check if current user is the recipient (the person who will receive the funds)
+    if (!account || !claim.recipientAddress) {
       return false;
     }
     
@@ -259,16 +259,16 @@ const ClaimList = () => {
       return false;
     }
     
-    return account.toLowerCase() === claim.senderAddress.toLowerCase();
+    return account.toLowerCase() === claim.recipientAddress.toLowerCase();
   }, [account, currentBlock]);
 
-  // Helper function to check if current user is the sender
-  const isCurrentUserSender = useCallback((claim) => {
-    if (!account || !claim.senderAddress) {
+  // Helper function to check if current user is the recipient
+  const isCurrentUserRecipient = useCallback((claim) => {
+    if (!account || !claim.recipientAddress) {
       return false;
     }
     
-    return account.toLowerCase() === claim.senderAddress.toLowerCase();
+    return account.toLowerCase() === claim.recipientAddress.toLowerCase();
   }, [account]);
 
   // Helper function to check if a claim can be challenged
@@ -514,10 +514,10 @@ const ClaimList = () => {
             
             let bridgeClaims;
             if (filter === 'my') {
-              console.log(`🔍 Fetching claims for sender: ${account}`);
-              // For "My Claims", we need to filter by sender address
+              console.log(`🔍 Fetching claims for recipient: ${account}`);
+              // For "My Claims", we need to filter by recipient address
               // Since getClaimsForRecipient gets claims where user is recipient,
-              // we'll get all claims and filter by sender on the frontend
+              // we'll get all claims and filter by recipient on the frontend
               bridgeClaims = await getAllClaims(contract, 100, rpcUrl);
             } else {
               console.log(`🔍 Fetching all claims`);
@@ -662,14 +662,14 @@ const ClaimList = () => {
       let filteredClaims = allClaims;
       if (filter === 'my') {
         filteredClaims = allClaims.filter(claim => 
-          claim.senderAddress && 
+          claim.recipientAddress && 
           account && 
-          claim.senderAddress.toLowerCase() === account.toLowerCase()
+          claim.recipientAddress.toLowerCase() === account.toLowerCase()
         );
-        console.log(`🔍 Filtered claims for sender ${account}:`, {
+        console.log(`🔍 Filtered claims for recipient ${account}:`, {
           totalClaims: allClaims.length,
           filteredClaims: filteredClaims.length,
-          senderAddress: account
+          recipientAddress: account
         });
       }
 
@@ -683,7 +683,7 @@ const ClaimList = () => {
     } finally {
       setLoading(false);
     }
-  }, [account, provider, network, getNetworkWithSettings, getBridgeInstancesWithSettings, filter, getTransferTokenSymbol, getTokenDecimals]);
+  }, [account, provider, network, isConnected, getNetworkWithSettings, getBridgeInstancesWithSettings, filter, getTransferTokenSymbol, getTokenDecimals]);
 
 
 
@@ -1089,7 +1089,7 @@ const ClaimList = () => {
                   </div>
                   
                   {/* Info for claims that can't be withdrawn */}
-                  {claim.finished && !claim.withdrawn && isCurrentUserSender(claim) && claim.currentOutcome !== 1 && (
+                  {claim.finished && !claim.withdrawn && isCurrentUserRecipient(claim) && claim.currentOutcome !== 1 && (
                     <div className="mt-3">
                       <div className="bg-gray-700 rounded-lg p-3">
                         <p className="text-gray-400 text-sm">
@@ -1100,7 +1100,7 @@ const ClaimList = () => {
                   )}
 
                   {/* Info for non-expired claims */}
-                  {claim.finished && !claim.withdrawn && isCurrentUserSender(claim) && claim.currentOutcome === 1 && !canWithdrawClaim(claim) && (
+                  {claim.finished && !claim.withdrawn && isCurrentUserRecipient(claim) && claim.currentOutcome === 1 && !canWithdrawClaim(claim) && (
                     <div className="mt-3">
                       <div className="bg-yellow-900/20 border border-yellow-500/50 rounded-lg p-3">
                         <p className="text-yellow-400 text-sm">

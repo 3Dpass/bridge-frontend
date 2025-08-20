@@ -172,17 +172,17 @@ const WithdrawClaim = ({ claim, onWithdrawSuccess, onClose }) => {
           throw new Error(`Claim has NO outcome (${claimDetails.current_outcome}). Only YES outcomes can be withdrawn.`);
         }
         
-        // Check if user is the sender (the person who initiated the claim)
-        if (signerAddress.toLowerCase() !== claimDetails.sender_address.toLowerCase()) {
-          // If not the sender, check if they have stakes on the winning outcome
+        // Check if user is the recipient (the person who will receive the funds)
+        if (signerAddress.toLowerCase() !== claimDetails.recipient_address.toLowerCase()) {
+          // If not the recipient, check if they have stakes on the winning outcome
           try {
             const yesStake = await contract.stakes(claimNum, 1, signerAddress); // 1 = YES outcome
             console.log('🔍 User YES stake:', yesStake.toString());
             if (yesStake.isZero()) {
-              throw new Error('You are not the sender and have no stakes on the winning outcome');
+              throw new Error('You are not the recipient and have no stakes on the winning outcome');
             }
           } catch (stakeErr) {
-            throw new Error('You are not the sender and have no stakes on the winning outcome');
+            throw new Error('You are not the recipient and have no stakes on the winning outcome');
           }
         }
         
@@ -349,7 +349,22 @@ const WithdrawClaim = ({ claim, onWithdrawSuccess, onClose }) => {
         console.log('🔍 Withdraw event found:', withdrawEvent);
       }
 
-      toast.success(`Successfully withdrew claim #${claim.claimNum}!`);
+      toast.success(
+        <div>
+          <h3 className="text-success-400 font-medium">Withdrawal Successful</h3>
+          <p className="text-success-300 text-sm mt-1">Successfully withdrew claim #{claim.claimNum}!</p>
+        </div>,
+        {
+          duration: 6000,
+          style: {
+            background: '#065f46',
+            border: '1px solid #047857',
+            color: '#fff',
+            padding: '16px',
+            borderRadius: '8px',
+          },
+        }
+      );
       
       // Call the success callback to refresh the claims list
       if (onWithdrawSuccess) {
@@ -368,8 +383,8 @@ const WithdrawClaim = ({ claim, onWithdrawSuccess, onClose }) => {
         errorMessage = 'Claim has already been withdrawn';
       } else if (err.message.includes('not expired')) {
         errorMessage = 'Claim has not expired yet';
-      } else if (err.message.includes('not the sender')) {
-        errorMessage = 'Only the sender can withdraw this claim';
+      } else if (err.message.includes('not the recipient')) {
+        errorMessage = 'Only the recipient can withdraw this claim';
       } else if (err.message.includes('challenging period')) {
         errorMessage = 'Claim is still in challenging period';
       } else if (err.message.includes('no such claim')) {

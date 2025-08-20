@@ -586,3 +586,372 @@ export const COUNTERSTAKE_LIBRARY_ABI = [
   "function validateChallengingPeriods(uint[] periods) pure",
   "function getClaimId(string sender_address, address recipient_address, string txid, uint32 txts, uint amount, int reward, string data) pure returns (string)",
 ];
+
+// BridgesRegistry ABI (was missing)
+export const BRIDGES_REGISTRY_ABI = [
+  // Events
+  "event BridgeRegistered(address indexed bridgeAddress, uint8 bridgeType, uint256 createdAt)",
+  "event AssistantRegistered(address indexed assistantAddress, uint8 assistantType, uint256 createdAt)",
+  
+  // View functions
+  "function bridges(address) view returns (address bridgeAddress, uint8 bridgeType, uint256 createdAt, bool exists)",
+  "function assistants(address) view returns (address assistantAddress, uint8 assistantType, uint256 createdAt, bool exists)",
+  "function allBridges(uint256) view returns (address)",
+  "function allAssistants(uint256) view returns (address)",
+  "function counterstakeFactory() view returns (address)",
+  "function assistantFactory() view returns (address)",
+  "function getBridge(address bridgeAddress) view returns (tuple(address bridgeAddress, uint8 bridgeType, uint256 createdAt, bool exists))",
+  "function getAssistant(address assistantAddress) view returns (tuple(address assistantAddress, uint8 assistantType, uint256 createdAt, bool exists))",
+  "function isBridgeRegistered(address bridgeAddress) view returns (bool)",
+  "function isAssistantRegistered(address assistantAddress) view returns (bool)",
+  "function getAllBridges() view returns (address[])",
+  "function getAllAssistants() view returns (address[])",
+  "function getBridgesByType(uint8 bridgeType) view returns (address[])",
+  "function getAssistantsByType(uint8 assistantType) view returns (address[])",
+  "function getBridgeCount() view returns (uint256)",
+  "function getAssistantCount() view returns (uint256)",
+  
+  // State changing functions
+  "function setFactories(address _counterstakeFactory, address _assistantFactory)",
+  "function registerBridge(address bridgeAddress, uint8 bridgeType)",
+  "function registerAssistant(address assistantAddress, uint8 assistantType)",
+];
+
+// CounterstakeFactory ABI (was missing)
+export const COUNTERSTAKE_FACTORY_ABI = [
+  // Events
+  "event NewExport(address contractAddress, address tokenAddress, string foreign_network, string foreign_asset)",
+  "event NewImportWrapper(address contractAddress, string home_network, string home_asset, address precompileAddress, address stakeTokenAddress)",
+  
+  // View functions
+  "function exportMaster() view returns (address)",
+  "function importWrapperMaster() view returns (address)",
+  "function bridgesRegistry() view returns (address)",
+  
+  // State changing functions
+  "function createExport(string foreign_network, string foreign_asset, address tokenAddr, uint16 counterstake_coef100, uint16 ratio100, uint large_threshold, uint[] challenging_periods, uint[] large_challenging_periods) returns (address)",
+  "function createImportWrapper(string home_network, string home_asset, address precompileAddress, address stakeTokenAddr, address oracleAddr, uint16 counterstake_coef100, uint16 ratio100, uint large_threshold, uint[] challenging_periods, uint[] large_challenging_periods) returns (address)",
+];
+
+// GovernanceFactory ABI (was missing)
+export const GOVERNANCE_FACTORY_ABI = [
+  // View functions
+  "function governanceMaster() view returns (address)",
+  
+  // State changing functions
+  "function createGovernance(address governedContractAddress, address votingTokenAddress) returns (address)",
+];
+
+// VotedValueFactory ABI (was missing)
+export const VOTED_VALUE_FACTORY_ABI = [
+  // View functions
+  "function votedValueUintMaster() view returns (address)",
+  "function votedValueUintArrayMaster() view returns (address)",
+  "function votedValueAddressMaster() view returns (address)",
+  
+  // State changing functions
+  "function createVotedValueUint(address governance, uint initial_value, function(uint) external validationCallback, function(uint) external commitCallback) returns (address)",
+  "function createVotedValueUintArray(address governance, uint[] initial_value, function(uint[]) external validationCallback, function(uint[]) external commitCallback) returns (address)",
+  "function createVotedValueAddress(address governance, address initial_value, function(address) external validationCallback, function(address) external commitCallback) returns (address)",
+];
+
+// LocalAsset ABI (3DPass specific - was missing)
+export const LOCAL_ASSET_ABI = [
+  // State changing functions
+  "function mint(address to, uint256 value) returns (bool)",
+  "function burn(address from, uint256 value) returns (bool)",
+  "function freeze(address account) returns (bool)",
+  "function thaw(address account) returns (bool)",
+  "function freezeAsset() returns (bool)",
+  "function thawAsset() returns (bool)",
+  "function transferOwnership(address owner) returns (bool)",
+  "function setTeam(address issuer, address admin, address freezer) returns (bool)",
+  "function setMetadata(string name, string symbol, uint8 decimals) returns (bool)",
+  "function clearMetadata() returns (bool)",
+];
+
+// Token ABI (was missing)
+export const TOKEN_ABI = [
+  // Events
+  "event Transfer(address indexed from, address indexed to, uint256 value)",
+  "event Approval(address indexed owner, address indexed spender, uint256 value)",
+  
+  // View functions
+  "function name() view returns (string)",
+  "function symbol() view returns (string)",
+  "function decimals() view returns (uint8)",
+  "function totalSupply() view returns (uint256)",
+  "function balanceOf(address account) view returns (uint256)",
+  "function allowance(address owner, address spender) view returns (uint256)",
+  
+  // State changing functions
+  "function transfer(address recipient, uint256 amount) returns (bool)",
+  "function approve(address spender, uint256 amount) returns (bool)",
+  "function transferFrom(address sender, address recipient, uint256 amount) returns (bool)",
+  "function increaseAllowance(address spender, uint256 addedValue) returns (bool)",
+  "function decreaseAllowance(address spender, uint256 subtractedValue) returns (bool)",
+];
+
+// BadToken ABI (was missing)
+export const BAD_TOKEN_ABI = [
+  // Events
+  "event Transfer(address indexed from, address indexed to, uint256 value)",
+  "event Approval(address indexed owner, address indexed spender, uint256 value)",
+  
+  // View functions
+  "function name() view returns (string)",
+  "function symbol() view returns (string)",
+  "function decimals() view returns (uint8)",
+  "function totalSupply() view returns (uint256)",
+  "function balanceOf(address account) view returns (uint256)",
+  "function allowance(address owner, address spender) view returns (uint256)",
+  
+  // State changing functions
+  "function transfer(address recipient, uint256 amount) returns (bool)",
+  "function approve(address spender, uint256 amount) returns (bool)",
+  "function transferFrom(address sender, address recipient, uint256 amount) returns (bool)",
+  "function increaseAllowance(address spender, uint256 addedValue) returns (bool)",
+  "function decreaseAllowance(address spender, uint256 subtractedValue) returns (bool)",
+];
+
+// CounterstakeReceiver ABI (was missing)
+export const COUNTERSTAKE_RECEIVER_ABI = [
+  // State changing functions
+  "function onReceivedFromClaim(uint256 claim_num, uint256 net_claimed_amount, uint256 won_stake, string sender_address, address claim_recipient_address, string data)",
+];
+
+// IERC20Precompile ABI (was missing)
+export const IERC20_PRECOMPILE_ABI = [
+  // Events
+  "event Transfer(address indexed from, address indexed to, uint256 value)",
+  "event Approval(address indexed owner, address indexed spender, uint256 value)",
+  
+  // View functions
+  "function name() view returns (string)",
+  "function symbol() view returns (string)",
+  "function decimals() view returns (uint8)",
+  "function totalSupply() view returns (uint256)",
+  "function balanceOf(address who) view returns (uint256)",
+  "function allowance(address owner, address spender) view returns (uint256)",
+  
+  // State changing functions
+  "function transfer(address to, uint256 value) returns (bool)",
+  "function approve(address spender, uint256 value) returns (bool)",
+  "function transferFrom(address from, address to, uint256 value) returns (bool)",
+];
+
+// Batch ABI (was missing)
+export const BATCH_ABI = [
+  // Events
+  "event SubcallSucceeded(uint256 index)",
+  "event SubcallFailed(uint256 index)",
+  
+  // State changing functions
+  "function batchSome(address[] to, uint256[] value, bytes[] callData, uint64[] gasLimit)",
+  "function batchSomeUntilFailure(address[] to, uint256[] value, bytes[] callData, uint64[] gasLimit)",
+];
+
+// IBatch ABI (was missing)
+export const IBATCH_ABI = [
+  // Events
+  "event SubcallSucceeded(uint256 index)",
+  "event SubcallFailed(uint256 index)",
+  
+  // State changing functions
+  "function batchSome(address[] to, uint256[] value, bytes[] callData, uint64[] gasLimit)",
+  "function batchSomeUntilFailure(address[] to, uint256[] value, bytes[] callData, uint64[] gasLimit)",
+];
+
+// Math Library ABI (was missing - library functions)
+export const MATH_ABI = [
+  // Pure functions
+  "function max(uint256 a, uint256 b) pure returns (uint256)",
+  "function min(uint256 a, uint256 b) pure returns (uint256)",
+  "function average(uint256 a, uint256 b) pure returns (uint256)",
+  "function ceilDiv(uint256 a, uint256 b) pure returns (uint256)",
+  "function mulDiv(uint256 x, uint256 y, uint256 denominator) pure returns (uint256)",
+  "function mulDiv(uint256 x, uint256 y, uint256 denominator, uint8 rounding) pure returns (uint256)",
+  "function sqrt(uint256 a) pure returns (uint256)",
+  "function sqrt(uint256 a, uint8 rounding) pure returns (uint256)",
+  "function log2(uint256 value) pure returns (uint256)",
+  "function log2(uint256 value, uint8 rounding) pure returns (uint256)",
+  "function log10(uint256 value) pure returns (uint256)",
+  "function log10(uint256 value, uint8 rounding) pure returns (uint256)",
+  "function log256(uint256 value) pure returns (uint256)",
+  "function log256(uint256 value, uint8 rounding) pure returns (uint256)",
+];
+
+// PrecompileSymbolHelper Library ABI (was missing - library functions)
+export const PRECOMPILE_SYMBOL_HELPER_ABI = [
+  // View functions
+  "function getSymbol(address tokenAddress, address bridgeAddress) view returns (string)",
+];
+
+// AssistantMath Library ABI (was missing - library functions)
+export const ASSISTANT_MATH_ABI = [
+  // Pure functions
+  "function max(int a, int b) pure returns (int)",
+  "function sqrt(uint y) pure returns (uint z)",
+  "function getGasCostInStakeTokens(uint gas, uint num, uint den) view returns (uint)",
+];
+
+// IERC20WithSymbol ABI (was missing)
+export const IERC20_WITH_SYMBOL_ABI = [
+  // Events
+  "event Transfer(address indexed from, address indexed to, uint256 value)",
+  "event Approval(address indexed owner, address indexed spender, uint256 value)",
+  
+  // View functions
+  "function name() view returns (string)",
+  "function symbol() view returns (string)",
+  "function decimals() view returns (uint8)",
+  "function totalSupply() view returns (uint256)",
+  "function balanceOf(address account) view returns (uint256)",
+  "function allowance(address owner, address spender) view returns (uint256)",
+  
+  // State changing functions
+  "function transfer(address to, uint256 value) returns (bool)",
+  "function approve(address spender, uint256 value) returns (bool)",
+  "function transferFrom(address from, address to, uint256 value) returns (bool)",
+];
+
+// IERC165 ABI (was missing)
+export const IERC165_ABI = [
+  // View functions
+  "function supportsInterface(bytes4 interfaceId) view returns (bool)",
+];
+
+// ERC165 ABI (was missing)
+export const ERC165_ABI = [
+  // View functions
+  "function supportsInterface(bytes4 interfaceId) view returns (bool)",
+];
+
+// Context ABI (was missing)
+export const CONTEXT_ABI = [
+  // View functions
+  "function _msgSender() view returns (address)",
+  "function _msgData() view returns (bytes)",
+];
+
+// Address ABI (was missing - library functions)
+export const ADDRESS_ABI = [
+  // Pure functions
+  "function isContract(address account) pure returns (bool)",
+  "function sendValue(address payable recipient, uint256 amount)",
+  "function functionCall(address target, bytes data) returns (bytes)",
+  "function functionCall(address target, bytes data, string errorMessage) returns (bytes)",
+  "function functionCallWithValue(address target, bytes data, uint256 value) returns (bytes)",
+  "function functionCallWithValue(address target, bytes data, uint256 value, string errorMessage) returns (bytes)",
+  "function functionStaticCall(address target, bytes data) view returns (bytes)",
+  "function functionStaticCall(address target, bytes data, string errorMessage) view returns (bytes)",
+  "function verifyCallResult(bool success, bytes returndata, string errorMessage) pure returns (bytes)",
+];
+
+// SafeERC20 ABI (was missing - library functions)
+export const SAFE_ERC20_ABI = [
+  // View functions
+  "function safeTransfer(IERC20 token, address to, uint256 value) returns (bool)",
+  "function safeTransferFrom(IERC20 token, address from, address to, uint256 value) returns (bool)",
+  "function safeApprove(IERC20 token, address spender, uint256 value) returns (bool)",
+  "function safeIncreaseAllowance(IERC20 token, address spender, uint256 value) returns (bool)",
+  "function safeDecreaseAllowance(IERC20 token, address spender, uint256 value) returns (bool)",
+  "function safePermit(IERC20 token, address owner, address spender, uint256 value, uint256 deadline, uint8 v, bytes32 r, bytes32 s)",
+];
+
+// IERC20Permit ABI (was missing)
+export const IERC20_PERMIT_ABI = [
+  // View functions
+  "function permit(address owner, address spender, uint256 value, uint256 deadline, uint8 v, bytes32 r, bytes32 s)",
+  "function nonces(address owner) view returns (uint256)",
+  "function DOMAIN_SEPARATOR() view returns (bytes32)",
+];
+
+// ReentrancyGuard ABI (was missing)
+export const REENTRANCY_GUARD_ABI = [
+  // No public functions - only internal modifiers
+];
+
+// Clones ABI (was missing - library functions)
+export const CLONES_ABI = [
+  // Pure functions
+  "function clone(address implementation) pure returns (address)",
+  "function cloneDeterministic(address implementation, bytes32 salt) pure returns (address)",
+  "function predictDeterministicAddress(address implementation, bytes32 salt) pure returns (address)",
+  "function predictDeterministicAddress(address implementation, bytes32 salt, address deployer) pure returns (address)",
+];
+
+// Ownable ABI (was missing)
+export const OWNABLE_ABI = [
+  // Events
+  "event OwnershipTransferred(address indexed previousOwner, address indexed newOwner)",
+  
+  // View functions
+  "function owner() view returns (address)",
+  
+  // State changing functions
+  "function renounceOwnership()",
+  "function transferOwnership(address newOwner)",
+];
+
+// IERC20 ABI (was missing)
+export const IERC20_BASE_ABI = [
+  // Events
+  "event Transfer(address indexed from, address indexed to, uint256 value)",
+  "event Approval(address indexed owner, address indexed spender, uint256 value)",
+  
+  // View functions
+  "function totalSupply() view returns (uint256)",
+  "function balanceOf(address account) view returns (uint256)",
+  "function transfer(address to, uint256 amount) returns (bool)",
+  "function allowance(address owner, address spender) view returns (uint256)",
+  "function approve(address spender, uint256 amount) returns (bool)",
+  "function transferFrom(address from, address to, uint256 amount) returns (bool)",
+];
+
+// Migrations ABI (was missing)
+export const MIGRATIONS_ABI = [
+  // View functions
+  "function last_completed_migration() view returns (uint)",
+  "function owner() view returns (address)",
+  
+  // State changing functions
+  "function setCompleted(uint completed)",
+];
+
+// Oracle ABI (was missing)
+export const ORACLE_BASE_ABI = [
+  // View functions
+  "function getPrice(string asset1, string asset2) view returns (uint num, uint den)",
+  
+  // State changing functions
+  "function setPrice(string asset1, string asset2, uint num, uint den)",
+];
+
+// IOracle ABI (was missing)
+export const IORACLE_ABI = [
+  // View functions
+  "function getPrice(string asset1, string asset2) view returns (uint num, uint den)",
+];
+
+// VotedValue ABI (was missing)
+export const VOTED_VALUE_BASE_ABI = [
+  // Events
+  "event Vote(address indexed who, uint votes, uint total_votes, uint leader, uint leader_total_votes, uint expiry_ts)",
+  "event Unvote(address indexed who, uint votes)",
+  "event Commit(address indexed who)",
+  
+  // View functions
+  "function leader() view returns (uint)",
+  "function current_value() view returns (uint)",
+  "function choices(address) view returns (uint)",
+  "function votesByValue(uint) view returns (uint)",
+  "function votesByValueAddress(uint, address) view returns (uint)",
+  "function governance() view returns (address)",
+  
+  // State changing functions
+  "function vote(uint value)",
+  "function voteAndDeposit(uint value, uint amount) payable",
+  "function unvote()",
+  "function commit()",
+];
