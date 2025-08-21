@@ -1,6 +1,5 @@
 // Network configuration for Counterstake Bridge
 
-// P3D precompile address constant
 export const P3D_PRECOMPILE_ADDRESS = '0x0000000000000000000000000000000000000802'; // native token address on 3dpass
 export const ADDRESS_ZERO = '0x0000000000000000000000000000000000000000'; // native token address on most other networks
 
@@ -9,8 +8,9 @@ export const NETWORKS = {
     id: 1,
     name: 'Ethereum',
     symbol: 'ETH',
-    rpcUrl: 'https://mainnet.infura.io/v3/YOUR_INFURA_KEY',
+    rpcUrl: 'https://mainnet.infura.io',
     explorer: 'https://etherscan.io',
+    erc20Precompile: false,
     nativeCurrency: {
       name: 'Ether',
       symbol: 'ETH',
@@ -24,17 +24,31 @@ export const NETWORKS = {
       assistantFactory: '0x0aD0Cce772ffcF8f9e70031cC8c1b7c20af5212F', // ETHEREUM_ASSISTANT_FACTORY
     },
     tokens: {
+      ETH: {
+        address: ADDRESS_ZERO,
+        symbol: 'ETH',
+        decimals: 18,
+        name: 'Ether',
+        isPrecompile: false,
+        isNative: true,
+      },
       USDT: {
         address: '0xdAC17F958D2ee523a2206206994597C13D831ec7',
         symbol: 'USDT',
         decimals: 6,
         name: 'Tether USD',
+        isPrecompile: false,
+        isNative: false,
+        standard: 'ERC20',
       },
       USDC: {
         address: '0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48',
         symbol: 'USDC',
         decimals: 6,
         name: 'USD Coin',
+        isPrecompile: false,
+        isNative: false,
+        standard: 'ERC20',
       },
       // Dummy tokens for testing purposes
       wP3D: {
@@ -43,6 +57,7 @@ export const NETWORKS = {
         decimals: 18,
         name: 'Wrapped P3D (Test)',
         isTestToken: true,
+        standard: 'ERC20',
       },
       wFIRE: {
         address: '0x2345678901234567890123456789012345678901',
@@ -50,6 +65,7 @@ export const NETWORKS = {
         decimals: 18,
         name: 'Wrapped FIRE (Test)',
         isTestToken: true,
+        standard: 'ERC20',
       },
       wWATER: {
         address: '0x3456789012345678901234567890123456789012',
@@ -57,6 +73,34 @@ export const NETWORKS = {
         decimals: 18,
         name: 'Wrapped WATER (Test)',
         isTestToken: true,
+        standard: 'ERC20',
+      },
+      // Additional test token for WATER export bridge
+      wWATER_ALT: {
+        address: '0x1A2B3C4D5E6F7A8B9C0D1E2F3A4B5C6D7E8F9A0B',
+        symbol: 'wWATER',
+        decimals: 18,
+        name: 'Wrapped WATER (Test Alt)',
+        isTestToken: true,
+        standard: 'ERC20',
+      },
+      USDTIA: {
+        address: '0xeA2F6788D252772a4DDaa376F4da5a3c54bc01f0',
+        symbol: 'USDTIA',
+        decimals: 18,
+        name: 'USDT import assistant share',
+        isPrecompile: false,
+        isNative: false,
+        standard: 'ERC20',
+      },
+      USDCIA: {
+        address: '0x7bEB3f6940689A9A9C66C7A2C2D9A704b8c95B0E',
+        symbol: 'USDCIA',
+        decimals: 18,
+        name: 'USDC import assistant share',
+        isPrecompile: false,
+        isNative: false,
+        standard: 'ERC20',
       },
     },
     // Bridge instances deployed on Ethereum
@@ -141,13 +185,6 @@ export const NETWORKS = {
         address: '0x0FAF9b7Cf0e62c6889486cE906d05A7a813a7cc5',
         type: 'export',
         bridgeAddress: '0x6359F737F32BFd1862FfAfd9C2F888DfAdC8B9RF',
-        homeNetwork: 'Ethereum',
-        homeTokenSymbol: 'USDT',
-        foreignNetwork: '3DPass',
-        foreignTokenSymbol: 'wUSDT',
-        foreignTokenAddress: '0xfBFBfbFA000000000000000000000000000000de',
-        stakeTokenSymbol: 'USDT',
-        stakeTokenAddress: '0xdAC17F958D2ee523a2206206994597C13D831ec7',
         description: 'USDT Export Assistant',
         shareSymbol: 'USDTIA',
         shareName: 'USDT import assistant'
@@ -156,13 +193,6 @@ export const NETWORKS = {
         address: '0xdf8D6962ADC7f29b6F9272376fE51D55B76B0fc5',
         type: 'export',
         bridgeAddress: '0x14982dc69e62508b3e4848129a55d6B1960b4Db0',
-        homeNetwork: 'Ethereum',
-        homeTokenSymbol: 'USDC',
-        foreignNetwork: '3DPass',
-        foreignTokenSymbol: 'wUSDC',
-        foreignTokenAddress: '0xFbfbFBfA0000000000000000000000000000006f',
-        stakeTokenSymbol: 'USDC',
-        stakeTokenAddress: '0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48',
         description: 'USDC Import Wrapper Assistant',
         shareSymbol: 'USDCIA',
         shareName: 'USDC import assistant'
@@ -171,10 +201,12 @@ export const NETWORKS = {
   },
   BSC: {
     id: 56,
-    name: 'BNB Smart Chain',
+    name: 'Binance Smart Chain',
     symbol: 'BSC',
     rpcUrl: 'https://bsc-dataseed1.binance.org',
     explorer: 'https://bscscan.com',
+    isHybrid: false,
+    erc20Precompile: false,
     nativeCurrency: {
       name: 'BNB',
       symbol: 'BNB',
@@ -188,17 +220,40 @@ export const NETWORKS = {
       assistantFactory: '0x9F60328982ab3e34020A9D43763db43d03Add7CF', // BSC_ASSISTANT_FACTORY
     },
     tokens: {
+      BNB: {
+        address: ADDRESS_ZERO,
+        symbol: 'BNB',
+        decimals: 18,
+        name: 'BNB token',
+        isPrecompile: false,
+        isNative: true,
+      },
       BUSD: {
         address: '0xe9e7CEA3DedcA5984780Bafc599bD69ADd087D56',
         symbol: 'BUSD',
         decimals: 18,
         name: 'BUSD Token',
+        isPrecompile: false,
+        isNative: false,
+        standard: 'ERC20',
       },
       USDT: {
         address: '0x55d398326f99059fF775485246999027B3197955',
         symbol: 'USDT',
         decimals: 18,
         name: 'Tether USD',
+        isPrecompile: false,
+        isNative: false,
+        standard: 'ERC20',
+      },
+      BUSDIA: {
+        address: '0xA32ea7688b2937eeaf3f74804fbAFB70D0fc4FE3',
+        symbol: 'BUSDIA',
+        decimals: 18,
+        name: 'BUSD import assistant share',
+        isPrecompile: false,
+        isNative: false,
+        standard: 'ERC20',
       },
     },
     // Bridge instances deployed on BSC
@@ -207,7 +262,7 @@ export const NETWORKS = {
       BUSD_EXPORT: {
         address: '0xAd913348E7B63f44185D5f6BACBD18d7189B2F1B',
         type: 'export',
-        homeNetwork: 'BNB Smart Chain',
+        homeNetwork: 'Binance Smart Chain',
         homeTokenSymbol: 'BUSD',
         homeTokenAddress: '0xe9e7CEA3DedcA5984780Bafc599bD69ADd087D56',
         foreignNetwork: '3DPass',
@@ -225,13 +280,6 @@ export const NETWORKS = {
         address: '0xA32ea7688b2937eeaf3f74804fbAFB70D0fc4FE3',
         type: 'export',
         bridgeAddress: '0xAd913348E7B63f44185D5f6BACBD18d7189B2F1B',
-        homeNetwork: 'BNB Smart Chain',
-        homeTokenSymbol: 'BUSD',
-        foreignNetwork: '3DPass',
-        foreignTokenSymbol: 'wBUSD',
-        foreignTokenAddress: '0xFbFBFBfA0000000000000000000000000000014D',
-        stakeTokenSymbol: 'BUSD',
-        stakeTokenAddress: '0xe9e7CEA3DedcA5984780Bafc599bD69ADd087D56',
         description: 'BUSD Export Assistant',
         shareSymbol: 'BUSDIA',
         shareName: 'BUSD import assistant'
@@ -244,6 +292,8 @@ export const NETWORKS = {
     symbol: '3DPass',
     rpcUrl: 'http://127.0.0.1:9978',
     explorer: 'https://3dpscan.xyz',
+    isHybrid: true,
+    erc20Precompile: true,
     nativeCurrency: {
       name: 'P3D',
       symbol: 'P3D',
@@ -262,9 +312,10 @@ export const NETWORKS = {
         address: P3D_PRECOMPILE_ADDRESS,
         symbol: 'P3D',
         decimals: 18,
-        name: '3DPass Native Token',
+        name: 'P3D Token',
         isPrecompile: true,
         isNative: true,
+        standard: 'ERC20',
       },
       wUSDT: {
         address: '0xfBFBfbFA000000000000000000000000000000de',
@@ -273,6 +324,7 @@ export const NETWORKS = {
         name: 'Wrapped USDT',
         isPrecompile: true,
         assetId: 222, // From the test script
+        standard: 'ERC20',
       },
       wUSDC: {
         address: '0xFbfbFBfA0000000000000000000000000000006f',
@@ -281,6 +333,7 @@ export const NETWORKS = {
         name: 'Wrapped USDC',
         isPrecompile: true,
         assetId: 223, // From the test script
+        standard: 'ERC20',
       },
       wBUSD: {
         address: '0xFbFBFBfA0000000000000000000000000000014D',
@@ -289,6 +342,7 @@ export const NETWORKS = {
         name: 'Wrapped BUSD',
         isPrecompile: true,
         assetId: 224, // From the test script
+        standard: 'ERC20',
       },
       FIRE: {
         address: '0xFbfBFBfA000000000000000000000000000001bC',
@@ -297,6 +351,7 @@ export const NETWORKS = {
         name: 'FIRE Token',
         isPrecompile: true,
         assetId: 444, // From the test script
+        standard: 'ERC20',
       },
       WATER: {
         address: '0xfBFBFBfa0000000000000000000000000000022b',
@@ -305,6 +360,61 @@ export const NETWORKS = {
         name: 'WATER Token',
         isPrecompile: true,
         assetId: 555, // From the test script
+        standard: 'ERC20',
+      },
+      USDTIA: {
+        address: '0xeA2F6788D252772a4DDaa376F4da5a3c54bc01f0',
+        symbol: 'USDTIA',
+        decimals: 18,
+        name: 'USDT import assistant share',
+        isPrecompile: false,
+        isNative: false,
+        standard: 'ERC20',
+      },
+      USDCIA: {
+        address: '0x7bEB3f6940689A9A9C66C7A2C2D9A704b8c95B0E',
+        symbol: 'USDCIA',
+        decimals: 18,
+        name: 'USDC import assistant share',
+        isPrecompile: false,
+        isNative: false,
+        standard: 'ERC20',
+      },
+      BUSDIA: {
+        address: '0x49B602cE8794003e8CC62bf61CA5dA7f9F543233',
+        symbol: 'BUSDIA',
+        decimals: 18,
+        name: 'BUSD import assistant share',
+        isPrecompile: false,
+        isNative: false,
+        standard: 'ERC20',
+      },
+      P3DEA: {
+        address: '0x373EB437066D13761926B4F20a4A93aBdECbCDbf',
+        symbol: 'P3DEA',
+        decimals: 18,
+        name: 'P3D export assistant share',
+        isPrecompile: false,
+        isNative: false,
+        standard: 'ERC20',
+      },
+      FIREA: {
+        address: '0x4d6BE61c3040245A88B6e4Fb92DCFb5ae9077127',
+        symbol: 'FIREA',
+        decimals: 18,
+        name: 'FIRE export assistant share',
+        isPrecompile: false,
+        isNative: false,
+        standard: 'ERC20',
+      },
+      WATEA: {
+        address: '0x826bB653e078D65FaFea3978d3481eea0727B0F5',
+        symbol: 'WATEA',
+        decimals: 18,
+        name: 'WATER export assistant share',
+        isPrecompile: false,
+        isNative: false,
+        standard: 'ERC20',
       },
     },
     // Bridge instances deployed on 3DPass
@@ -385,7 +495,7 @@ export const NETWORKS = {
     BUSD_IMPORT: {
       address: '0xccDdB081d48D7F312846ea4ECF18A963455c3C71',
       type: 'import_wrapper',
-      homeNetwork: 'BNB Smart Chain',
+      homeNetwork: 'Binance Smart Chain',
       homeTokenSymbol: 'BUSD',
       homeTokenAddress: '0xe9e7CEA3DedcA5984780Bafc599bD69ADd087D56',
       foreignNetwork: '3DPass',
@@ -393,7 +503,7 @@ export const NETWORKS = {
       foreignTokenAddress: '0xFbFBFBfA0000000000000000000000000000014D',
       stakeTokenSymbol: 'P3D',
       stakeTokenAddress: P3D_PRECOMPILE_ADDRESS,
-      description: 'BUSD Import Wrapper Bridge (BNB Smart Chain → 3DPass)',
+      description: 'BUSD Import Wrapper Bridge (Binance Smart Chain → 3DPass)',
       isIssuerBurner: true
     },
     // Assistant contracts deployed on 3DPass
@@ -403,98 +513,50 @@ export const NETWORKS = {
         address: '0xeA2F6788D252772a4DDaa376F4da5a3c54bc01f0',
         type: 'import_wrapper',
         bridgeAddress: '0x8Ec164093319EAD78f6E289bb688Bef3c8ce9B0F',
-        homeNetwork: 'Ethereum',
-        homeTokenSymbol: 'USDT',
-        homeTokenAddress: '0xdAC17F958D2ee523a2206206994597C13D831ec7',
-        foreignNetwork: '3DPass',
-        foreignTokenSymbol: 'wUSDT',
-        foreignTokenAddress: '0xfBFBfbFA000000000000000000000000000000de',
-        stakeTokenSymbol: 'P3D',
-        stakeTokenAddress: P3D_PRECOMPILE_ADDRESS,
         description: 'USDT Import Wrapper Assistant',
         shareSymbol: 'USDTIA',
-        shareName: 'USDT import assistant'
+        shareName: 'USDT import assistant share'
       },
       USDC_IMPORT_ASSISTANT: {
         address: '0x7bEB3f6940689A9A9C66C7A2C2D9A704b8c95B0E',
         type: 'import_wrapper',
         bridgeAddress: '0x1A85BD09E186b6EDc30D08Abb43c673A9636Cc4E',
-        homeNetwork: 'Ethereum',
-        homeTokenSymbol: 'USDC',
-        homeTokenAddress: '0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48',
-        foreignNetwork: '3DPass',
-        foreignTokenSymbol: 'wUSDC',
-        foreignTokenAddress: '0xFbfbFBfA0000000000000000000000000000006f',
-        stakeTokenSymbol: 'P3D',
-        stakeTokenAddress: P3D_PRECOMPILE_ADDRESS,
         description: 'USDC Import Wrapper Assistant',
         shareSymbol: 'USDCIA',
-        shareName: 'USDC import assistant'
+        shareName: 'USDC import assistant share'
       },
       BUSD_IMPORT_ASSISTANT: {
         address: '0x49B602cE8794003e8CC62bf61CA5dA7f9F543233',
         type: 'import_wrapper',
         bridgeAddress: '0xccDdB081d48D7F312846ea4ECF18A963455c3C71',
-        homeNetwork: 'BNB Smart Chain',
-        homeTokenSymbol: 'BUSD',
-        homeTokenAddress: '0xe9e7CEA3DedcA5984780Bafc599bD69ADd087D56',
-        foreignNetwork: '3DPass',
-        foreignTokenSymbol: 'wBUSD',
-        foreignTokenAddress: '0xFbFBFBfA0000000000000000000000000000014D',
-        stakeTokenSymbol: 'P3D',
-        stakeTokenAddress: P3D_PRECOMPILE_ADDRESS,
         description: 'BUSD Import Wrapper Assistant',
         shareSymbol: 'BUSDIA',
-        shareName: 'BUSD import assistant'
+        shareName: 'BUSD import assistant share'
       },
       // Export Assistants
       P3D_EXPORT_ASSISTANT: {
         address: '0x373EB437066D13761926B4F20a4A93aBdECbCDbf',
         type: 'export',
         bridgeAddress: '0x696CD5949EA4baBB3eB76D5231595C7e8eFa9206',
-        homeNetwork: '3DPass',
-        homeTokenSymbol: 'P3D',
-        homeTokenAddress: P3D_PRECOMPILE_ADDRESS,
-        foreignNetwork: 'Ethereum',
-        foreignTokenSymbol: 'wP3D',
-        foreignTokenAddress: '0x742d35Cc6634C0532925a3b8D9a4F8A6c4f0E4A7',
-        stakeTokenSymbol: 'P3D',
-        stakeTokenAddress: P3D_PRECOMPILE_ADDRESS,
         description: 'P3D Export Assistant',
         shareSymbol: 'P3DEA',
-        shareName: 'P3D export assistant'
+        shareName: 'P3D export assistant share'
       },
       FIRE_EXPORT_ASSISTANT: {
         address: '0x4d6BE61c3040245A88B6e4Fb92DCFb5ae9077127',
         type: 'export',
         bridgeAddress: '0x418Fbe90f5fD7095Fd4cde851c8375Df085ed61A',
-        homeNetwork: '3DPass',
-        homeTokenSymbol: 'FIRE',
-        homeTokenAddress: '0xFbfBFBfA000000000000000000000000000001bC',
-        foreignNetwork: 'Ethereum',
-        foreignTokenSymbol: 'wFIRE',
-        foreignTokenAddress: '0x8F9B2e7D4A3C1F5E6B8A9D2C4E7F1A3B5C8D9E0F',
-        stakeTokenSymbol: 'FIRE',
-        stakeTokenAddress: '0xFbfBFBfA000000000000000000000000000001bC',
         description: 'FIRE Export Assistant',
         shareSymbol: 'FIREA',
-        shareName: 'FIRE export assistant'
+        shareName: 'FIRE export assistant share'
       },
       WATER_EXPORT_ASSISTANT: {
         address: '0x826bB653e078D65FaFea3978d3481eea0727B0F5',
         type: 'export',
         bridgeAddress: '0xF79be90A608c26CA1f995a40BE57DB28de8e5DB4',
-        homeNetwork: '3DPass',
-        homeTokenSymbol: 'WATER',
-        homeTokenAddress: '0xfBFBFBfa0000000000000000000000000000022b',
-        foreignNetwork: 'Ethereum',
-        foreignTokenSymbol: 'wWATER',
-        foreignTokenAddress: '0x1A2B3C4D5E6F7A8B9C0D1E2F3A4B5C6D7E8F9A0B',
-        stakeTokenSymbol: 'WATER',
-        stakeTokenAddress: '0xfBFBFBfa0000000000000000000000000000022b',
         description: 'WATER Export Assistant',
         shareSymbol: 'WATEA',
-        shareName: 'WATER export assistant'
+        shareName: 'WATER export assistant share'
       }
     }
   }
@@ -667,17 +729,12 @@ export const getAssistantContractsByType = (type) => {
 };
 
 export const getAssistantContractsByNetwork = (networkSymbol) => {
-  const assistants = [];
-  Object.values(NETWORKS).forEach(network => {
-    if (network.assistants) {
-      Object.values(network.assistants).forEach(assistant => {
-        if (assistant.homeNetwork === networkSymbol || assistant.foreignNetwork === networkSymbol) {
-          assistants.push(assistant);
-        }
-      });
-    }
-  });
-  return assistants;
+  const networkConfig = NETWORKS[networkSymbol];
+  if (!networkConfig || !networkConfig.assistants) {
+    return [];
+  }
+  
+  return Object.values(networkConfig.assistants);
 };
 
 export const getAssistantContractForBridge = (bridgeAddress) => {

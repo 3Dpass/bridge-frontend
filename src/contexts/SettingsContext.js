@@ -103,7 +103,17 @@ export const SettingsProvider = ({ children }) => {
         ...prev[networkKey],
         tokens: {
           ...prev[networkKey]?.tokens,
-          [tokenSymbol]: tokenConfig,
+          [tokenSymbol]: {
+            address: tokenConfig.address,
+            symbol: tokenConfig.symbol,
+            name: tokenConfig.name,
+            decimals: tokenConfig.decimals,
+            standard: tokenConfig.standard || 'ERC20',
+            isNative: tokenConfig.isNative || false,
+            isPrecompile: tokenConfig.isPrecompile || false,
+            isTestToken: tokenConfig.isTestToken || false,
+            assetId: tokenConfig.assetId || null,
+          },
         },
         customTokens: true,
       }
@@ -118,7 +128,17 @@ export const SettingsProvider = ({ children }) => {
         ...prev[networkKey],
         tokens: {
           ...prev[networkKey]?.tokens,
-          [tokenSymbol]: tokenConfig,
+          [tokenSymbol]: {
+            address: tokenConfig.address,
+            symbol: tokenConfig.symbol,
+            name: tokenConfig.name,
+            decimals: tokenConfig.decimals,
+            standard: tokenConfig.standard || 'ERC20',
+            isNative: tokenConfig.isNative || false,
+            isPrecompile: NETWORKS[networkKey]?.erc20Precompile ? (tokenConfig.isPrecompile || false) : false,
+            isTestToken: tokenConfig.isTestToken || false,
+            ...(NETWORKS[networkKey]?.erc20Precompile && { assetId: tokenConfig.assetId || null }),
+          },
         },
         customTokens: true,
       }
@@ -145,50 +165,74 @@ export const SettingsProvider = ({ children }) => {
     });
   }, []);
 
-  // Add or update a custom bridge instance with new structure support
-  const addCustomBridgeInstance = useCallback((bridgeKey, bridgeConfig) => {
+
+
+  // Add or update a custom bridge instance for a specific network
+  const addCustomBridgeInstanceForNetwork = useCallback((networkKey, bridgeKey, bridgeConfig) => {
     setSettings(prev => ({
       ...prev,
-      bridgeInstances: {
-        ...prev.bridgeInstances,
-        [bridgeKey]: bridgeConfig,
+      [networkKey]: {
+        ...prev[networkKey],
+        bridges: {
+          ...prev[networkKey]?.bridges,
+          [bridgeKey]: bridgeConfig,
+        },
+        customBridges: true,
       }
     }));
   }, []);
 
-  // Remove a custom bridge instance
-  const removeCustomBridgeInstance = useCallback((bridgeKey) => {
+  // Remove a custom bridge instance for a specific network
+  const removeCustomBridgeInstanceForNetwork = useCallback((networkKey, bridgeKey) => {
     setSettings(prev => {
-      const newBridgeInstances = { ...prev.bridgeInstances };
-      delete newBridgeInstances[bridgeKey];
+      const newBridges = { ...prev[networkKey]?.bridges };
+      delete newBridges[bridgeKey];
+      
+      // Check if there are any remaining custom bridges
+      const hasCustomBridges = Object.keys(newBridges).length > 0;
       
       return {
         ...prev,
-        bridgeInstances: newBridgeInstances,
+        [networkKey]: {
+          ...prev[networkKey],
+          bridges: newBridges,
+          customBridges: hasCustomBridges,
+        }
       };
     });
   }, []);
 
-  // Add or update a custom assistant contract with new structure support
-  const addCustomAssistantContract = useCallback((assistantKey, assistantConfig) => {
+  // Add or update a custom assistant contract for a specific network
+  const addCustomAssistantContractForNetwork = useCallback((networkKey, assistantKey, assistantConfig) => {
     setSettings(prev => ({
       ...prev,
-      assistantContracts: {
-        ...prev.assistantContracts,
-        [assistantKey]: assistantConfig,
+      [networkKey]: {
+        ...prev[networkKey],
+        assistants: {
+          ...prev[networkKey]?.assistants,
+          [assistantKey]: assistantConfig,
+        },
+        customAssistants: true,
       }
     }));
   }, []);
 
-  // Remove a custom assistant contract
-  const removeCustomAssistantContract = useCallback((assistantKey) => {
+  // Remove a custom assistant contract for a specific network
+  const removeCustomAssistantContractForNetwork = useCallback((networkKey, assistantKey) => {
     setSettings(prev => {
-      const newAssistantContracts = { ...prev.assistantContracts };
-      delete newAssistantContracts[assistantKey];
+      const newAssistants = { ...prev[networkKey]?.assistants };
+      delete newAssistants[assistantKey];
+      
+      // Check if there are any remaining custom assistants
+      const hasCustomAssistants = Object.keys(newAssistants).length > 0;
       
       return {
         ...prev,
-        assistantContracts: newAssistantContracts,
+        [networkKey]: {
+          ...prev[networkKey],
+          assistants: newAssistants,
+          customAssistants: hasCustomAssistants,
+        }
       };
     });
   }, []);
@@ -435,6 +479,34 @@ export const SettingsProvider = ({ children }) => {
     return network.tokens[symbol] || null;
   }, [getNetworkWithSettings]);
 
+  // Validate token configuration
+  const validateTokenConfig = useCallback((tokenConfig) => {
+    if (!tokenConfig) return false;
+    
+    const requiredFields = ['address', 'symbol', 'name', 'decimals'];
+    for (const field of requiredFields) {
+      if (!tokenConfig[field]) return false;
+    }
+    
+    // Validate decimals is a number
+    if (isNaN(parseInt(tokenConfig.decimals))) return false;
+    
+    // Validate address format
+    if (!/^0x[a-fA-F0-9]{40}$/.test(tokenConfig.address)) return false;
+    
+    return true;
+  }, []);
+
+  // Get token type description
+  const getTokenTypeDescription = useCallback((tokenConfig) => {
+    if (!tokenConfig) return 'Unknown';
+    
+    if (tokenConfig.isNative) return 'Native Token';
+    if (tokenConfig.isPrecompile) return 'Precompile Token';
+    if (tokenConfig.isTestToken) return 'Test Token';
+    return tokenConfig.standard || 'ERC20';
+  }, []);
+
   // Get 3DPass token asset ID
   const get3DPassTokenAssetId = useCallback((tokenAddress) => {
     const token = get3DPassTokenByAddress(tokenAddress);
@@ -476,9 +548,17 @@ export const SettingsProvider = ({ children }) => {
   // Get assistant contracts by network with structure compatibility
   const getAssistantContractsByNetwork = useCallback((networkSymbol) => {
     const assistantContracts = getAssistantContractsWithSettings();
-    return Object.values(assistantContracts).filter(assistant => {
-      return assistant.homeNetwork === networkSymbol || assistant.foreignNetwork === networkSymbol;
-    });
+    const networkConfig = NETWORKS[networkSymbol];
+    
+    if (!networkConfig) return [];
+    
+    // Get assistants that belong to this specific network
+    const networkAssistants = networkConfig.assistants || {};
+    const networkAssistantKeys = Object.keys(networkAssistants);
+    
+    return Object.entries(assistantContracts).filter(([key, assistant]) => {
+      return networkAssistantKeys.includes(key);
+    }).map(([key, assistant]) => assistant);
   }, [getAssistantContractsWithSettings]);
 
   // Get bridge instances by type with structure compatibility
@@ -522,7 +602,9 @@ export const SettingsProvider = ({ children }) => {
   const is3DPassAssistant = useCallback((assistantContract) => {
     if (!assistantContract) return false;
     
-    return assistantContract.homeNetwork === '3DPass' || assistantContract.foreignNetwork === '3DPass';
+    // For simplified structure, check if assistant is deployed on 3DPass
+    // This would need to be determined by the bridge address or deployment location
+    return false; // TODO: Implement proper 3DPass detection for simplified structure
   }, []);
 
   // Get stake token symbol for a bridge instance
@@ -554,10 +636,10 @@ export const SettingsProvider = ({ children }) => {
     updateTokenConfig,
     addCustomToken,
     removeCustomToken,
-    addCustomBridgeInstance,
-    removeCustomBridgeInstance,
-    addCustomAssistantContract,
-    removeCustomAssistantContract,
+    addCustomBridgeInstanceForNetwork,
+    removeCustomBridgeInstanceForNetwork,
+    addCustomAssistantContractForNetwork,
+    removeCustomAssistantContractForNetwork,
     resetSettings,
     resetNetworkSettings,
     
@@ -601,6 +683,10 @@ export const SettingsProvider = ({ children }) => {
     getAll3DPassTokens,
     getAll3DPassTokenAddresses,
     getAll3DPassTokenSymbols,
+    
+    // Token validation utilities
+    validateTokenConfig,
+    getTokenTypeDescription,
   };
 
   return (

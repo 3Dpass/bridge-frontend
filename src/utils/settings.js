@@ -136,9 +136,17 @@ export const getBridgeInstancesByNetwork = (networkSymbol) => {
  */
 export const getAssistantContractsByNetwork = (networkSymbol) => {
   const assistantContracts = getAssistantContractsWithSettings();
-  return Object.values(assistantContracts).filter(assistant => {
-    return assistant.homeNetwork === networkSymbol || assistant.foreignNetwork === networkSymbol;
-  });
+  const networkConfig = NETWORKS[networkSymbol];
+  
+  if (!networkConfig) return [];
+  
+  // Get assistants that belong to this specific network
+  const networkAssistants = networkConfig.assistants || {};
+  const networkAssistantKeys = Object.keys(networkAssistants);
+  
+  return Object.entries(assistantContracts).filter(([key, assistant]) => {
+    return networkAssistantKeys.includes(key);
+  }).map(([key, assistant]) => assistant);
 };
 
 /**
@@ -210,7 +218,9 @@ export const is3DPassBridge = (bridgeInstance) => {
 export const is3DPassAssistant = (assistantContract) => {
   if (!assistantContract) return false;
   
-  return assistantContract.homeNetwork === '3DPass' || assistantContract.foreignNetwork === '3DPass';
+  // For simplified structure, check if assistant is deployed on 3DPass
+  // This would need to be determined by the bridge address or deployment location
+  return false; // TODO: Implement proper 3DPass detection for simplified structure
 };
 
 /**
@@ -444,7 +454,11 @@ export const addCustomToken = (networkKey, tokenSymbol, tokenConfig) => {
       currentSettings[networkKey].tokens = {};
     }
     
-    currentSettings[networkKey].tokens[tokenSymbol] = tokenConfig;
+    currentSettings[networkKey].tokens[tokenSymbol] = {
+      ...tokenConfig,
+      isPrecompile: NETWORKS[networkKey]?.erc20Precompile ? (tokenConfig.isPrecompile || false) : false,
+      ...(NETWORKS[networkKey]?.erc20Precompile ? {} : { assetId: undefined }), // Remove assetId for networks without precompile support
+    };
     currentSettings[networkKey].customTokens = true;
     
     return saveSettings(currentSettings);
