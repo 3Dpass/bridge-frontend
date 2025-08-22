@@ -352,6 +352,20 @@ const SettingsDialog = ({ isOpen, onClose }) => {
 
   // Handle removing a token
   const handleRemoveToken = (networkKey, tokenSymbol) => {
+    // Check if this is a native token (from config)
+    const configToken = NETWORKS[networkKey]?.tokens?.[tokenSymbol];
+    if (configToken?.isNative) {
+      toast.error(`Cannot remove native token ${tokenSymbol}`);
+      return;
+    }
+    
+    // Check if this is a native token (from settings)
+    const settingsToken = settings[networkKey]?.tokens?.[tokenSymbol];
+    if (settingsToken?.isNative) {
+      toast.error(`Cannot remove native token ${tokenSymbol}`);
+      return;
+    }
+    
     removeCustomToken(networkKey, tokenSymbol);
     toast.success(`Token ${tokenSymbol} removed successfully`);
   };
@@ -437,19 +451,25 @@ const SettingsDialog = ({ isOpen, onClose }) => {
   const isBridgeAlreadyExists = (networkKey, bridgeAddress) => {
     if (!bridgeAddress) return false;
     
-    // Check in config bridges
-    const configBridges = NETWORKS[networkKey]?.bridges || {};
-    const existingInConfig = Object.values(configBridges).some(bridge => 
-      bridge.address.toLowerCase() === bridgeAddress.toLowerCase()
-    );
-    
-    // Check in custom settings bridges
+    // Settings always take priority over config
+    // Check in custom settings bridges first
     const customBridges = settings[networkKey]?.bridges || {};
     const existingInSettings = Object.values(customBridges).some(bridge => 
       bridge.address.toLowerCase() === bridgeAddress.toLowerCase()
     );
     
-    return existingInConfig || existingInSettings;
+    // If it exists in settings, it's already there (user's choice)
+    if (existingInSettings) {
+      return true;
+    }
+    
+    // If custom bridges are enabled, allow adding any bridge (including config bridges)
+    // This allows users to re-add bridges they previously removed
+    if (settings[networkKey]?.customBridges) {
+      return false;
+    }
+    
+    return false;
   };
 
 
@@ -494,38 +514,58 @@ const SettingsDialog = ({ isOpen, onClose }) => {
   const isAssistantAlreadyExists = (networkKey, assistantAddress) => {
     if (!assistantAddress) return false;
     
-    // Check in config assistants
-    const configAssistants = NETWORKS[networkKey]?.assistants || {};
-    const existingInConfig = Object.values(configAssistants).some(assistant => 
-      assistant.address.toLowerCase() === assistantAddress.toLowerCase()
-    );
-    
-    // Check in custom settings assistants
+    // Settings always take priority over config
+    // Check in custom settings assistants first
     const customAssistants = settings[networkKey]?.assistants || {};
     const existingInSettings = Object.values(customAssistants).some(assistant => 
       assistant.address.toLowerCase() === assistantAddress.toLowerCase()
     );
     
-    return existingInConfig || existingInSettings;
+    // If it exists in settings, it's already there (user's choice)
+    if (existingInSettings) {
+      return true;
+    }
+    
+    // If custom assistants are enabled, allow adding any assistant (including config assistants)
+    // This allows users to re-add assistants they previously removed
+    if (settings[networkKey]?.customAssistants) {
+      return false;
+    }
+    
+    return false;
   };
 
   // Check if token already exists in settings/config
   const isTokenAlreadyExists = (networkKey, tokenAddress) => {
     if (!tokenAddress) return false;
     
-    // Check in config tokens
-    const configTokens = NETWORKS[networkKey]?.tokens || {};
-    const existingInConfig = Object.values(configTokens).some(token => 
-      token.address.toLowerCase() === tokenAddress.toLowerCase()
-    );
+    console.log(`🔍 Checking if token ${tokenAddress} exists in ${networkKey}`);
     
-    // Check in custom settings tokens
+    // Settings always take priority over config
+    // Check in custom settings tokens first
     const customTokens = settings[networkKey]?.tokens || {};
     const existingInSettings = Object.values(customTokens).some(token => 
       token.address.toLowerCase() === tokenAddress.toLowerCase()
     );
     
-    return existingInConfig || existingInSettings;
+    console.log(`🔍 Token exists in settings: ${existingInSettings}`);
+    console.log(`🔍 Custom tokens enabled: ${settings[networkKey]?.customTokens}`);
+    
+    // If it exists in settings, it's already there (user's choice)
+    if (existingInSettings) {
+      console.log(`🔍 Token found in settings - returning true`);
+      return true;
+    }
+    
+    // If custom tokens are enabled, allow adding any token (including config tokens)
+    // This allows users to re-add tokens they previously removed
+    if (settings[networkKey]?.customTokens) {
+      console.log(`🔍 Custom tokens enabled - allowing token addition`);
+      return false;
+    }
+    
+    console.log(`🔍 Token not found anywhere - returning false`);
+    return false;
   };
 
 
@@ -623,15 +663,18 @@ const SettingsDialog = ({ isOpen, onClose }) => {
       const result = await autoDetectBridge(networkProvider, bridgeConfig.address, networkKey, settings);
       
       if (result.success) {
-        // Compare detected data with original config data, not current stored data
+        // Check if this is a config bridge or custom bridge
         const originalConfigBridge = NETWORKS[networkKey]?.bridges?.[bridgeKey];
+        const isConfigBridge = !!originalConfigBridge;
+        const isCustomBridge = !!settings[networkKey]?.bridges?.[bridgeKey];
+        
         let comparison;
         
-        if (originalConfigBridge) {
-          // Compare with original config data
+        if (isConfigBridge && !isCustomBridge) {
+          // Config bridge that hasn't been modified: compare with original config
           comparison = compareBridgeData(originalConfigBridge, result.bridgeConfig);
         } else {
-          // If not in config, compare with current stored data
+          // Custom bridge or modified config bridge: compare with current stored data
           comparison = compareBridgeData(bridgeConfig, result.bridgeConfig);
         }
         
@@ -659,15 +702,18 @@ const SettingsDialog = ({ isOpen, onClose }) => {
       const result = await autoDetectAssistant(networkProvider, assistantConfig.address, networkKey, settings);
       
       if (result.success) {
-        // Compare detected data with original config data, not current stored data
+        // Check if this is a config assistant or custom assistant
         const originalConfigAssistant = NETWORKS[networkKey]?.assistants?.[assistantKey];
+        const isConfigAssistant = !!originalConfigAssistant;
+        const isCustomAssistant = !!settings[networkKey]?.assistants?.[assistantKey];
+        
         let comparison;
         
-        if (originalConfigAssistant) {
-          // Compare with original config data
+        if (isConfigAssistant && !isCustomAssistant) {
+          // Config assistant that hasn't been modified: compare with original config
           comparison = compareAssistantData(originalConfigAssistant, result.assistantConfig);
         } else {
-          // If not in config, compare with current stored data
+          // Custom assistant or modified config assistant: compare with current stored data
           comparison = compareAssistantData(assistantConfig, result.assistantConfig);
         }
         
@@ -789,17 +835,51 @@ const SettingsDialog = ({ isOpen, onClose }) => {
         // Get existing bridge configurations before updating
         const existingBridges = getBridgeInstancesWithSettings();
         
-        // Update bridges with proper upToDate status
+        // Update bridges with proper upToDate status and validation
         Object.entries(result.bridges).forEach(([bridgeKey, bridgeConfig]) => {
           // Check if this bridge already exists and compare data
           const existingBridge = existingBridges[bridgeKey];
+          
+          // Validate bridge data before applying
+          const isValidBridge = bridgeConfig.address && 
+            validateContractAddress(bridgeConfig.address) &&
+            bridgeConfig.homeTokenAddress && 
+            validateTokenAddress(bridgeConfig.homeTokenAddress) &&
+            bridgeConfig.foreignTokenAddress && 
+            validateTokenAddress(bridgeConfig.foreignTokenAddress) &&
+            bridgeConfig.stakeTokenAddress && 
+            validateTokenAddress(bridgeConfig.stakeTokenAddress) &&
+            // Check for data quality issues
+            bridgeConfig.homeTokenSymbol && 
+            bridgeConfig.homeTokenSymbol !== 'Invalid Address' &&
+            bridgeConfig.homeTokenSymbol !== 'Error' &&
+            bridgeConfig.foreignTokenSymbol && 
+            bridgeConfig.foreignTokenSymbol !== 'Invalid Address' &&
+            bridgeConfig.foreignTokenSymbol !== 'Error' &&
+            bridgeConfig.stakeTokenSymbol && 
+            bridgeConfig.stakeTokenSymbol !== 'Invalid Address' &&
+            bridgeConfig.stakeTokenSymbol !== 'Error';
+          
+          if (!isValidBridge) {
+            console.warn(`Skipping bridge ${bridgeKey} due to validation issues:`, bridgeConfig);
+            // If this bridge exists, mark it as "Invalid" without applying invalid data
+            if (existingBridge) {
+              addCustomBridgeInstanceForNetwork(networkKey, bridgeKey, {
+                ...existingBridge,
+                upToDate: 'invalid'
+              });
+            }
+            return; // Skip this bridge
+          }
+          
           let upToDate = undefined;
           
           if (existingBridge) {
-            // Compare existing data with new registry data
-            const comparison = compareBridgeData(existingBridge, bridgeConfig);
-            upToDate = !comparison.hasDifferences;
-            console.log(`🔍 Registry update for ${bridgeKey}: ${upToDate ? 'Up to date' : 'Needs update'}`);
+            // If we're applying registry data, mark as up to date since it's from the registry
+            upToDate = true;
+          } else {
+            // New bridge from registry - mark as up to date
+            upToDate = true;
           }
           
           // Add the bridge with the correct upToDate status
@@ -812,17 +892,44 @@ const SettingsDialog = ({ isOpen, onClose }) => {
         // Get existing assistant configurations before updating
         const existingAssistants = getAssistantContractsWithSettings();
         
-        // Update assistants with proper status checking
+        // Update assistants with proper status checking and validation
         Object.entries(result.assistants).forEach(([assistantKey, assistantConfig]) => {
           // Check if this assistant already exists and compare data
           const existingAssistant = existingAssistants[assistantKey];
+          
+          // Validate assistant data before applying
+          const isValidAssistant = assistantConfig.address && 
+            validateContractAddress(assistantConfig.address) &&
+            assistantConfig.bridgeAddress && 
+            validateContractAddress(assistantConfig.bridgeAddress) &&
+            // Check for data quality issues
+            assistantConfig.shareSymbol && 
+            assistantConfig.shareSymbol !== 'Invalid Address' &&
+            assistantConfig.shareSymbol !== 'Error' &&
+            assistantConfig.shareName && 
+            assistantConfig.shareName !== 'Invalid Address' &&
+            assistantConfig.shareName !== 'Error';
+          
+          if (!isValidAssistant) {
+            console.warn(`Skipping assistant ${assistantKey} due to validation issues:`, assistantConfig);
+            // If this assistant exists, mark it as "Invalid" without applying invalid data
+            if (existingAssistant) {
+              addCustomAssistantContractForNetwork(networkKey, assistantKey, {
+                ...existingAssistant,
+                upToDate: 'invalid'
+              });
+            }
+            return; // Skip this assistant
+          }
+          
           let upToDate = undefined;
           
           if (existingAssistant) {
-            // Compare existing data with new registry data
-            const comparison = compareAssistantData(existingAssistant, assistantConfig);
-            upToDate = !comparison.hasDifferences;
-            console.log(`🔍 Registry update for assistant ${assistantKey}: ${upToDate ? 'Up to date' : 'Needs update'}`);
+            // If we're applying registry data, mark as up to date since it's from the registry
+            upToDate = true;
+          } else {
+            // New assistant from registry - mark as up to date
+            upToDate = true;
           }
           
           // Add the assistant with the correct upToDate status
@@ -832,8 +939,24 @@ const SettingsDialog = ({ isOpen, onClose }) => {
           });
         });
 
-        // Update tokens
+        // Update tokens with validation
         Object.entries(result.discoveredTokens).forEach(([tokenKey, tokenConfig]) => {
+          // Validate token data before applying
+          const isValidToken = tokenConfig.address && 
+            validateTokenAddress(tokenConfig.address) &&
+            tokenConfig.symbol &&
+            tokenConfig.symbol !== 'Invalid Address' &&
+            tokenConfig.symbol !== 'Error' &&
+            tokenConfig.name &&
+            tokenConfig.name !== 'Invalid Address' &&
+            tokenConfig.name !== 'Error' &&
+            tokenConfig.decimals;
+          
+          if (!isValidToken) {
+            console.warn(`Skipping token ${tokenKey} due to validation issues:`, tokenConfig);
+            return; // Skip this token
+          }
+          
           addCustomToken(networkKey, tokenKey, tokenConfig);
         });
 
@@ -1100,7 +1223,7 @@ const SettingsDialog = ({ isOpen, onClose }) => {
                                 <Copy className="w-3 h-3" />
                               )}
                             </button>
-                            {settings[networkKey]?.customTokens && (
+                            {settings[networkKey]?.customTokens && !tokenConfig.isNative && (
                               <button
                                 onClick={() => handleRemoveToken(networkKey, tokenSymbol)}
                                 className="btn-error px-2 py-1"
@@ -1123,7 +1246,7 @@ const SettingsDialog = ({ isOpen, onClose }) => {
                             className="btn-secondary flex items-center gap-2 w-full"
                           >
                             <Plus className="w-4 h-4" />
-                            Add Custom Token
+                            Add/Update an existing Token
                           </button>
                         ) : (
                           <div className="p-3 bg-dark-800 rounded border border-secondary-700 space-y-3">
@@ -1198,11 +1321,17 @@ const SettingsDialog = ({ isOpen, onClose }) => {
                                           toast.error(`Token detected but data differs from settings. You can update with current on-chain data.`);
                                           console.log(`⚠️ Token detected but data differs from settings: ${address}`);
                                         } else {
-                                          toast.error(`Token detected and matches existing settings`);
-                                          console.log(`⚠️ Token detected and matches existing settings: ${address}`);
+                                          // Only show error if custom tokens are enabled and token exists in settings
+                                          if (settings[networkKey]?.customTokens) {
+                                            toast.error(`The token already exists in the settings`);
+                                            console.log(`⚠️ Token already exists in settings: ${address}`);
+                                          } else {
+                                      toast.success(`Detected ${result.tokenInfo.symbol} token`);
+                                            console.log(`✅ Successfully detected ${result.tokenInfo.symbol} token`);
+                                          }
                                         }
                                       } else {
-                                      toast.success(`Detected ${result.tokenInfo.symbol} token`);
+                                        toast.success(`Detected ${result.tokenInfo.symbol} token`);
                                         console.log(`✅ Successfully detected ${result.tokenInfo.symbol} token`);
                                       }
                                     }
@@ -1467,10 +1596,13 @@ const SettingsDialog = ({ isOpen, onClose }) => {
                                 <span className="px-1 py-0.5 bg-orange-600 text-white text-xs rounded-full">Needs update</span>
                               )}
                               {bridgeConfig.upToDate === undefined && (
-                                <span className="px-1 py-0.5 bg-gray-600 text-white text-xs rounded-full">Status unknown</span>
+                                <span className="px-1 py-0.5 bg-gray-600 text-white text-xs rounded-full">Unverified</span>
                               )}
                               {bridgeConfig.upToDate === null && (
                                 <span className="px-1 py-0.5 bg-red-600 text-white text-xs rounded-full">Detection failed</span>
+                              )}
+                              {bridgeConfig.upToDate === 'invalid' && (
+                                <span className="px-1 py-0.5 bg-red-800 text-white text-xs rounded-full">Invalid</span>
                               )}
                             </div>
                             <div className="flex items-center gap-1">
@@ -1551,7 +1683,7 @@ const SettingsDialog = ({ isOpen, onClose }) => {
                     className="btn-secondary flex items-center gap-2 w-full"
                   >
                     <Plus className="w-4 h-4" />
-                    Add Custom Bridge Instance
+                    Add/Update an existing Bridge
                   </button>
                 ) : (
                           <div className="p-3 bg-dark-800 rounded border border-secondary-700 space-y-3">
@@ -2000,10 +2132,13 @@ const SettingsDialog = ({ isOpen, onClose }) => {
                                 <span className="px-1 py-0.5 bg-orange-600 text-white text-xs rounded-full">Needs update</span>
                               )}
                               {assistantConfig.upToDate === undefined && (
-                                <span className="px-1 py-0.5 bg-gray-600 text-white text-xs rounded-full">Status unknown</span>
+                                <span className="px-1 py-0.5 bg-gray-600 text-white text-xs rounded-full">Unverified</span>
                               )}
                               {assistantConfig.upToDate === null && (
                                 <span className="px-1 py-0.5 bg-red-600 text-white text-xs rounded-full">Detection failed</span>
+                              )}
+                              {assistantConfig.upToDate === 'invalid' && (
+                                <span className="px-1 py-0.5 bg-red-800 text-white text-xs rounded-full">Invalid</span>
                               )}
                             </div>
                             <div className="flex items-center gap-1">
@@ -2086,7 +2221,7 @@ const SettingsDialog = ({ isOpen, onClose }) => {
                     className="btn-secondary flex items-center gap-2 w-full"
                   >
                     <Plus className="w-4 h-4" />
-                    Add Custom Assistant Contract
+                    Add/Update an existing Assistant
                   </button>
                 ) : (
                           <div className="p-3 bg-dark-800 rounded border border-secondary-700 space-y-3">
@@ -2382,23 +2517,6 @@ const SettingsDialog = ({ isOpen, onClose }) => {
                 </div>
               ))}
 
-
-
-
-              {/* Help Section */}
-              <div className="card bg-secondary-900/50">
-                <h4 className="text-sm font-semibold text-white mb-2">Need Help?</h4>
-                <div className="text-xs text-secondary-400 space-y-1">
-                  <p>• Use custom RPC URLs for better performance or privacy</p>
-                  <p>• Custom contract addresses allow you to use your own deployments</p>
-                  <p>• Add custom tokens to support additional ERC-20 tokens</p>
-                  <p>• Configure custom bridge instances for each network</p>
-                  <p>• Set up assistant contracts for automated bridge operations per network</p>
-                  <p>• Bridge and assistant management is now network-specific</p>
-                  <p>• Settings are saved locally in your browser</p>
-                  <p>• Reset to defaults if you encounter issues</p>
-                </div>
-              </div>
             </div>
           </div>
 

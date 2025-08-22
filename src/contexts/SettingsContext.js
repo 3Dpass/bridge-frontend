@@ -151,15 +151,13 @@ export const SettingsProvider = ({ children }) => {
       const newTokens = { ...prev[networkKey]?.tokens };
       delete newTokens[tokenSymbol];
       
-      // Check if there are any remaining custom tokens
-      const hasCustomTokens = Object.keys(newTokens).length > 0;
-      
       return {
         ...prev,
         [networkKey]: {
           ...prev[networkKey],
           tokens: newTokens,
-          customTokens: hasCustomTokens,
+          // Keep customTokens setting as is - don't change it when removing tokens
+          // The user should control this setting explicitly
         }
       };
     });
@@ -339,9 +337,12 @@ export const SettingsProvider = ({ children }) => {
   const getBridgeInstancesWithSettings = useCallback(() => {
     const customBridgeInstances = { ...getBridgeInstances() };
     
-    if (settings.bridgeInstances) {
-      Object.assign(customBridgeInstances, settings.bridgeInstances);
-    }
+    // Add custom bridges from each network's settings
+    Object.entries(settings).forEach(([networkKey, networkSettings]) => {
+      if (networkSettings?.bridges) {
+        Object.assign(customBridgeInstances, networkSettings.bridges);
+      }
+    });
 
     return customBridgeInstances;
   }, [settings]);
@@ -350,9 +351,12 @@ export const SettingsProvider = ({ children }) => {
   const getAssistantContractsWithSettings = useCallback(() => {
     const customAssistantContracts = { ...getAssistantContracts() };
     
-    if (settings.assistantContracts) {
-      Object.assign(customAssistantContracts, settings.assistantContracts);
-    }
+    // Add custom assistants from each network's settings
+    Object.entries(settings).forEach(([networkKey, networkSettings]) => {
+      if (networkSettings?.assistants) {
+        Object.assign(customAssistantContracts, networkSettings.assistants);
+      }
+    });
 
     return customAssistantContracts;
   }, [settings]);

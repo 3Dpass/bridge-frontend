@@ -8,7 +8,7 @@ export const NETWORKS = {
     id: 1,
     name: 'Ethereum',
     symbol: 'ETH',
-    rpcUrl: 'https://mainnet.infura.io',
+    rpcUrl: 'https://mainnet.infura.io/v3/a68b71d194e7493db5231530985b00b7',
     explorer: 'https://etherscan.io',
     erc20Precompile: false,
     nativeCurrency: {
@@ -464,49 +464,49 @@ export const NETWORKS = {
         stakeTokenAddress: '0xfBFBFBfa0000000000000000000000000000022b',
         description: 'WATER Export Bridge (3DPass → Ethereum)',
         isIssuerBurner: false
-      },
-      // Import Wrapper bridges (External -> 3DPass)
-      USDT_IMPORT: {
-        address: '0x8Ec164093319EAD78f6E289bb688Bef3c8ce9B0F',
-        type: 'import_wrapper',
-        homeNetwork: 'Ethereum',
-        homeTokenSymbol: 'USDT',
-        homeTokenAddress: '0xdAC17F958D2ee523a2206206994597C13D831ec7',
-        foreignNetwork: '3DPass',
-        foreignTokenSymbol: 'wUSDT',
-        foreignTokenAddress: '0xfBFBfbFA000000000000000000000000000000de',
-        stakeTokenSymbol: 'P3D',
-        stakeTokenAddress: P3D_PRECOMPILE_ADDRESS,
-        description: 'USDT Import Wrapper Bridge (Ethereum → 3DPass)',
-        isIssuerBurner: true
-      },
-      USDC_IMPORT: {
-        address: '0x1A85BD09E186b6EDc30D08Abb43c673A9636Cc4E',
-        type: 'import_wrapper',
-        homeNetwork: 'Ethereum',
-        homeTokenSymbol: 'USDC',
-        homeTokenAddress: '0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48',
-        foreignNetwork: '3DPass',
-        foreignTokenSymbol: 'wUSDC',
-        foreignTokenAddress: '0xFbfbFBfA0000000000000000000000000000006f',
-        stakeTokenSymbol: 'P3D',
-        stakeTokenAddress: P3D_PRECOMPILE_ADDRESS,
-        description: 'USDC Import Wrapper Bridge (Ethereum → 3DPass)',
-        isIssuerBurner: true
-      },
-      BUSD_IMPORT: {
-        address: '0xccDdB081d48D7F312846ea4ECF18A963455c3C71',
-        type: 'import_wrapper',
+    },
+    // Import Wrapper bridges (External -> 3DPass)
+    USDT_IMPORT: {
+      address: '0x8Ec164093319EAD78f6E289bb688Bef3c8ce9B0F',
+      type: 'import_wrapper',
+      homeNetwork: 'Ethereum',
+      homeTokenSymbol: 'USDT',
+      homeTokenAddress: '0xdAC17F958D2ee523a2206206994597C13D831ec7',
+      foreignNetwork: '3DPass',
+      foreignTokenSymbol: 'wUSDT',
+      foreignTokenAddress: '0xfBFBfbFA000000000000000000000000000000de',
+      stakeTokenSymbol: 'P3D',
+      stakeTokenAddress: P3D_PRECOMPILE_ADDRESS,
+      description: 'USDT Import Wrapper Bridge (Ethereum → 3DPass)',
+      isIssuerBurner: true
+    },
+    USDC_IMPORT: {
+      address: '0x1A85BD09E186b6EDc30D08Abb43c673A9636Cc4E',
+      type: 'import_wrapper',
+      homeNetwork: 'Ethereum',
+      homeTokenSymbol: 'USDC',
+      homeTokenAddress: '0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48',
+      foreignNetwork: '3DPass',
+      foreignTokenSymbol: 'wUSDC',
+      foreignTokenAddress: '0xFbfbFBfA0000000000000000000000000000006f',
+      stakeTokenSymbol: 'P3D',
+      stakeTokenAddress: P3D_PRECOMPILE_ADDRESS,
+      description: 'USDC Import Wrapper Bridge (Ethereum → 3DPass)',
+      isIssuerBurner: true
+    },
+    BUSD_IMPORT: {
+      address: '0xccDdB081d48D7F312846ea4ECF18A963455c3C71',
+      type: 'import_wrapper',
         homeNetwork: 'Binance Smart Chain',
-        homeTokenSymbol: 'BUSD',
-        homeTokenAddress: '0xe9e7CEA3DedcA5984780Bafc599bD69ADd087D56',
-        foreignNetwork: '3DPass',
-        foreignTokenSymbol: 'wBUSD',
-        foreignTokenAddress: '0xFbFBFBfA0000000000000000000000000000014D',
-        stakeTokenSymbol: 'P3D',
-        stakeTokenAddress: P3D_PRECOMPILE_ADDRESS,
+      homeTokenSymbol: 'BUSD',
+      homeTokenAddress: '0xe9e7CEA3DedcA5984780Bafc599bD69ADd087D56',
+      foreignNetwork: '3DPass',
+      foreignTokenSymbol: 'wBUSD',
+      foreignTokenAddress: '0xFbFBFBfA0000000000000000000000000000014D',
+      stakeTokenSymbol: 'P3D',
+      stakeTokenAddress: P3D_PRECOMPILE_ADDRESS,
         description: 'BUSD Import Wrapper Bridge (Binance Smart Chain → 3DPass)',
-        isIssuerBurner: true
+      isIssuerBurner: true
       }
     },
     // Assistant contracts deployed on 3DPass
