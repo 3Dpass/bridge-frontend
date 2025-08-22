@@ -223,7 +223,15 @@ export const updateBridgeInfoFromRegistry = async (provider, networkSymbol, sett
       try {
         const bridgeData = await aggregateBridgeData(provider, bridgeAddress, networkSymbol, settings);
         if (bridgeData.success) {
-          const bridgeKey = `${bridgeData.bridgeConfig.homeTokenSymbol}_${bridgeData.bridgeConfig.type.toUpperCase()}`;
+          // Generate bridge key that matches existing naming convention
+        let bridgeKey;
+        if (bridgeData.bridgeConfig.type === 'import_wrapper') {
+          bridgeKey = `${bridgeData.bridgeConfig.homeTokenSymbol}_IMPORT`;
+        } else if (bridgeData.bridgeConfig.type === 'export_wrapper') {
+          bridgeKey = `${bridgeData.bridgeConfig.homeTokenSymbol}_EXPORT`;
+        } else {
+          bridgeKey = `${bridgeData.bridgeConfig.homeTokenSymbol}_${bridgeData.bridgeConfig.type.toUpperCase()}`;
+        }
           bridges[bridgeKey] = bridgeData.bridgeConfig;
           console.log(`✅ Bridge ${bridgeKey}: ${bridgeData.message}`);
         } else {
@@ -244,7 +252,33 @@ export const updateBridgeInfoFromRegistry = async (provider, networkSymbol, sett
       try {
         const assistantData = await aggregateAssistantData(provider, assistantAddress, networkSymbol);
         if (assistantData.success) {
-          const assistantKey = `${assistantData.assistantConfig.shareSymbol}_${assistantData.assistantConfig.type.toUpperCase()}_ASSISTANT`;
+          // Generate assistant key that matches existing naming convention
+          let assistantKey;
+          if (assistantData.assistantConfig.type === 'import_wrapper') {
+            // For import_wrapper assistants, use the token symbol from shareSymbol (remove 'IA' suffix)
+            const tokenSymbol = assistantData.assistantConfig.shareSymbol.replace('IA', '');
+            assistantKey = `${tokenSymbol}_IMPORT_ASSISTANT`;
+          } else if (assistantData.assistantConfig.type === 'export_wrapper') {
+            // For export_wrapper assistants, map shareSymbol to correct token symbol
+            const shareSymbol = assistantData.assistantConfig.shareSymbol;
+            let tokenSymbol;
+            
+            // Map specific share symbols to their correct token symbols
+            if (shareSymbol === 'P3DEA') {
+              tokenSymbol = 'P3D';
+            } else if (shareSymbol === 'FIREA') {
+              tokenSymbol = 'FIRE';
+            } else if (shareSymbol === 'WATEA') {
+              tokenSymbol = 'WATER';
+            } else {
+              // Fallback: remove 'EA' suffix
+              tokenSymbol = shareSymbol.replace('EA', '');
+            }
+            
+            assistantKey = `${tokenSymbol}_EXPORT_ASSISTANT`;
+          } else {
+            assistantKey = `${assistantData.assistantConfig.shareSymbol}_${assistantData.assistantConfig.type.toUpperCase()}_ASSISTANT`;
+          }
           assistants[assistantKey] = assistantData.assistantConfig;
           console.log(`✅ Assistant ${assistantKey}: ${assistantData.message}`);
         } else {

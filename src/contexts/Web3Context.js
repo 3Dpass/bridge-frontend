@@ -1,12 +1,6 @@
 import React, { createContext, useContext, useState, useEffect, useCallback } from 'react';
-import { ethers } from 'ethers';
 import {
   connectWallet,
-  getCurrentAccount,
-  getCurrentNetwork,
-  onAccountsChanged,
-  onChainChanged,
-  removeListeners,
 } from '../utils/web3';
 import { getNetworkById, NETWORKS } from '../config/networks';
 
@@ -208,7 +202,6 @@ export const Web3Provider = ({ children }) => {
     const handleChainChangedFromProvider = async (chainId) => {
       console.log('🔍 Chain changed:', chainId);
       try {
-        const networkId = parseInt(chainId, 16);
         const newNetwork = await getCurrentNetworkFromProvider(provider);
         setNetwork(newNetwork);
         setDetectedNetwork(newNetwork);

@@ -8,54 +8,154 @@ import { autoDetectToken } from './token-detector';
 import { NETWORKS } from '../config/networks';
 
 /**
- * Assistant type detection based on bridge contract
+ * Assistant type detection based on assistant contract
  */
 export const ASSISTANT_TYPES = {
   EXPORT: 'export',
+  EXPORT_WRAPPER: 'export_wrapper',
   IMPORT: 'import',
   IMPORT_WRAPPER: 'import_wrapper'
 };
 
 /**
- * Detect assistant type by analyzing the bridge contract
+ * Check if function selector exists in contract bytecode
  * @param {ethers.providers.Provider} provider - Web3 provider
- * @param {string} bridgeAddress - Bridge contract address
- * @returns {Promise<string>} Assistant type (export, import, import_wrapper)
+ * @param {string} contractAddress - Contract address
+ * @param {string} functionSelector - Function selector (e.g., 'approvePrecompile()')
+ * @returns {Promise<boolean>} True if function exists
  */
-export const detectAssistantType = async (provider, bridgeAddress) => {
+const hasFunctionSelector = async (provider, contractAddress, functionSelector) => {
   try {
-    // Try each bridge type and check if the contract responds
-    const bridgeTypes = [
-      { type: ASSISTANT_TYPES.EXPORT, abi: EXPORT_ABI },
-      { type: ASSISTANT_TYPES.IMPORT, abi: IMPORT_ABI },
-      { type: ASSISTANT_TYPES.IMPORT_WRAPPER, abi: IMPORT_WRAPPER_ABI }
-    ];
+    // Method 1: Try to create a contract interface with the function
+    try {
+      new ethers.Contract(contractAddress, [functionSelector], provider);
+      // If we can create the contract, the function exists
+      console.log(`  ✅ Function exists (interface creation successful): ${functionSelector}`);
+      return true;
+    } catch (interfaceError) {
+      console.log(`  ❌ Function not found via interface: ${functionSelector} - ${interfaceError.message}`);
+    }
+    
+    // Method 2: Try to call the function with a static call (this will fail but tell us if function exists)
+    try {
+      const contract = new ethers.Contract(contractAddress, [functionSelector], provider);
+      // Try to call the function - it will fail due to onlyManager modifier, but that's OK
+      await contract.callStatic[functionSelector.split('(')[0]]();
+      console.log(`  ✅ Function exists (static call successful): ${functionSelector}`);
+      return true;
+    } catch (staticCallError) {
+      // If it's an execution revert, the function exists but call failed
+      if (staticCallError.message.includes('execution reverted') || 
+          staticCallError.message.includes('call revert') ||
+          staticCallError.message.includes('onlyManager')) {
+        console.log(`  ✅ Function exists (static call reverted as expected): ${functionSelector}`);
+        return true;
+      }
+      console.log(`  ❌ Function not found via static call: ${functionSelector} - ${staticCallError.message}`);
+    }
+    
+    // Method 3: Check function selector in bytecode (fallback)
+    const selector = ethers.utils.id(functionSelector).substring(0, 10);
+    console.log(`  🔍 Looking for function selector: ${functionSelector}`);
+    console.log(`  🔍 Function selector (4 bytes): ${selector}`);
+    
+    // Get contract bytecode
+    const bytecode = await provider.getCode(contractAddress);
+    console.log(`  🔍 Contract bytecode length: ${bytecode.length}`);
+    console.log(`  🔍 Full bytecode: ${bytecode}`);
+    
+    // Check if selector exists in bytecode
+    const selectorWithoutPrefix = selector.substring(2); // Remove '0x' prefix
+    const found = bytecode.includes(selectorWithoutPrefix);
+    console.log(`  🔍 Looking for selector: ${selectorWithoutPrefix}`);
+    console.log(`  🔍 Selector found in bytecode: ${found}`);
+    
+    return found;
+  } catch (error) {
+    console.error('Error checking function selector:', error);
+    return false;
+  }
+};
 
-    for (const { type, abi } of bridgeTypes) {
-      try {
-        const contract = new ethers.Contract(bridgeAddress, abi, provider);
-        
-        // Try to call a function that exists on this bridge type
-        switch (type) {
-          case ASSISTANT_TYPES.EXPORT:
-            await contract.foreign_network();
-            return type;
-          case ASSISTANT_TYPES.IMPORT:
-            await contract.home_network();
-            return type;
-          case ASSISTANT_TYPES.IMPORT_WRAPPER:
-            await contract.home_network();
-            return type;
-          default:
-            throw new Error(`Unsupported bridge type: ${type}`);
-        }
-      } catch (error) {
-        // Continue to next bridge type
-        continue;
+/**
+ * Detect assistant type by analyzing the assistant contract itself
+ * @param {ethers.providers.Provider} provider - Web3 provider
+ * @param {string} assistantAddress - Assistant contract address
+ * @param {string} bridgeAddress - Bridge contract address
+ * @returns {Promise<string>} Assistant type (export, export_wrapper, import, import_wrapper)
+ */
+export const detectAssistantType = async (provider, assistantAddress, bridgeAddress) => {
+  try {
+    console.log(`🔍 Detecting assistant type for address: ${assistantAddress}`);
+    
+    // Check if approvePrecompile function exists in the contract
+    // Try different possible function signatures
+    const possibleSignatures = [
+      'approvePrecompile()',
+      'approvePrecompile() external',
+      'approvePrecompile() external onlyManager',
+      'approvePrecompile() public',
+      'approvePrecompile() view',
+      'approvePrecompile() pure'
+    ];
+    
+    let hasApprovePrecompile = false;
+    for (const signature of possibleSignatures) {
+      hasApprovePrecompile = await hasFunctionSelector(provider, assistantAddress, signature);
+      if (hasApprovePrecompile) {
+        console.log(`  ✅ Found approvePrecompile with signature: ${signature}`);
+        break;
       }
     }
     
-    throw new Error('Unable to detect bridge type');
+    if (hasApprovePrecompile) {
+      console.log(`  ✅ approvePrecompile function found - this is a wrapper assistant`);
+      
+      // Determine which type of wrapper assistant
+      try {
+        console.log(`  Determining wrapper assistant type...`);
+        const exportBridge = new ethers.Contract(bridgeAddress, EXPORT_ABI, provider);
+        await exportBridge.foreign_network();
+        console.log(`  ✅ EXPORT_WRAPPER assistant detected!`);
+        return 'export_wrapper';
+      } catch (error) {
+        console.log(`  ❌ Not an export wrapper: ${error.message}`);
+        
+        try {
+          const importWrapperBridge = new ethers.Contract(bridgeAddress, IMPORT_WRAPPER_ABI, provider);
+          await importWrapperBridge.home_network();
+          console.log(`  ✅ IMPORT_WRAPPER assistant detected!`);
+          return 'import_wrapper';
+        } catch (error) {
+          console.log(`  ❌ Not an import wrapper: ${error.message}`);
+          throw new Error('Unable to determine wrapper assistant type');
+        }
+      }
+    } else {
+      console.log(`  ❌ approvePrecompile function not found - this is a regular assistant`);
+      
+      // Determine if it's export or import by checking the bridge type
+      try {
+        console.log(`  Checking bridge type to determine assistant type...`);
+        const exportBridge = new ethers.Contract(bridgeAddress, EXPORT_ABI, provider);
+        await exportBridge.foreign_network();
+        console.log(`  ✅ Regular EXPORT assistant detected!`);
+        return ASSISTANT_TYPES.EXPORT;
+      } catch (error) {
+        console.log(`  ❌ Not an export bridge: ${error.message}`);
+        
+        try {
+          const importBridge = new ethers.Contract(bridgeAddress, IMPORT_ABI, provider);
+          await importBridge.home_network();
+          console.log(`  ✅ Regular IMPORT assistant detected!`);
+          return ASSISTANT_TYPES.IMPORT;
+        } catch (error) {
+          console.log(`  ❌ Not an import bridge: ${error.message}`);
+          throw new Error('Unable to determine assistant type');
+        }
+      }
+    }
+    
   } catch (error) {
     console.error('Error detecting assistant type:', error);
     throw new Error(`Failed to detect assistant type: ${error.message}`);
@@ -236,9 +336,12 @@ export const generateAssistantKey = (assistantConfig, existingAssistants = {}) =
  * @param {string} tokenSymbol - Token symbol
  * @returns {string} Generated description
  */
-export const generateAssistantDescription = (type, homeNetwork, foreignNetwork, tokenSymbol) => {
-  const direction = type === 'export' ? '→' : '←';
-  return `${homeNetwork} ${tokenSymbol} ${direction} ${foreignNetwork} ${type.charAt(0).toUpperCase() + type.slice(1)} Assistant`;
+export const generateAssistantDescription = (type, homeNetwork, foreignNetwork, shareSymbol) => {
+  // Direction is always from home network to foreign network
+  const direction = '→';
+  // Use shareSymbol if provided, otherwise just show the direction without symbol
+  const symbolPart = shareSymbol ? ` ${shareSymbol}` : '';
+  return `${homeNetwork} ${direction} ${foreignNetwork}${symbolPart} ${type.charAt(0).toUpperCase() + type.slice(1)} Assistant`;
 };
 
 /**
@@ -263,6 +366,28 @@ export const getBridgeAddressFromAssistant = async (provider, assistantAddress) 
 };
 
 /**
+ * Get manager address from assistant contract
+ * @param {ethers.providers.Provider} provider - Web3 provider
+ * @param {string} assistantAddress - Assistant contract address
+ * @returns {Promise<string>} Manager address
+ */
+export const getManagerAddressFromAssistant = async (provider, assistantAddress) => {
+  try {
+    // Assistant contracts have a public managerAddress variable
+    const assistantContract = new ethers.Contract(assistantAddress, [
+      'function managerAddress() view returns (address)'
+    ], provider);
+    
+    const managerAddress = await assistantContract.managerAddress();
+    return managerAddress;
+  } catch (error) {
+    console.error('Error getting manager address from assistant:', error);
+    // Return null if manager address is not available
+    return null;
+  }
+};
+
+/**
  * Auto-detect assistant and aggregate all data
  * @param {ethers.providers.Provider} provider - Web3 provider
  * @param {string} assistantAddress - Assistant contract address
@@ -270,13 +395,13 @@ export const getBridgeAddressFromAssistant = async (provider, assistantAddress) 
  * @param {Object} existingAssistants - Existing assistants for uniqueness checking
  * @returns {Promise<Object>} Complete assistant configuration
  */
-export const autoDetectAssistant = async (provider, assistantAddress, networkSymbol, existingAssistants = {}) => {
+export const autoDetectAssistant = async (provider, assistantAddress, networkSymbol, existingAssistants = {}, settings = null) => {
   try {
     // Get bridge address from assistant contract
     const bridgeAddress = await getBridgeAddressFromAssistant(provider, assistantAddress);
     
     // Now use the existing logic with the detected bridge address
-    return await autoDetectAssistantWithBridge(provider, assistantAddress, bridgeAddress, networkSymbol, existingAssistants);
+    return await autoDetectAssistantWithBridge(provider, assistantAddress, bridgeAddress, networkSymbol, existingAssistants, settings);
 
   } catch (error) {
     console.error('Error auto-detecting assistant:', error);
@@ -298,35 +423,38 @@ export const autoDetectAssistant = async (provider, assistantAddress, networkSym
  * @param {Object} existingAssistants - Existing assistants for uniqueness checking
  * @returns {Promise<Object>} Complete assistant configuration
  */
-export const autoDetectAssistantWithBridge = async (provider, assistantAddress, bridgeAddress, networkSymbol, existingAssistants = {}) => {
+export const autoDetectAssistantWithBridge = async (provider, assistantAddress, bridgeAddress, networkSymbol, existingAssistants = {}, settings = null) => {
   try {
-    // Detect assistant type from bridge
-    const assistantType = await detectAssistantType(provider, bridgeAddress);
+    // Detect assistant type from assistant contract
+    const assistantType = await detectAssistantType(provider, assistantAddress, bridgeAddress);
     
     // Get bridge data based on type
     let bridgeData;
-    let homeNetwork, foreignNetwork, tokenSymbol;
+    let homeNetwork, foreignNetwork;
     
     switch (assistantType) {
       case ASSISTANT_TYPES.EXPORT:
         bridgeData = await getExportBridgeData(provider, bridgeAddress);
         homeNetwork = NETWORKS[networkSymbol]?.name || networkSymbol;
         foreignNetwork = bridgeData.foreignNetwork;
-        tokenSymbol = 'Unknown'; // Would need to get from bridge data
+        break;
+        
+      case ASSISTANT_TYPES.EXPORT_WRAPPER:
+        bridgeData = await getExportBridgeData(provider, bridgeAddress);
+        homeNetwork = NETWORKS[networkSymbol]?.name || networkSymbol;
+        foreignNetwork = bridgeData.foreignNetwork;
         break;
         
       case ASSISTANT_TYPES.IMPORT:
         bridgeData = await getImportBridgeData(provider, bridgeAddress);
         homeNetwork = bridgeData.homeNetwork;
         foreignNetwork = NETWORKS[networkSymbol]?.name || networkSymbol;
-        tokenSymbol = 'Unknown'; // Would need to get from bridge data
         break;
         
       case ASSISTANT_TYPES.IMPORT_WRAPPER:
         bridgeData = await getImportWrapperBridgeData(provider, bridgeAddress);
         homeNetwork = bridgeData.homeNetwork;
         foreignNetwork = NETWORKS[networkSymbol]?.name || networkSymbol;
-        tokenSymbol = 'Unknown'; // Would need to get from bridge data
         break;
         
       default:
@@ -336,13 +464,17 @@ export const autoDetectAssistantWithBridge = async (provider, assistantAddress, 
     // Get share token information
     const shareTokenInfo = await getAssistantShareTokenInfo(provider, assistantAddress, networkSymbol);
     
-    // Generate description
-    const description = generateAssistantDescription(assistantType, homeNetwork, foreignNetwork, tokenSymbol);
+    // Get manager address from assistant contract
+    const managerAddress = await getManagerAddressFromAssistant(provider, assistantAddress);
+    
+    // Generate description using the share symbol
+    const description = generateAssistantDescription(assistantType, homeNetwork, foreignNetwork, shareTokenInfo.symbol);
     
     const assistantConfig = {
       address: assistantAddress,
       type: assistantType,
       bridgeAddress: bridgeAddress,
+      managerAddress: managerAddress,
       description: description,
       shareSymbol: shareTokenInfo.symbol || `${assistantType.toUpperCase()}A`,
       shareName: shareTokenInfo.name || `${assistantType} assistant share`

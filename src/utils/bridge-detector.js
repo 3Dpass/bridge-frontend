@@ -455,11 +455,6 @@ export const getImportWrapperBridgeData = async (provider, bridgeAddress, networ
       }
     }
 
-    // Convert network names to match config names
-    const getNetworkNameFromKey = (networkKey) => {
-      return NETWORKS[networkKey]?.name || networkKey;
-    };
-    
     // Convert BSC to Binance Smart Chain for consistency
     const normalizedHomeNetwork = homeNetwork === 'BSC' ? 'Binance Smart Chain' : homeNetwork;
 

@@ -22,7 +22,7 @@ import {
   Coins,
   Link,
   Users,
-  Search
+  RefreshCw
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import toast from 'react-hot-toast';
@@ -55,10 +55,95 @@ const SettingsDialog = ({ isOpen, onClose }) => {
   const [newAssistant, setNewAssistant] = useState({});
   const [detectedTokens, setDetectedTokens] = useState({});
 
+  // Get all tokens with settings (local function)
+  const getTokensWithSettings = () => {
+    const allTokens = {};
+    
+    Object.entries(NETWORKS).forEach(([networkKey, networkConfig]) => {
+      // Add config tokens
+      if (networkConfig.tokens) {
+        Object.entries(networkConfig.tokens).forEach(([tokenKey, tokenConfig]) => {
+          allTokens[tokenKey] = {
+            ...tokenConfig,
+            isConfigToken: true
+          };
+        });
+      }
+      
+      // Add custom tokens from settings
+      if (settings[networkKey]?.tokens) {
+        Object.entries(settings[networkKey].tokens).forEach(([tokenKey, tokenConfig]) => {
+          allTokens[tokenKey] = {
+            ...tokenConfig,
+            isConfigToken: false
+          };
+        });
+      }
+    });
+    
+    return allTokens;
+  };
+
   // Update provider manager when settings change
   useEffect(() => {
     updateProviderSettings(settings);
   }, [settings]);
+
+  // Auto-check up-to-date status for existing bridges when dialog opens
+  useEffect(() => {
+    if (isOpen) {
+      const checkExistingBridgesStatus = async () => {
+        const allBridges = getBridgeInstancesWithSettings();
+        console.log('🔍 Starting automatic bridge status check for:', Object.keys(allBridges));
+        
+        for (const [networkKey, networkBridges] of Object.entries(allBridges)) {
+          for (const [bridgeKey, bridgeConfig] of Object.entries(networkBridges)) {
+            // Only check bridges that don't have upToDate status set or have failed detection
+            if ((bridgeConfig.upToDate === undefined || bridgeConfig.upToDate === null) && bridgeConfig.address) {
+              console.log(`🔍 Checking ${bridgeKey} (${bridgeConfig.address}) on ${networkKey}`);
+              try {
+                const networkProvider = getProvider(networkKey);
+                console.log(`🔍 Using provider for ${networkKey}:`, networkProvider.connection.url);
+                
+                const result = await autoDetectBridge(networkProvider, bridgeConfig.address, networkKey, settings);
+                console.log(`🔍 Detection result for ${bridgeKey}:`, result);
+                
+                if (result.success) {
+                  const comparison = compareBridgeData(bridgeConfig, result.bridgeConfig);
+                  const upToDate = !comparison.hasDifferences;
+                  
+                  // Update the bridge configuration with the new upToDate status
+                  addCustomBridgeInstanceForNetwork(networkKey, bridgeKey, {
+                    ...bridgeConfig,
+                    upToDate: upToDate,
+                  });
+                  
+                  console.log(`🔍 Auto-checked ${bridgeKey}: ${upToDate ? 'Up to date' : 'Needs update'}`);
+                } else {
+                  console.warn(`🔍 Bridge detection failed for ${bridgeKey}:`, result.message);
+                  // Set status as unknown to avoid repeated failed attempts
+                  addCustomBridgeInstanceForNetwork(networkKey, bridgeKey, {
+                    ...bridgeConfig,
+                    upToDate: null, // null means detection failed
+                  });
+                }
+              } catch (error) {
+                console.error(`Error checking ${bridgeKey} status:`, error);
+                // Set status as unknown to avoid repeated failed attempts
+                addCustomBridgeInstanceForNetwork(networkKey, bridgeKey, {
+                  ...bridgeConfig,
+                  upToDate: null, // null means detection failed
+                });
+              }
+            }
+          }
+        }
+      };
+      
+      // Run the check after a short delay to avoid blocking the UI
+      setTimeout(checkExistingBridgesStatus, 1000);
+    }
+  }, [isOpen, settings, addCustomBridgeInstanceForNetwork, getBridgeInstancesWithSettings]);
 
   // Generate unique bridge key based on detected bridge data
   const generateBridgeKey = (bridgeConfig, networkKey) => {
@@ -74,6 +159,38 @@ const SettingsDialog = ({ isOpen, onClose }) => {
     // Check if this key already exists in settings
     const existingBridges = getBridgeInstancesWithSettings();
     const existingKeys = Object.keys(existingBridges);
+    
+    // If key doesn't exist, use it
+    if (!existingKeys.includes(baseKey)) {
+      return baseKey;
+    }
+    
+    // If key exists, add a number suffix
+    let counter = 1;
+    let newKey = `${baseKey}_${counter}`;
+    
+    while (existingKeys.includes(newKey)) {
+      counter++;
+      newKey = `${baseKey}_${counter}`;
+    }
+    
+    return newKey;
+  };
+
+  // Generate unique assistant key based on detected assistant data
+  const generateAssistantKey = (assistantConfig, networkKey) => {
+    const { shareSymbol, type } = assistantConfig;
+    
+    if (!shareSymbol || !type) {
+      return '';
+    }
+    
+    // Create base key: SHARE_SYMBOL_TYPE_ASSISTANT
+    const baseKey = `${shareSymbol.toUpperCase()}_${type.toUpperCase()}_ASSISTANT`;
+    
+    // Check if this key already exists in settings
+    const existingAssistants = getAssistantContractsWithSettings();
+    const existingKeys = Object.keys(existingAssistants);
     
     // If key doesn't exist, use it
     if (!existingKeys.includes(baseKey)) {
@@ -181,6 +298,27 @@ const SettingsDialog = ({ isOpen, onClose }) => {
       return;
     }
 
+    // Determine the correct symbol to use
+    let tokenSymbol = token.symbol;
+    
+    // If this is an update to an existing token, find the existing symbol
+    if (token.alreadyExists) {
+      const existingTokens = getTokensWithSettings();
+      const existingToken = Object.values(existingTokens).find(existing => 
+        existing.address.toLowerCase() === token.address.toLowerCase()
+      );
+      
+      if (existingToken) {
+        // Find the symbol for this existing token
+        const existingSymbol = Object.keys(existingTokens).find(symbol => 
+          existingTokens[symbol].address.toLowerCase() === token.address.toLowerCase()
+        );
+        if (existingSymbol) {
+          tokenSymbol = existingSymbol;
+        }
+      }
+    }
+
     const tokenConfig = {
       address: token.address,
       symbol: token.symbol,
@@ -191,6 +329,7 @@ const SettingsDialog = ({ isOpen, onClose }) => {
       isPrecompile: NETWORKS[networkKey]?.erc20Precompile ? (token.isPrecompile || false) : false, // Only for networks that support precompiles
       isTestToken: token.isTestToken || false,
       ...(NETWORKS[networkKey]?.erc20Precompile && { assetId: token.assetId || null }), // Only include assetId for networks that support precompiles
+      upToDate: true, // Mark as up to date after update
     };
 
     if (!validateTokenConfig(tokenConfig)) {
@@ -198,12 +337,17 @@ const SettingsDialog = ({ isOpen, onClose }) => {
       return;
     }
 
-    addCustomToken(networkKey, token.symbol, tokenConfig);
+    addCustomToken(networkKey, tokenSymbol, tokenConfig);
 
     setNewToken(prev => ({ ...prev, [networkKey]: {} }));
     setShowAddToken(prev => ({ ...prev, [networkKey]: false }));
     setDetectedTokens(prev => ({ ...prev, [networkKey]: false }));
-    toast.success(`Token ${token.symbol} added successfully`);
+    
+    if (token.alreadyExists) {
+      toast.success(`Token ${tokenSymbol} updated successfully`);
+    } else {
+      toast.success(`Token ${tokenSymbol} added successfully`);
+    }
   };
 
   // Handle removing a token
@@ -243,7 +387,28 @@ const SettingsDialog = ({ isOpen, onClose }) => {
       return;
     }
 
-    addCustomBridgeInstanceForNetwork(networkKey, bridge.key, {
+    // Determine the correct key to use
+    let bridgeKey = bridge.key;
+    
+    // If this is an update to an existing bridge, find the existing key
+    if (bridge.alreadyExists) {
+      const existingBridges = getBridgeInstancesWithSettings();
+      const existingBridge = Object.values(existingBridges).find(existing => 
+        existing.address.toLowerCase() === bridge.address.toLowerCase()
+      );
+      
+      if (existingBridge) {
+        // Find the key for this existing bridge
+        const existingKey = Object.keys(existingBridges).find(key => 
+          existingBridges[key].address.toLowerCase() === bridge.address.toLowerCase()
+        );
+        if (existingKey) {
+          bridgeKey = existingKey;
+        }
+      }
+    }
+
+    addCustomBridgeInstanceForNetwork(networkKey, bridgeKey, {
       address: bridge.address,
       type: bridge.type,
       homeNetwork: bridge.homeNetwork,
@@ -255,12 +420,275 @@ const SettingsDialog = ({ isOpen, onClose }) => {
       stakeTokenSymbol: bridge.stakeTokenSymbol || 'P3D',
       stakeTokenAddress: bridge.stakeTokenAddress,
       description: bridge.description || `${bridge.homeTokenSymbol} ${bridge.type} Bridge`,
+      upToDate: true, // Mark as up to date after update
     });
 
     setNewBridge(prev => ({ ...prev, [networkKey]: {} }));
     setShowAddBridge(prev => ({ ...prev, [networkKey]: false }));
-    toast.success(`Bridge ${bridge.key} added successfully`);
+    
+    if (bridge.alreadyExists) {
+      toast.success(`Bridge ${bridgeKey} updated successfully`);
+    } else {
+      toast.success(`Bridge ${bridgeKey} added successfully`);
+    }
   };
+
+  // Check if bridge already exists in settings/config
+  const isBridgeAlreadyExists = (networkKey, bridgeAddress) => {
+    if (!bridgeAddress) return false;
+    
+    // Check in config bridges
+    const configBridges = NETWORKS[networkKey]?.bridges || {};
+    const existingInConfig = Object.values(configBridges).some(bridge => 
+      bridge.address.toLowerCase() === bridgeAddress.toLowerCase()
+    );
+    
+    // Check in custom settings bridges
+    const customBridges = settings[networkKey]?.bridges || {};
+    const existingInSettings = Object.values(customBridges).some(bridge => 
+      bridge.address.toLowerCase() === bridgeAddress.toLowerCase()
+    );
+    
+    return existingInConfig || existingInSettings;
+  };
+
+
+
+  // Compare bridge data to detect differences
+  const compareBridgeData = (existingBridge, detectedBridge) => {
+    const fieldsToCompare = [
+      'type',
+      'homeNetwork',
+      'homeTokenSymbol',
+      'homeTokenAddress',
+      'foreignNetwork',
+      'foreignTokenSymbol',
+      'foreignTokenAddress',
+      'stakeTokenSymbol',
+      'stakeTokenAddress'
+    ];
+    
+    const differences = {};
+    let hasDifferences = false;
+    
+    for (const field of fieldsToCompare) {
+      const existingValue = existingBridge[field];
+      const detectedValue = detectedBridge[field];
+      
+      if (existingValue !== detectedValue) {
+        differences[field] = true;
+        hasDifferences = true;
+        console.log(`🔍 Bridge data mismatch in ${field}: existing="${existingValue}" vs detected="${detectedValue}"`);
+      } else {
+        differences[field] = false;
+      }
+    }
+    
+    return {
+      hasDifferences,
+      differences
+    };
+  };
+
+  // Check if assistant already exists in settings/config
+  const isAssistantAlreadyExists = (networkKey, assistantAddress) => {
+    if (!assistantAddress) return false;
+    
+    // Check in config assistants
+    const configAssistants = NETWORKS[networkKey]?.assistants || {};
+    const existingInConfig = Object.values(configAssistants).some(assistant => 
+      assistant.address.toLowerCase() === assistantAddress.toLowerCase()
+    );
+    
+    // Check in custom settings assistants
+    const customAssistants = settings[networkKey]?.assistants || {};
+    const existingInSettings = Object.values(customAssistants).some(assistant => 
+      assistant.address.toLowerCase() === assistantAddress.toLowerCase()
+    );
+    
+    return existingInConfig || existingInSettings;
+  };
+
+  // Check if token already exists in settings/config
+  const isTokenAlreadyExists = (networkKey, tokenAddress) => {
+    if (!tokenAddress) return false;
+    
+    // Check in config tokens
+    const configTokens = NETWORKS[networkKey]?.tokens || {};
+    const existingInConfig = Object.values(configTokens).some(token => 
+      token.address.toLowerCase() === tokenAddress.toLowerCase()
+    );
+    
+    // Check in custom settings tokens
+    const customTokens = settings[networkKey]?.tokens || {};
+    const existingInSettings = Object.values(customTokens).some(token => 
+      token.address.toLowerCase() === tokenAddress.toLowerCase()
+    );
+    
+    return existingInConfig || existingInSettings;
+  };
+
+
+
+
+
+  // Compare assistant data to detect differences
+  const compareAssistantData = (existingAssistant, detectedAssistant) => {
+    const fieldsToCompare = [
+      'type',
+      'bridgeAddress',
+      'shareSymbol',
+      'shareName',
+      'managerAddress'
+    ];
+    
+    const differences = {};
+    let hasDifferences = false;
+    
+    for (const field of fieldsToCompare) {
+      const existingValue = existingAssistant[field];
+      const detectedValue = detectedAssistant[field];
+      
+      if (existingValue !== detectedValue) {
+        differences[field] = true;
+        hasDifferences = true;
+        console.log(`🔍 Assistant data mismatch in ${field}: existing="${existingValue}" vs detected="${detectedValue}"`);
+      } else {
+        differences[field] = false;
+      }
+    }
+    
+    return {
+      hasDifferences,
+      differences
+    };
+  };
+
+  // Compare token data to detect differences
+  const compareTokenData = (existingToken, detectedToken) => {
+    const fieldsToCompare = [
+      'symbol',
+      'name',
+      'decimals',
+      'standard',
+      'isPrecompile',
+      'isTestToken',
+      'assetId'
+    ];
+    
+    const differences = {};
+    let hasDifferences = false;
+    
+    for (const field of fieldsToCompare) {
+      const existingValue = existingToken[field];
+      const detectedValue = detectedToken[field];
+      
+      // Handle type conversions for specific fields
+      let existingValueToCompare = existingValue;
+      let detectedValueToCompare = detectedValue;
+      
+      if (field === 'decimals') {
+        // Convert both to numbers for comparison
+        existingValueToCompare = parseInt(existingValue) || 0;
+        detectedValueToCompare = parseInt(detectedValue) || 0;
+      } else if (field === 'assetId') {
+        // Convert both to numbers for comparison
+        existingValueToCompare = parseInt(existingValue) || null;
+        detectedValueToCompare = parseInt(detectedValue) || null;
+      } else if (field === 'isPrecompile' || field === 'isTestToken') {
+        // Convert both to booleans for comparison
+        existingValueToCompare = Boolean(existingValue);
+        detectedValueToCompare = Boolean(detectedValue);
+      }
+      
+      if (existingValueToCompare !== detectedValueToCompare) {
+        differences[field] = true;
+        hasDifferences = true;
+        console.log(`🔍 Token data mismatch in ${field}: existing="${existingValue}" (${typeof existingValue}) vs detected="${detectedValue}" (${typeof detectedValue})`);
+      } else {
+        differences[field] = false;
+      }
+    }
+    
+    return {
+      hasDifferences,
+      differences
+    };
+  };
+
+  // Update "Up to date" status for existing bridges
+  const updateBridgeUpToDateStatus = async (networkKey, bridgeKey, bridgeConfig) => {
+    try {
+      const networkProvider = getProvider(networkKey);
+      const result = await autoDetectBridge(networkProvider, bridgeConfig.address, networkKey, settings);
+      
+      if (result.success) {
+        // Compare detected data with original config data, not current stored data
+        const originalConfigBridge = NETWORKS[networkKey]?.bridges?.[bridgeKey];
+        let comparison;
+        
+        if (originalConfigBridge) {
+          // Compare with original config data
+          comparison = compareBridgeData(originalConfigBridge, result.bridgeConfig);
+        } else {
+          // If not in config, compare with current stored data
+          comparison = compareBridgeData(bridgeConfig, result.bridgeConfig);
+        }
+        
+        const upToDate = !comparison.hasDifferences;
+        
+        // Update the bridge configuration with the new upToDate status
+        addCustomBridgeInstanceForNetwork(networkKey, bridgeKey, {
+          ...bridgeConfig,
+          upToDate: upToDate,
+        });
+        
+        return upToDate;
+      }
+    } catch (error) {
+      console.error('Error updating bridge up-to-date status:', error);
+    }
+    
+    return false;
+  };
+
+  // Update "Up to date" status for existing assistants
+  const updateAssistantUpToDateStatus = async (networkKey, assistantKey, assistantConfig) => {
+    try {
+      const networkProvider = getProvider(networkKey);
+      const result = await autoDetectAssistant(networkProvider, assistantConfig.address, networkKey, settings);
+      
+      if (result.success) {
+        // Compare detected data with original config data, not current stored data
+        const originalConfigAssistant = NETWORKS[networkKey]?.assistants?.[assistantKey];
+        let comparison;
+        
+        if (originalConfigAssistant) {
+          // Compare with original config data
+          comparison = compareAssistantData(originalConfigAssistant, result.assistantConfig);
+        } else {
+          // If not in config, compare with current stored data
+          comparison = compareAssistantData(assistantConfig, result.assistantConfig);
+        }
+        
+        const upToDate = !comparison.hasDifferences;
+        
+        // Update the assistant configuration with the new upToDate status
+        addCustomAssistantContractForNetwork(networkKey, assistantKey, {
+          ...assistantConfig,
+          upToDate: upToDate,
+        });
+        
+        return upToDate;
+      }
+    } catch (error) {
+      console.error('Error updating assistant up-to-date status:', error);
+    }
+    
+    return false;
+  };
+
+
 
   // Handle removing a bridge instance
   const handleRemoveBridge = (networkKey, bridgeKey) => {
@@ -271,8 +699,15 @@ const SettingsDialog = ({ isOpen, onClose }) => {
   // Handle adding a new assistant contract
   const handleAddAssistant = (networkKey) => {
     const assistant = newAssistant[networkKey];
-    if (!assistant || !assistant.key || !assistant.address || !assistant.type || !assistant.bridgeAddress) {
-      toast.error('Please fill in all assistant fields');
+    if (!assistant || 
+        !assistant.key || 
+        !assistant.address || 
+        !assistant.type || 
+        !assistant.bridgeAddress ||
+        !assistant.shareSymbol ||
+        !assistant.shareName ||
+        !assistant.managerAddress) {
+      toast.error('Please fill in all required assistant fields');
       return;
     }
 
@@ -286,18 +721,51 @@ const SettingsDialog = ({ isOpen, onClose }) => {
       return;
     }
 
-    addCustomAssistantContractForNetwork(networkKey, assistant.key, {
+    if (!validateContractAddress(assistant.managerAddress)) {
+      toast.error('Invalid manager address');
+      return;
+    }
+
+    // Determine the correct key to use
+    let assistantKey = assistant.key;
+    
+    // If this is an update to an existing assistant, find the existing key
+    if (assistant.alreadyExists) {
+      const existingAssistants = getAssistantContractsWithSettings();
+      const existingAssistant = Object.values(existingAssistants).find(existing => 
+        existing.address.toLowerCase() === assistant.address.toLowerCase()
+      );
+      
+      if (existingAssistant) {
+        // Find the key for this existing assistant
+        const existingKey = Object.keys(existingAssistants).find(key => 
+          existingAssistants[key].address.toLowerCase() === assistant.address.toLowerCase()
+        );
+        if (existingKey) {
+          assistantKey = existingKey;
+        }
+      }
+    }
+
+    addCustomAssistantContractForNetwork(networkKey, assistantKey, {
       address: assistant.address,
       type: assistant.type,
       bridgeAddress: assistant.bridgeAddress,
+      managerAddress: assistant.managerAddress,
       description: assistant.description || `${assistant.type} Assistant`,
       shareSymbol: assistant.shareSymbol || `${assistant.type.toUpperCase()}A`,
-      shareName: assistant.shareName || `${assistant.type} assistant share`
+      shareName: assistant.shareName || `${assistant.type} assistant share`,
+      upToDate: true // Mark as up to date after update
     });
 
     setNewAssistant(prev => ({ ...prev, [networkKey]: {} }));
     setShowAddAssistant(prev => ({ ...prev, [networkKey]: false }));
-    toast.success(`Assistant ${assistant.key} added successfully`);
+    
+    if (assistant.alreadyExists) {
+      toast.success(`Assistant ${assistantKey} updated successfully`);
+    } else {
+      toast.success(`Assistant ${assistantKey} added successfully`);
+    }
   };
 
   // Handle removing an assistant contract
@@ -318,14 +786,50 @@ const SettingsDialog = ({ isOpen, onClose }) => {
       const result = await updateBridgeInfoFromRegistry(networkProvider, networkKey, settings);
       
       if (result.success) {
-        // Update bridges
+        // Get existing bridge configurations before updating
+        const existingBridges = getBridgeInstancesWithSettings();
+        
+        // Update bridges with proper upToDate status
         Object.entries(result.bridges).forEach(([bridgeKey, bridgeConfig]) => {
-          addCustomBridgeInstanceForNetwork(networkKey, bridgeKey, bridgeConfig);
+          // Check if this bridge already exists and compare data
+          const existingBridge = existingBridges[bridgeKey];
+          let upToDate = undefined;
+          
+          if (existingBridge) {
+            // Compare existing data with new registry data
+            const comparison = compareBridgeData(existingBridge, bridgeConfig);
+            upToDate = !comparison.hasDifferences;
+            console.log(`🔍 Registry update for ${bridgeKey}: ${upToDate ? 'Up to date' : 'Needs update'}`);
+          }
+          
+          // Add the bridge with the correct upToDate status
+          addCustomBridgeInstanceForNetwork(networkKey, bridgeKey, {
+            ...bridgeConfig,
+            upToDate: upToDate
+          });
         });
 
-        // Update assistants
+        // Get existing assistant configurations before updating
+        const existingAssistants = getAssistantContractsWithSettings();
+        
+        // Update assistants with proper status checking
         Object.entries(result.assistants).forEach(([assistantKey, assistantConfig]) => {
-          addCustomAssistantContractForNetwork(networkKey, assistantKey, assistantConfig);
+          // Check if this assistant already exists and compare data
+          const existingAssistant = existingAssistants[assistantKey];
+          let upToDate = undefined;
+          
+          if (existingAssistant) {
+            // Compare existing data with new registry data
+            const comparison = compareAssistantData(existingAssistant, assistantConfig);
+            upToDate = !comparison.hasDifferences;
+            console.log(`🔍 Registry update for assistant ${assistantKey}: ${upToDate ? 'Up to date' : 'Needs update'}`);
+          }
+          
+          // Add the assistant with the correct upToDate status
+          addCustomAssistantContractForNetwork(networkKey, assistantKey, {
+            ...assistantConfig,
+            upToDate: upToDate
+          });
         });
 
         // Update tokens
@@ -402,8 +906,8 @@ const SettingsDialog = ({ isOpen, onClose }) => {
                         className="btn-primary flex items-center gap-2 px-3 py-1 text-sm"
                         title="Discover bridges and assistants from BridgesRegistry"
                       >
-                        <Search className="w-4 h-4" />
-                        Discover from Registry
+                        <RefreshCw className="w-4 h-4" />
+                        Update from Registry
                       </button>
                     )}
                   </div>
@@ -431,7 +935,14 @@ const SettingsDialog = ({ isOpen, onClose }) => {
                     <div className="flex gap-2">
                       <input
                         type="text"
-                        value={settings[networkKey]?.rpcUrl || ''}
+                        value={settings[networkKey]?.customRpc ? (settings[networkKey]?.rpcUrl || '') : (() => {
+                          try {
+                            const provider = getProvider(networkKey);
+                            return provider.connection.url;
+                          } catch (error) {
+                            return NETWORKS[networkKey]?.rpcUrl || '';
+                          }
+                        })()}
                         onChange={(e) => updateNetworkSetting(networkKey, 'rpcUrl', e.target.value)}
                         placeholder="Enter RPC URL"
                         disabled={!settings[networkKey]?.customRpc}
@@ -442,7 +953,14 @@ const SettingsDialog = ({ isOpen, onClose }) => {
                         } ${!settings[networkKey]?.customRpc ? 'opacity-50 cursor-not-allowed bg-dark-800' : ''}`}
                       />
                       <button
-                        onClick={() => copyToClipboard(settings[networkKey]?.rpcUrl, 'RPC URL')}
+                        onClick={() => copyToClipboard(settings[networkKey]?.customRpc ? (settings[networkKey]?.rpcUrl || '') : (() => {
+                          try {
+                            const provider = getProvider(networkKey);
+                            return provider.connection.url;
+                          } catch (error) {
+                            return NETWORKS[networkKey]?.rpcUrl || '';
+                          }
+                        })(), 'RPC URL')}
                         disabled={!settings[networkKey]?.customRpc}
                         className={`btn-secondary px-3 ${!settings[networkKey]?.customRpc ? 'opacity-50 cursor-not-allowed' : ''}`}
                       >
@@ -460,34 +978,6 @@ const SettingsDialog = ({ isOpen, onClose }) => {
                         Invalid URL format
                       </p>
                     )}
-                    
-                    {/* Provider Info */}
-                    <div className="mt-2 p-2 bg-dark-700 rounded border border-secondary-600">
-                      <div className="flex items-center justify-between text-xs">
-                        <span className="text-secondary-400">Current Provider:</span>
-                        <span className="text-secondary-300 font-mono">
-                          {(() => {
-                            try {
-                              const provider = getProvider(networkKey);
-                              const url = provider.connection.url;
-                              return url.includes('127.0.0.1') ? 'Local (127.0.0.1)' : 'Remote';
-                            } catch (error) {
-                              return 'Default';
-                            }
-                          })()}
-                        </span>
-                      </div>
-                      <div className="text-xs text-secondary-500 mt-1 break-all">
-                        {(() => {
-                          try {
-                            const provider = getProvider(networkKey);
-                            return provider.connection.url;
-                          } catch (error) {
-                            return NETWORKS[networkKey]?.rpcUrl || 'Unknown';
-                          }
-                        })()}
-                      </div>
-                    </div>
                   </div>
 
                   {/* Contract Addresses */}
@@ -649,6 +1139,15 @@ const SettingsDialog = ({ isOpen, onClose }) => {
                                   [networkKey]: { ...prev[networkKey], address }
                                 }));
                                 
+                                // Clear alreadyExists flag initially
+                                setNewToken(prev => ({
+                                  ...prev,
+                                  [networkKey]: {
+                                    ...prev[networkKey],
+                                    alreadyExists: false
+                                  }
+                                }));
+                                
                                 // Auto-detect token when address is valid
                                 if (address && validateTokenAddress(address)) {
                                   try {
@@ -658,18 +1157,54 @@ const SettingsDialog = ({ isOpen, onClose }) => {
                                     
                                     const result = await autoDetectToken(networkProvider, address, networkKey);
                                     if (result.success) {
+                                      // Check if token already exists AFTER detection
+                                      const tokenExists = isTokenAlreadyExists(networkKey, address);
+                                      
+                                      // If token exists, check if data needs updating
+                                      let needsUpdate = false;
+                                      let fieldDifferences = {};
+                                      if (tokenExists) {
+                                        // Get existing token data for comparison
+                                        const existingTokens = getTokensWithSettings();
+                                        const existingToken = Object.values(existingTokens).find(token => 
+                                          token.address.toLowerCase() === address.toLowerCase()
+                                        );
+                                        
+                                        if (existingToken) {
+                                          const comparison = compareTokenData(existingToken, result.tokenInfo);
+                                          needsUpdate = comparison.hasDifferences;
+                                          fieldDifferences = comparison.differences;
+                                        }
+                                      }
+                                      
                                       setNewToken(prev => ({
                                         ...prev,
                                         [networkKey]: {
                                           ...prev[networkKey],
-                                          ...result.tokenInfo
+                                          ...result.tokenInfo,
+                                          alreadyExists: tokenExists,
+                                          needsUpdate: needsUpdate,
+                                          fieldDifferences: fieldDifferences,
+                                          upToDate: tokenExists && !needsUpdate
                                         }
                                       }));
                                       setDetectedTokens(prev => ({
                                         ...prev,
                                         [networkKey]: true
                                       }));
+                                      
+                                      if (tokenExists) {
+                                        if (needsUpdate) {
+                                          toast.error(`Token detected but data differs from settings. You can update with current on-chain data.`);
+                                          console.log(`⚠️ Token detected but data differs from settings: ${address}`);
+                                        } else {
+                                          toast.error(`Token detected and matches existing settings`);
+                                          console.log(`⚠️ Token detected and matches existing settings: ${address}`);
+                                        }
+                                      } else {
                                       toast.success(`Detected ${result.tokenInfo.symbol} token`);
+                                        console.log(`✅ Successfully detected ${result.tokenInfo.symbol} token`);
+                                      }
                                     }
                                   } catch (error) {
                                     console.warn('Auto-detection failed:', error);
@@ -686,6 +1221,8 @@ const SettingsDialog = ({ isOpen, onClose }) => {
                               className={`w-full input-field text-sm ${
                                 newToken[networkKey]?.address && !validateTokenAddress(newToken[networkKey]?.address)
                                   ? 'border-error-500'
+                                  : newToken[networkKey]?.fieldDifferences?.address
+                                  ? 'border-yellow-500 bg-yellow-50/10'
                                   : ''
                               }`}
                             />
@@ -703,6 +1240,10 @@ const SettingsDialog = ({ isOpen, onClose }) => {
                                   }))}
                                   className={`w-full input-field text-sm ${
                                     detectedTokens[networkKey] ? 'border-green-500' : ''
+                                  } ${
+                                    newToken[networkKey]?.fieldDifferences?.symbol
+                                      ? 'border-yellow-500 bg-yellow-50/10'
+                                      : ''
                                   }`}
                                 />
                                 {detectedTokens[networkKey] && (
@@ -719,7 +1260,11 @@ const SettingsDialog = ({ isOpen, onClose }) => {
                                   ...prev,
                                   [networkKey]: { ...prev[networkKey], decimals: e.target.value }
                                 }))}
-                                className="w-full input-field text-sm"
+                                className={`w-full input-field text-sm ${
+                                  newToken[networkKey]?.fieldDifferences?.decimals
+                                    ? 'border-yellow-500 bg-yellow-50/10'
+                                    : ''
+                                }`}
                               />
                             </div>
                             
@@ -732,7 +1277,11 @@ const SettingsDialog = ({ isOpen, onClose }) => {
                                 ...prev,
                                 [networkKey]: { ...prev[networkKey], name: e.target.value }
                               }))}
-                              className="w-full input-field text-sm"
+                              className={`w-full input-field text-sm ${
+                                newToken[networkKey]?.fieldDifferences?.name
+                                  ? 'border-yellow-500 bg-yellow-50/10'
+                                  : ''
+                              }`}
                             />
                             
                             {/* Standard and Asset ID */}
@@ -800,9 +1349,17 @@ const SettingsDialog = ({ isOpen, onClose }) => {
                             <div className="flex gap-2">
                               <button
                                 onClick={() => handleAddToken(networkKey)}
-                                className="btn-primary px-3 flex-1 sm:flex-none"
+                                disabled={
+                                  !newToken[networkKey]?.address ||
+                                  !newToken[networkKey]?.symbol ||
+                                  !newToken[networkKey]?.name ||
+                                  !newToken[networkKey]?.decimals ||
+                                  !validateTokenAddress(newToken[networkKey]?.address) ||
+                                  (newToken[networkKey]?.alreadyExists && !newToken[networkKey]?.needsUpdate)
+                                }
+                                className="btn-primary px-3 flex-1 sm:flex-none disabled:opacity-50 disabled:cursor-not-allowed"
                               >
-                                Add
+                                Save
                               </button>
                               <button
                                 onClick={() => {
@@ -828,6 +1385,18 @@ const SettingsDialog = ({ isOpen, onClose }) => {
                               <p className="text-error-500 text-xs flex items-center gap-1">
                                 <AlertCircle className="w-3 h-3" />
                                 Invalid token address
+                              </p>
+                            )}
+                            {newToken[networkKey]?.alreadyExists && !newToken[networkKey]?.needsUpdate && (
+                              <p className="text-error-500 text-xs flex items-center gap-1">
+                                <AlertCircle className="w-3 h-3" />
+                                The token already exists in the settings
+                              </p>
+                            )}
+                            {newToken[networkKey]?.alreadyExists && newToken[networkKey]?.needsUpdate && (
+                              <p className="text-warning-500 text-xs flex items-center gap-1">
+                                <AlertCircle className="w-3 h-3" />
+                                Token data differs from settings. Click "Save" to update with current on-chain data.
                               </p>
                             )}
                           </div>
@@ -891,6 +1460,18 @@ const SettingsDialog = ({ isOpen, onClose }) => {
                               {settings[networkKey]?.bridges?.[bridgeKey] && (
                                 <span className="px-1 py-0.5 bg-yellow-600 text-white text-xs rounded-full">Custom</span>
                               )}
+                              {bridgeConfig.upToDate === true && (
+                                <span className="px-1 py-0.5 bg-green-600 text-white text-xs rounded-full">Up to date</span>
+                              )}
+                              {bridgeConfig.upToDate === false && (
+                                <span className="px-1 py-0.5 bg-orange-600 text-white text-xs rounded-full">Needs update</span>
+                              )}
+                              {bridgeConfig.upToDate === undefined && (
+                                <span className="px-1 py-0.5 bg-gray-600 text-white text-xs rounded-full">Status unknown</span>
+                              )}
+                              {bridgeConfig.upToDate === null && (
+                                <span className="px-1 py-0.5 bg-red-600 text-white text-xs rounded-full">Detection failed</span>
+                              )}
                             </div>
                             <div className="flex items-center gap-1">
                               <button
@@ -904,12 +1485,47 @@ const SettingsDialog = ({ isOpen, onClose }) => {
                                 )}
                               </button>
                               {settings[networkKey]?.bridges?.[bridgeKey] && settings[networkKey]?.customBridges && (
+                                <>
+                                  <button
+                                    onClick={async () => {
+                                      toast.loading(`Checking ${bridgeKey} up-to-date status...`);
+                                      const upToDate = await updateBridgeUpToDateStatus(networkKey, bridgeKey, bridgeConfig);
+                                      if (upToDate) {
+                                        toast.success(`${bridgeKey} is up to date`);
+                                      } else {
+                                        toast.error(`${bridgeKey} needs updating`);
+                                      }
+                                    }}
+                                    className="btn-secondary px-1 py-0.5"
+                                    title="Check up-to-date status"
+                                  >
+                                    <RefreshCw className="w-3 h-3" />
+                                  </button>
                                 <button
                                   onClick={() => handleRemoveBridge(networkKey, bridgeKey)}
                                   className="btn-error px-1 py-0.5"
                                   title="Remove bridge"
                                 >
                                   <Trash2 className="w-3 h-3" />
+                                  </button>
+                                </>
+                              )}
+                              {/* Show refresh button for config bridges that don't have upToDate status */}
+                              {!settings[networkKey]?.bridges?.[bridgeKey] && (bridgeConfig.upToDate === undefined || bridgeConfig.upToDate === null) && (
+                                <button
+                                  onClick={async () => {
+                                    toast.loading(`Checking ${bridgeKey} up-to-date status...`);
+                                    const upToDate = await updateBridgeUpToDateStatus(networkKey, bridgeKey, bridgeConfig);
+                                    if (upToDate) {
+                                      toast.success(`${bridgeKey} is up to date`);
+                                    } else {
+                                      toast.error(`${bridgeKey} needs updating`);
+                                    }
+                                  }}
+                                  className="btn-secondary px-1 py-0.5"
+                                  title="Check up-to-date status"
+                                >
+                                  <RefreshCw className="w-3 h-3" />
                                 </button>
                               )}
                             </div>
@@ -952,6 +1568,15 @@ const SettingsDialog = ({ isOpen, onClose }) => {
                             [networkKey]: { ...prev[networkKey], address }
                           }));
                           
+                          // Clear alreadyExists flag initially
+                          setNewBridge(prev => ({
+                            ...prev,
+                            [networkKey]: {
+                              ...prev[networkKey],
+                              alreadyExists: false
+                            }
+                          }));
+                          
                           // Auto-detect bridge when a valid address is entered
                           if (address && validateContractAddress(address)) {
                             console.log(`🔍 Auto-detecting bridge at: ${address} on network: ${networkKey}`);
@@ -962,7 +1587,7 @@ const SettingsDialog = ({ isOpen, onClose }) => {
                               console.log(`Using provider for ${networkKey}:`, providerUrl);
                               
                               // Show which provider is being used
-                              toast.loading(`Detecting bridge using ${providerUrl.includes('127.0.0.1') ? 'local' : 'remote'} provider...`);
+                              toast.loading(`Connecting via ${providerUrl.includes('127.0.0.1') ? 'local' : 'remote'} provider...`);
                               
                               const result = await autoDetectBridge(networkProvider, address, networkKey, settings);
                               console.log('Bridge detection result:', result);
@@ -972,17 +1597,51 @@ const SettingsDialog = ({ isOpen, onClose }) => {
                                 // Generate unique bridge key
                                 const generatedKey = generateBridgeKey(result.bridgeConfig, networkKey);
                                 
+                                // Check if bridge already exists AFTER detection
+                                const bridgeExists = isBridgeAlreadyExists(networkKey, address);
+                                
+                                // If bridge exists, check if data needs updating
+                                let needsUpdate = false;
+                                let fieldDifferences = {};
+                                if (bridgeExists) {
+                                  // Get existing bridge data for comparison
+                                  const existingBridges = getBridgeInstancesWithSettings();
+                                  const existingBridge = Object.values(existingBridges).find(bridge => 
+                                    bridge.address.toLowerCase() === address.toLowerCase()
+                                  );
+                                  
+                                  if (existingBridge) {
+                                    const comparison = compareBridgeData(existingBridge, result.bridgeConfig);
+                                    needsUpdate = comparison.hasDifferences;
+                                    fieldDifferences = comparison.differences;
+                                  }
+                                }
+                                
                                 setNewBridge(prev => ({
                                   ...prev,
                                   [networkKey]: {
                                     ...prev[networkKey],
                                     ...result.bridgeConfig,
-                                    key: generatedKey
+                                    key: generatedKey,
+                                    alreadyExists: bridgeExists,
+                                    needsUpdate: needsUpdate,
+                                    fieldDifferences: fieldDifferences,
+                                    upToDate: bridgeExists && !needsUpdate
                                   }
                                 }));
                                 
-                                toast.success(`Detected ${result.bridgeType} bridge with key: ${generatedKey}`);
-                                console.log(`✅ Successfully detected ${result.bridgeType} bridge with key: ${generatedKey}`);
+                                if (bridgeExists) {
+                                  if (needsUpdate) {
+                                    toast.error(`Bridge detected but data differs from settings. You can update with current on-chain data.`);
+                                    console.log(`⚠️ Bridge detected but data differs from settings: ${address}`);
+                                  } else {
+                                    toast.error(`Bridge detected and matches existing settings`);
+                                    console.log(`⚠️ Bridge detected and matches existing settings: ${address}`);
+                                  }
+                                } else {
+                                  toast.success(`Detected ${result.bridgeType} bridge with key: ${generatedKey}`);
+                                  console.log(`✅ Successfully detected ${result.bridgeType} bridge with key: ${generatedKey}`);
+                                }
                               } else {
                                 console.warn('Bridge detection failed:', result.message);
                                 toast.error(`Bridge detection failed: ${result.message}`);
@@ -996,6 +1655,8 @@ const SettingsDialog = ({ isOpen, onClose }) => {
                         className={`input-field text-sm ${
                           newBridge[networkKey]?.address && !validateContractAddress(newBridge[networkKey]?.address)
                             ? 'border-error-500'
+                            : newBridge[networkKey]?.fieldDifferences?.address
+                            ? 'border-yellow-500 bg-yellow-50/10'
                             : ''
                         }`}
                       />
@@ -1012,7 +1673,9 @@ const SettingsDialog = ({ isOpen, onClose }) => {
                                   [networkKey]: { ...prev[networkKey], key: e.target.value }
                                 }))}
                         className={`input-field text-sm ${
-                          !newBridge[networkKey]?.key ? 'border-error-500' : ''
+                          newBridge[networkKey]?.fieldDifferences?.key
+                            ? 'border-yellow-500 bg-yellow-50/10'
+                            : ''
                         }`}
                       />
                       <select
@@ -1022,7 +1685,9 @@ const SettingsDialog = ({ isOpen, onClose }) => {
                                   [networkKey]: { ...prev[networkKey], type: e.target.value }
                                 }))}
                         className={`input-field text-sm ${
-                          !newBridge[networkKey]?.type ? 'border-error-500' : ''
+                          newBridge[networkKey]?.fieldDifferences?.type
+                            ? 'border-yellow-500 bg-yellow-50/10'
+                            : ''
                         }`}
                       >
                         <option value="">Select Type *</option>
@@ -1040,7 +1705,11 @@ const SettingsDialog = ({ isOpen, onClose }) => {
                                   ...prev, 
                                   [networkKey]: { ...prev[networkKey], homeNetwork: e.target.value }
                                 }))}
-                        className="input-field text-sm"
+                        className={`input-field text-sm ${
+                          newBridge[networkKey]?.fieldDifferences?.homeNetwork
+                            ? 'border-yellow-500 bg-yellow-50/10'
+                            : ''
+                        }`}
                       >
                         <option value="Ethereum">Ethereum</option>
                         <option value="Binance Smart Chain">Binance Smart Chain</option>
@@ -1052,7 +1721,11 @@ const SettingsDialog = ({ isOpen, onClose }) => {
                                   ...prev, 
                                   [networkKey]: { ...prev[networkKey], foreignNetwork: e.target.value }
                                 }))}
-                        className="input-field text-sm"
+                        className={`input-field text-sm ${
+                          newBridge[networkKey]?.fieldDifferences?.foreignNetwork
+                            ? 'border-yellow-500 bg-yellow-50/10'
+                            : ''
+                        }`}
                       >
                         <option value="">Foreign Network</option>
                         <option value="Ethereum">Ethereum</option>
@@ -1072,8 +1745,11 @@ const SettingsDialog = ({ isOpen, onClose }) => {
                                   [networkKey]: { ...prev[networkKey], homeTokenAddress: e.target.value }
                                 }))}
                         className={`input-field text-sm ${
-                          !newBridge[networkKey]?.homeTokenAddress || (newBridge[networkKey]?.homeTokenAddress && !validateTokenAddress(newBridge[networkKey]?.homeTokenAddress))
+                          (newBridge[networkKey]?.homeTokenAddress && !validateTokenAddress(newBridge[networkKey]?.homeTokenAddress)) ||
+                          (newBridge[networkKey]?.homeTokenSymbol === 'Invalid Address' || newBridge[networkKey]?.homeTokenSymbol === 'Error')
                             ? 'border-error-500'
+                            : newBridge[networkKey]?.fieldDifferences?.homeTokenAddress
+                            ? 'border-yellow-500 bg-yellow-50/10'
                             : ''
                         }`}
                       />
@@ -1086,7 +1762,9 @@ const SettingsDialog = ({ isOpen, onClose }) => {
                                   [networkKey]: { ...prev[networkKey], homeTokenSymbol: e.target.value }
                                 }))}
                         className={`input-field text-sm ${
-                          !newBridge[networkKey]?.homeTokenSymbol ? 'border-error-500' : ''
+                          newBridge[networkKey]?.fieldDifferences?.homeTokenSymbol
+                            ? 'border-yellow-500 bg-yellow-50/10'
+                            : ''
                         }`}
                       />
                     </div>
@@ -1102,8 +1780,11 @@ const SettingsDialog = ({ isOpen, onClose }) => {
                                   [networkKey]: { ...prev[networkKey], foreignTokenAddress: e.target.value }
                                 }))}
                         className={`input-field text-sm ${
-                          !newBridge[networkKey]?.foreignTokenAddress || (newBridge[networkKey]?.foreignTokenAddress && !validateTokenAddress(newBridge[networkKey]?.foreignTokenAddress))
+                          (newBridge[networkKey]?.foreignTokenAddress && !validateTokenAddress(newBridge[networkKey]?.foreignTokenAddress)) ||
+                          (newBridge[networkKey]?.foreignTokenSymbol === 'Invalid Address' || newBridge[networkKey]?.foreignTokenSymbol === 'Error')
                             ? 'border-error-500'
+                            : newBridge[networkKey]?.fieldDifferences?.foreignTokenAddress
+                            ? 'border-yellow-500 bg-yellow-50/10'
                             : ''
                         }`}
                       />
@@ -1116,7 +1797,9 @@ const SettingsDialog = ({ isOpen, onClose }) => {
                                   [networkKey]: { ...prev[networkKey], foreignTokenSymbol: e.target.value }
                                 }))}
                         className={`input-field text-sm ${
-                          !newBridge[networkKey]?.foreignTokenSymbol ? 'border-error-500' : ''
+                          newBridge[networkKey]?.fieldDifferences?.foreignTokenSymbol
+                            ? 'border-yellow-500 bg-yellow-50/10'
+                            : ''
                         }`}
                       />
                     </div>
@@ -1132,8 +1815,11 @@ const SettingsDialog = ({ isOpen, onClose }) => {
                                   [networkKey]: { ...prev[networkKey], stakeTokenAddress: e.target.value }
                                 }))}
                         className={`input-field text-sm ${
-                          !newBridge[networkKey]?.stakeTokenAddress || (newBridge[networkKey]?.stakeTokenAddress && !validateTokenAddress(newBridge[networkKey]?.stakeTokenAddress))
+                          (newBridge[networkKey]?.stakeTokenAddress && !validateTokenAddress(newBridge[networkKey]?.stakeTokenAddress)) ||
+                          (newBridge[networkKey]?.stakeTokenSymbol === 'Invalid Address' || newBridge[networkKey]?.stakeTokenSymbol === 'Error')
                             ? 'border-error-500'
+                            : newBridge[networkKey]?.fieldDifferences?.stakeTokenAddress
+                            ? 'border-yellow-500 bg-yellow-50/10'
                             : ''
                         }`}
                       />
@@ -1145,7 +1831,11 @@ const SettingsDialog = ({ isOpen, onClose }) => {
                                   ...prev, 
                                   [networkKey]: { ...prev[networkKey], stakeTokenSymbol: e.target.value }
                                 }))}
-                        className="input-field text-sm"
+                        className={`input-field text-sm ${
+                          newBridge[networkKey]?.fieldDifferences?.stakeTokenSymbol
+                            ? 'border-yellow-500 bg-yellow-50/10'
+                            : ''
+                        }`}
                       />
                     </div>
                     
@@ -1164,30 +1854,28 @@ const SettingsDialog = ({ isOpen, onClose }) => {
                     </div>
                     
                     {/* Address validation error messages */}
-                    {newBridge[networkKey]?.homeTokenAddress && !validateTokenAddress(newBridge[networkKey]?.homeTokenAddress) && (
+                    {((newBridge[networkKey]?.homeTokenAddress && !validateTokenAddress(newBridge[networkKey]?.homeTokenAddress)) || 
+                     (newBridge[networkKey]?.homeTokenSymbol === 'Invalid Address' || newBridge[networkKey]?.homeTokenSymbol === 'Error')) && (
                       <p className="text-error-500 text-xs flex items-center gap-1">
                         <AlertCircle className="w-3 h-3" />
                         Invalid home token address
                       </p>
                     )}
-                    {newBridge[networkKey]?.foreignTokenAddress && !validateTokenAddress(newBridge[networkKey]?.foreignTokenAddress) && (
+                    {((newBridge[networkKey]?.foreignTokenAddress && !validateTokenAddress(newBridge[networkKey]?.foreignTokenAddress)) || 
+                     (newBridge[networkKey]?.foreignTokenSymbol === 'Invalid Address' || newBridge[networkKey]?.foreignTokenSymbol === 'Error')) && (
                       <p className="text-error-500 text-xs flex items-center gap-1">
                         <AlertCircle className="w-3 h-3" />
                         Invalid foreign token address
                       </p>
                     )}
-                    {newBridge[networkKey]?.stakeTokenAddress && !validateTokenAddress(newBridge[networkKey]?.stakeTokenAddress) && (
+                    {((newBridge[networkKey]?.stakeTokenAddress && !validateTokenAddress(newBridge[networkKey]?.stakeTokenAddress)) || 
+                     (newBridge[networkKey]?.stakeTokenSymbol === 'Invalid Address' || newBridge[networkKey]?.stakeTokenSymbol === 'Error')) && (
                       <p className="text-error-500 text-xs flex items-center gap-1">
                         <AlertCircle className="w-3 h-3" />
                         Invalid stake token address
                       </p>
                     )}
-                    {(!newBridge[networkKey]?.homeTokenAddress || !newBridge[networkKey]?.foreignTokenAddress || !newBridge[networkKey]?.stakeTokenAddress) && (
-                      <p className="text-error-500 text-xs flex items-center gap-1">
-                        <AlertCircle className="w-3 h-3" />
-                        All token addresses are required
-                      </p>
-                    )}
+
                     <div className="flex gap-2">
                       <button
                                 onClick={() => handleAddBridge(networkKey)}
@@ -1205,11 +1893,19 @@ const SettingsDialog = ({ isOpen, onClose }) => {
                                   !validateContractAddress(newBridge[networkKey]?.address) ||
                                   !validateTokenAddress(newBridge[networkKey]?.homeTokenAddress) ||
                                   !validateTokenAddress(newBridge[networkKey]?.foreignTokenAddress) ||
-                                  !validateTokenAddress(newBridge[networkKey]?.stakeTokenAddress)
+                                  !validateTokenAddress(newBridge[networkKey]?.stakeTokenAddress) ||
+                                  newBridge[networkKey]?.homeTokenSymbol === 'Invalid Address' ||
+                                  newBridge[networkKey]?.homeTokenSymbol === 'Error' ||
+                                  newBridge[networkKey]?.foreignTokenSymbol === 'Invalid Address' ||
+                                  newBridge[networkKey]?.foreignTokenSymbol === 'Error' ||
+                                  newBridge[networkKey]?.stakeTokenSymbol === 'Invalid Address' ||
+                                  newBridge[networkKey]?.stakeTokenSymbol === 'Error' ||
+                                  (newBridge[networkKey]?.alreadyExists && !newBridge[networkKey]?.needsUpdate)
                                 }
                         className="btn-primary px-3 disabled:opacity-50 disabled:cursor-not-allowed"
+
                       >
-                        Add
+                        Save
                       </button>
                       <button
                         onClick={() => {
@@ -1227,12 +1923,19 @@ const SettingsDialog = ({ isOpen, onClose }) => {
                         Invalid bridge address
                       </p>
                             )}
-                            {!newBridge[networkKey]?.address && (
+                            {newBridge[networkKey]?.alreadyExists && !newBridge[networkKey]?.needsUpdate && (
                       <p className="text-error-500 text-xs flex items-center gap-1">
                         <AlertCircle className="w-3 h-3" />
-                        Bridge address is required
+                        The bridge already exists in the settings
                       </p>
                             )}
+                            {newBridge[networkKey]?.alreadyExists && newBridge[networkKey]?.needsUpdate && (
+                      <p className="text-warning-500 text-xs flex items-center gap-1">
+                        <AlertCircle className="w-3 h-3" />
+                        Bridge data differs from settings. Click "Add" to update with current on-chain data.
+                      </p>
+                            )}
+
                           </div>
                     )}
                   </div>
@@ -1285,10 +1988,22 @@ const SettingsDialog = ({ isOpen, onClose }) => {
                                   ? 'bg-blue-600 text-white' 
                                   : 'bg-green-600 text-white'
                               }`}>
-                                {assistantConfig.type} Assistant
+                                {assistantConfig.type.replace('_', ' ')} Assistant
                               </span>
                               {settings[networkKey]?.assistants?.[assistantKey] && (
                                 <span className="px-1 py-0.5 bg-yellow-600 text-white text-xs rounded-full">Custom</span>
+                              )}
+                              {assistantConfig.upToDate === true && (
+                                <span className="px-1 py-0.5 bg-green-600 text-white text-xs rounded-full">Up to date</span>
+                              )}
+                              {assistantConfig.upToDate === false && (
+                                <span className="px-1 py-0.5 bg-orange-600 text-white text-xs rounded-full">Needs update</span>
+                              )}
+                              {assistantConfig.upToDate === undefined && (
+                                <span className="px-1 py-0.5 bg-gray-600 text-white text-xs rounded-full">Status unknown</span>
+                              )}
+                              {assistantConfig.upToDate === null && (
+                                <span className="px-1 py-0.5 bg-red-600 text-white text-xs rounded-full">Detection failed</span>
                               )}
                             </div>
                             <div className="flex items-center gap-1">
@@ -1303,12 +2018,47 @@ const SettingsDialog = ({ isOpen, onClose }) => {
                                 )}
                               </button>
                               {settings[networkKey]?.assistants?.[assistantKey] && settings[networkKey]?.customAssistants && (
+                                <>
+                                  <button
+                                    onClick={async () => {
+                                      toast.loading(`Checking ${assistantKey} up-to-date status...`);
+                                      const upToDate = await updateAssistantUpToDateStatus(networkKey, assistantKey, assistantConfig);
+                                      if (upToDate) {
+                                        toast.success(`${assistantKey} is up to date`);
+                                      } else {
+                                        toast.error(`${assistantKey} needs updating`);
+                                      }
+                                    }}
+                                    className="btn-secondary px-1 py-0.5"
+                                    title="Check up-to-date status"
+                                  >
+                                    <RefreshCw className="w-3 h-3" />
+                                  </button>
                                 <button
                                   onClick={() => handleRemoveAssistant(networkKey, assistantKey)}
                                   className="btn-error px-1 py-0.5"
                                   title="Remove assistant"
                                 >
                                   <Trash2 className="w-3 h-3" />
+                                  </button>
+                                </>
+                              )}
+                              {/* Show refresh button for config assistants that don't have upToDate status */}
+                              {!settings[networkKey]?.assistants?.[assistantKey] && (assistantConfig.upToDate === undefined || assistantConfig.upToDate === null) && (
+                                <button
+                                  onClick={async () => {
+                                    toast.loading(`Checking ${assistantKey} up-to-date status...`);
+                                    const upToDate = await updateAssistantUpToDateStatus(networkKey, assistantKey, assistantConfig);
+                                    if (upToDate) {
+                                      toast.success(`${assistantKey} is up to date`);
+                                    } else {
+                                      toast.error(`${assistantKey} needs updating`);
+                                    }
+                                  }}
+                                  className="btn-secondary px-1 py-0.5"
+                                  title="Check up-to-date status"
+                                >
+                                  <RefreshCw className="w-3 h-3" />
                                 </button>
                               )}
                             </div>
@@ -1343,37 +2093,22 @@ const SettingsDialog = ({ isOpen, onClose }) => {
                     <div className="grid grid-cols-2 gap-3">
                       <input
                         type="text"
-                        placeholder="Assistant Key (e.g., CUSTOM_USDT_IMPORT_ASSISTANT)"
-                                value={newAssistant[networkKey]?.key || ''}
-                                onChange={(e) => setNewAssistant(prev => ({ 
-                                  ...prev, 
-                                  [networkKey]: { ...prev[networkKey], key: e.target.value }
-                                }))}
-                        className="input-field text-sm"
-                      />
-                      <select
-                                value={newAssistant[networkKey]?.type || ''}
-                                onChange={(e) => setNewAssistant(prev => ({ 
-                                  ...prev, 
-                                  [networkKey]: { ...prev[networkKey], type: e.target.value }
-                                }))}
-                        className="input-field text-sm"
-                      >
-                        <option value="">Select Type</option>
-                        <option value="import">Import Assistant</option>
-                        <option value="export">Export Assistant</option>
-                      </select>
-                    </div>
-                    <div className="grid grid-cols-2 gap-3">
-                      <input
-                        type="text"
-                        placeholder="Assistant Address (0x...)"
+                        placeholder="Assistant Address (0x...) *"
                                 value={newAssistant[networkKey]?.address || ''}
                                 onChange={async (e) => {
                                   const address = e.target.value;
                                   setNewAssistant(prev => ({ 
                                     ...prev, 
                                     [networkKey]: { ...prev[networkKey], address }
+                                  }));
+                                  
+                                  // Clear alreadyExists flag initially
+                                  setNewAssistant(prev => ({
+                                    ...prev,
+                                    [networkKey]: {
+                                      ...prev[networkKey],
+                                      alreadyExists: false
+                                    }
                                   }));
                                   
                                   // Auto-detect assistant when address is valid
@@ -1383,16 +2118,56 @@ const SettingsDialog = ({ isOpen, onClose }) => {
                                       const networkProvider = getProvider(networkKey);
                                       console.log(`Auto-detecting assistant on ${networkKey} using provider:`, networkProvider.connection.url);
                                       
-                                      const result = await autoDetectAssistant(networkProvider, address, networkKey);
+                                      const result = await autoDetectAssistant(networkProvider, address, networkKey, {}, settings);
                                       if (result.success) {
+                                        // Generate unique assistant key
+                                        const generatedKey = generateAssistantKey(result.assistantConfig, networkKey);
+                                        
+                                        // Check if assistant already exists AFTER detection
+                                        const assistantExists = isAssistantAlreadyExists(networkKey, address);
+                                        
+                                        // If assistant exists, check if data needs updating
+                                        let needsUpdate = false;
+                                        let fieldDifferences = {};
+                                        if (assistantExists) {
+                                          // Get existing assistant data for comparison
+                                          const existingAssistants = getAssistantContractsWithSettings();
+                                          const existingAssistant = Object.values(existingAssistants).find(assistant => 
+                                            assistant.address.toLowerCase() === address.toLowerCase()
+                                          );
+                                          
+                                          if (existingAssistant) {
+                                            const comparison = compareAssistantData(existingAssistant, result.assistantConfig);
+                                            needsUpdate = comparison.hasDifferences;
+                                            fieldDifferences = comparison.differences;
+                                          }
+                                        }
+                                        
                                         setNewAssistant(prev => ({
                                           ...prev,
                                           [networkKey]: {
                                             ...prev[networkKey],
-                                            ...result.assistantConfig
+                                            ...result.assistantConfig,
+                                            key: generatedKey,
+                                            alreadyExists: assistantExists,
+                                            needsUpdate: needsUpdate,
+                                            fieldDifferences: fieldDifferences,
+                                            upToDate: assistantExists && !needsUpdate
                                           }
                                         }));
-                                        toast.success(`Detected ${result.assistantConfig.type} assistant`);
+                                        
+                                        if (assistantExists) {
+                                          if (needsUpdate) {
+                                            toast.error(`Assistant detected but data differs from settings. You can update with current on-chain data.`);
+                                            console.log(`⚠️ Assistant detected but data differs from settings: ${address}`);
+                                          } else {
+                                            toast.error(`Assistant detected and matches existing settings`);
+                                            console.log(`⚠️ Assistant detected and matches existing settings: ${address}`);
+                                          }
+                                        } else {
+                                          toast.success(`Detected ${result.assistantConfig.type} assistant with key: ${generatedKey}`);
+                                          console.log(`✅ Successfully detected ${result.assistantConfig.type} assistant with key: ${generatedKey}`);
+                                        }
                                       }
                                     } catch (error) {
                                       console.warn('Assistant auto-detection failed:', error);
@@ -1403,12 +2178,14 @@ const SettingsDialog = ({ isOpen, onClose }) => {
                         className={`input-field text-sm ${
                                   newAssistant[networkKey]?.address && !validateContractAddress(newAssistant[networkKey]?.address)
                             ? 'border-error-500'
+                            : newAssistant[networkKey]?.fieldDifferences?.address
+                            ? 'border-yellow-500 bg-yellow-50/10'
                             : ''
                         }`}
                       />
                       <input
                         type="text"
-                        placeholder="Bridge Address (0x...)"
+                        placeholder="Bridge Address (0x...) *"
                                 value={newAssistant[networkKey]?.bridgeAddress || ''}
                                 onChange={(e) => setNewAssistant(prev => ({ 
                                   ...prev, 
@@ -1417,6 +2194,8 @@ const SettingsDialog = ({ isOpen, onClose }) => {
                         className={`input-field text-sm ${
                                   newAssistant[networkKey]?.bridgeAddress && !validateContractAddress(newAssistant[networkKey]?.bridgeAddress)
                             ? 'border-error-500'
+                            : newAssistant[networkKey]?.fieldDifferences?.bridgeAddress
+                            ? 'border-yellow-500 bg-yellow-50/10'
                             : ''
                         }`}
                       />
@@ -1424,25 +2203,84 @@ const SettingsDialog = ({ isOpen, onClose }) => {
                     <div className="grid grid-cols-2 gap-3">
                       <input
                         type="text"
-                        placeholder="Share Symbol (e.g., P3DEA)"
+                        placeholder="Assistant Key (e.g., CUSTOM_USDT_IMPORT_ASSISTANT) *"
+                                value={newAssistant[networkKey]?.key || ''}
+                                onChange={(e) => setNewAssistant(prev => ({ 
+                                  ...prev, 
+                                  [networkKey]: { ...prev[networkKey], key: e.target.value }
+                                }))}
+                        className={`input-field text-sm ${
+                          newAssistant[networkKey]?.fieldDifferences?.key
+                            ? 'border-yellow-500 bg-yellow-50/10'
+                            : ''
+                        }`}
+                      />
+                      <select
+                                value={newAssistant[networkKey]?.type || ''}
+                                onChange={(e) => setNewAssistant(prev => ({ 
+                                  ...prev, 
+                                  [networkKey]: { ...prev[networkKey], type: e.target.value }
+                                }))}
+                        className={`input-field text-sm ${
+                          newAssistant[networkKey]?.fieldDifferences?.type
+                            ? 'border-yellow-500 bg-yellow-50/10'
+                            : ''
+                        }`}
+                      >
+                        <option value="">Select Type *</option>
+                        <option value="import">Import Assistant</option>
+                        <option value="import_wrapper">Import Wrapper Assistant</option>
+                        <option value="export">Export Assistant</option>
+                        <option value="export_wrapper">Export Wrapper Assistant</option>
+                      </select>
+                    </div>
+                    <div className="grid grid-cols-2 gap-3">
+                      <input
+                        type="text"
+                        placeholder="Share Symbol (e.g., P3DEA) *"
                                 value={newAssistant[networkKey]?.shareSymbol || ''}
                                 onChange={(e) => setNewAssistant(prev => ({ 
                                   ...prev, 
                                   [networkKey]: { ...prev[networkKey], shareSymbol: e.target.value }
                                 }))}
-                        className="input-field text-sm"
+                        className={`input-field text-sm ${
+                          newAssistant[networkKey]?.fieldDifferences?.shareSymbol
+                            ? 'border-yellow-500 bg-yellow-50/10'
+                            : ''
+                        }`}
                       />
                       <input
                         type="text"
-                        placeholder="Share Name (e.g., P3D export assistant share)"
+                        placeholder="Share Name (e.g., P3D export assistant share) *"
                                 value={newAssistant[networkKey]?.shareName || ''}
                                 onChange={(e) => setNewAssistant(prev => ({ 
                                   ...prev, 
                                   [networkKey]: { ...prev[networkKey], shareName: e.target.value }
                                 }))}
-                        className="input-field text-sm"
+                        className={`input-field text-sm ${
+                          newAssistant[networkKey]?.fieldDifferences?.shareName
+                            ? 'border-yellow-500 bg-yellow-50/10'
+                            : ''
+                        }`}
                       />
                     </div>
+                    <div className="grid grid-cols-2 gap-3">
+                      <input
+                        type="text"
+                        placeholder="Manager Address (0x...) *"
+                                value={newAssistant[networkKey]?.managerAddress || ''}
+                                onChange={(e) => setNewAssistant(prev => ({ 
+                                  ...prev, 
+                                  [networkKey]: { ...prev[networkKey], managerAddress: e.target.value }
+                                }))}
+                        className={`input-field text-sm ${
+                                  newAssistant[networkKey]?.managerAddress && !validateContractAddress(newAssistant[networkKey]?.managerAddress)
+                            ? 'border-error-500'
+                            : newAssistant[networkKey]?.fieldDifferences?.managerAddress
+                            ? 'border-yellow-500 bg-yellow-50/10'
+                            : ''
+                        }`}
+                      />
                     <input
                       type="text"
                       placeholder="Description (optional)"
@@ -1453,12 +2291,26 @@ const SettingsDialog = ({ isOpen, onClose }) => {
                               }))}
                       className="input-field text-sm"
                     />
+                    </div>
                     <div className="flex gap-2">
                       <button
                                 onClick={() => handleAddAssistant(networkKey)}
-                        className="btn-primary px-3"
+                        disabled={
+                          !newAssistant[networkKey]?.address ||
+                          !newAssistant[networkKey]?.bridgeAddress ||
+                          !newAssistant[networkKey]?.key ||
+                          !newAssistant[networkKey]?.type ||
+                          !newAssistant[networkKey]?.shareSymbol ||
+                          !newAssistant[networkKey]?.shareName ||
+                          !newAssistant[networkKey]?.managerAddress ||
+                          !validateContractAddress(newAssistant[networkKey]?.address) ||
+                          !validateContractAddress(newAssistant[networkKey]?.bridgeAddress) ||
+                          !validateContractAddress(newAssistant[networkKey]?.managerAddress) ||
+                          (newAssistant[networkKey]?.alreadyExists && !newAssistant[networkKey]?.needsUpdate)
+                        }
+                        className="btn-primary px-3 disabled:opacity-50 disabled:cursor-not-allowed"
                       >
-                        Add
+                        Save
                       </button>
                       <button
                         onClick={() => {
@@ -1480,6 +2332,24 @@ const SettingsDialog = ({ isOpen, onClose }) => {
                       <p className="text-error-500 text-xs flex items-center gap-1">
                         <AlertCircle className="w-3 h-3" />
                         Invalid bridge address
+                      </p>
+                            )}
+                            {(newAssistant[networkKey]?.managerAddress && !validateContractAddress(newAssistant[networkKey]?.managerAddress)) && (
+                      <p className="text-error-500 text-xs flex items-center gap-1">
+                        <AlertCircle className="w-3 h-3" />
+                        Invalid manager address
+                      </p>
+                            )}
+                            {newAssistant[networkKey]?.alreadyExists && !newAssistant[networkKey]?.needsUpdate && (
+                      <p className="text-error-500 text-xs flex items-center gap-1">
+                        <AlertCircle className="w-3 h-3" />
+                        The assistant already exists in the settings
+                      </p>
+                            )}
+                            {newAssistant[networkKey]?.alreadyExists && newAssistant[networkKey]?.needsUpdate && (
+                      <p className="text-warning-500 text-xs flex items-center gap-1">
+                        <AlertCircle className="w-3 h-3" />
+                        Assistant data differs from settings. Click "Add" to update with current on-chain data.
                       </p>
                             )}
                           </div>
