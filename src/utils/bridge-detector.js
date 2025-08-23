@@ -2,11 +2,13 @@ import { ethers } from 'ethers';
 import { 
   EXPORT_ABI, 
   IMPORT_ABI, 
-  IMPORT_WRAPPER_ABI 
+  IMPORT_WRAPPER_ABI,
+  ORACLE_ABI
 } from '../contracts/abi';
 import { autoDetectToken } from './token-detector';
 import { NETWORKS, ADDRESS_ZERO } from '../config/networks';
 import { getProvider } from './provider-manager';
+import { hasBridgesRegistry, getBridgeInfoFromRegistry } from './update-bridge-info';
 
 /**
  * Bridge type detection based on constructor parameters
@@ -100,6 +102,154 @@ export const detectBridgeType = async (provider, bridgeAddress) => {
 };
 
 /**
+ * Validate oracle contract and get its basic information
+ * @param {ethers.providers.Provider} provider - Web3 provider
+ * @param {string} oracleAddress - Oracle contract address
+ * @returns {Promise<Object>} Oracle validation result
+ */
+export const validateOracleContract = async (provider, oracleAddress) => {
+  try {
+    console.log(`🔍 Validating oracle contract: ${oracleAddress}`);
+    
+    if (!oracleAddress || oracleAddress === ADDRESS_ZERO) {
+      return {
+        isValid: false,
+        error: 'Oracle address is null or zero address'
+      };
+    }
+
+    // Basic address validation
+    if (!ethers.utils.isAddress(oracleAddress)) {
+      return {
+        isValid: false,
+        error: 'Invalid oracle address format'
+      };
+    }
+
+    // Try to create contract instance
+    const oracleContract = new ethers.Contract(oracleAddress, ORACLE_ABI, provider);
+    
+    // Test if contract exists by calling a view function
+    try {
+      // Try to call getPrice with dummy parameters to test if contract responds
+      // We'll use a simple test that should work for any oracle
+      await oracleContract.getPrice('ETH', 'USD');
+      console.log(`✅ Oracle contract validated: ${oracleAddress}`);
+      
+      return {
+        isValid: true,
+        oracleAddress,
+        contract: oracleContract
+      };
+    } catch (error) {
+      console.log(`❌ Oracle contract validation failed: ${error.message}`);
+      return {
+        isValid: false,
+        error: `Oracle contract validation failed: ${error.message}`
+      };
+    }
+  } catch (error) {
+    console.error('Error validating oracle contract:', error);
+    return {
+      isValid: false,
+      error: `Failed to validate oracle: ${error.message}`
+    };
+  }
+};
+
+/**
+ * Check if oracle exists in network configuration (settings or config)
+ * @param {string} oracleAddress - Oracle address to check
+ * @param {string} networkKey - Network key
+ * @param {Object} settings - Current settings
+ * @returns {Object} Oracle existence check result
+ */
+export const checkOracleInConfig = (oracleAddress, networkKey, settings) => {
+  try {
+    console.log(`🔍 Checking if oracle ${oracleAddress} exists in config for ${networkKey}`);
+    
+    // Check in settings first (priority)
+    if (settings[networkKey]?.oracles) {
+      for (const [oracleKey, oracleConfig] of Object.entries(settings[networkKey].oracles)) {
+        if (oracleConfig.address?.toLowerCase() === oracleAddress.toLowerCase()) {
+          console.log(`✅ Found oracle in settings: ${oracleKey}`);
+          return {
+            exists: true,
+            source: 'settings',
+            oracleKey,
+            oracleConfig
+          };
+        }
+      }
+    }
+    
+    // Check in default config
+    const networkConfig = NETWORKS[networkKey];
+    if (networkConfig?.oracles) {
+      for (const [oracleKey, oracleConfig] of Object.entries(networkConfig.oracles)) {
+        if (oracleConfig.address?.toLowerCase() === oracleAddress.toLowerCase()) {
+          console.log(`✅ Found oracle in config: ${oracleKey}`);
+          return {
+            exists: true,
+            source: 'config',
+            oracleKey,
+            oracleConfig
+          };
+        }
+      }
+    }
+    
+    console.log(`❌ Oracle not found in configuration`);
+    return {
+      exists: false,
+      source: null,
+      oracleKey: null,
+      oracleConfig: null
+    };
+  } catch (error) {
+    console.error('Error checking oracle in config:', error);
+    return {
+      exists: false,
+      source: null,
+      oracleKey: null,
+      oracleConfig: null,
+      error: error.message
+    };
+  }
+};
+
+/**
+ * Generate a unique oracle key for a new oracle
+ * @param {string} networkKey - Network key
+ * @param {Object} settings - Current settings
+ * @returns {string} Unique oracle key
+ */
+export const generateOracleKey = (networkKey, settings) => {
+  const existingOracles = new Set();
+  
+  // Collect existing oracle keys from settings
+  if (settings[networkKey]?.oracles) {
+    Object.keys(settings[networkKey].oracles).forEach(key => existingOracles.add(key));
+  }
+  
+  // Collect existing oracle keys from config
+  const networkConfig = NETWORKS[networkKey];
+  if (networkConfig?.oracles) {
+    Object.keys(networkConfig.oracles).forEach(key => existingOracles.add(key));
+  }
+  
+  // Generate unique key
+  let counter = 1;
+  let oracleKey = `oracle_${counter}`;
+  while (existingOracles.has(oracleKey)) {
+    counter++;
+    oracleKey = `oracle_${counter}`;
+  }
+  
+  return oracleKey;
+};
+
+/**
  * Get bridge data from Export contract
  * @param {ethers.providers.Provider} provider - Web3 provider
  * @param {string} bridgeAddress - Bridge contract address
@@ -119,6 +269,9 @@ export const getExportBridgeData = async (provider, bridgeAddress, networkSymbol
       contract.foreign_asset(),
       contract.settings()
     ]);
+
+    // Note: Export bridges don't have oracleAddress() function
+    const oracleAddress = null;
 
     const { tokenAddress: stakeTokenAddress } = settings;
 
@@ -167,7 +320,8 @@ export const getExportBridgeData = async (provider, bridgeAddress, networkSymbol
       foreignAsset,
       stakeTokenAddress,
       foreignTokenSymbol,
-      stakeTokenSymbol
+      stakeTokenSymbol,
+      oracleAddress
     };
   } catch (error) {
     console.error('Error getting Export bridge data:', error);
@@ -189,10 +343,12 @@ export const getImportBridgeData = async (provider, bridgeAddress, networkSymbol
     const [
       homeNetwork,
       homeAsset,
+      oracleAddress,
       settings
     ] = await Promise.all([
       contract.home_network(),
       contract.home_asset(),
+      contract.oracleAddress(),
       contract.settings()
     ]);
 
@@ -239,7 +395,8 @@ export const getImportBridgeData = async (provider, bridgeAddress, networkSymbol
       stakeTokenAddress,
       homeTokenSymbol,
       bridgeTokenSymbol,
-      stakeTokenSymbol
+      stakeTokenSymbol,
+      oracleAddress
     };
   } catch (error) {
     console.error('Error getting Import bridge data:', error);
@@ -380,7 +537,7 @@ export const getImportWrapperBridgeData = async (provider, bridgeAddress, networ
     const contract = new ethers.Contract(bridgeAddress, IMPORT_WRAPPER_ABI, provider);
     
     // Try each call individually to handle failures gracefully
-    let homeNetwork, homeAsset, precompileAddress, settings;
+    let homeNetwork, homeAsset, precompileAddress, oracleAddress, settings;
     
     try {
       homeNetwork = await contract.home_network();
@@ -404,6 +561,14 @@ export const getImportWrapperBridgeData = async (provider, bridgeAddress, networ
     } catch (error) {
       console.warn('Failed to get precompileAddress:', error.message);
       precompileAddress = null; // Don't set a fallback, let it be null
+    }
+    
+    try {
+      oracleAddress = await contract.oracleAddress();
+      console.log('✅ oracleAddress:', oracleAddress);
+    } catch (error) {
+      console.warn('Failed to get oracleAddress:', error.message);
+      oracleAddress = null;
     }
     
     try {
@@ -465,7 +630,8 @@ export const getImportWrapperBridgeData = async (provider, bridgeAddress, networ
       stakeTokenAddress,
       homeTokenSymbol,
       foreignTokenSymbol,
-      stakeTokenSymbol
+      stakeTokenSymbol,
+      oracleAddress
     };
   } catch (error) {
     console.error('Error getting ImportWrapper bridge data:', error);
@@ -550,6 +716,7 @@ export const autoDetectBridge = async (provider, bridgeAddress, networkSymbol, s
           foreignTokenAddress: bridgeData.foreignAsset,
           stakeTokenSymbol: bridgeData.stakeTokenSymbol || 'Unknown',
           stakeTokenAddress: bridgeData.stakeTokenAddress,
+          oracleAddress: bridgeData.oracleAddress,
           description: generateBridgeDescription(
             bridgeType,
             NETWORKS[networkSymbol]?.name || networkSymbol,
@@ -574,6 +741,7 @@ export const autoDetectBridge = async (provider, bridgeAddress, networkSymbol, s
           foreignTokenAddress: bridgeAddress, // Bridge address itself
           stakeTokenSymbol: bridgeData.stakeTokenSymbol || 'Unknown',
           stakeTokenAddress: bridgeData.stakeTokenAddress,
+          oracleAddress: bridgeData.oracleAddress,
           isIssuerBurner: true,
           description: generateBridgeDescription(
             bridgeType,
@@ -599,6 +767,7 @@ export const autoDetectBridge = async (provider, bridgeAddress, networkSymbol, s
           foreignTokenAddress: bridgeData.precompileAddress,
           stakeTokenSymbol: bridgeData.stakeTokenSymbol || 'Unknown',
           stakeTokenAddress: bridgeData.stakeTokenAddress,
+          oracleAddress: bridgeData.oracleAddress,
           isIssuerBurner: true,
           description: generateBridgeDescription(
             bridgeType,
@@ -612,6 +781,88 @@ export const autoDetectBridge = async (provider, bridgeAddress, networkSymbol, s
 
       default:
         throw new Error(`Unsupported bridge type: ${bridgeType}`);
+    }
+
+    // Try to fetch createdAt from bridge registry if available
+    let createdAt = null;
+    if (hasBridgesRegistry(networkSymbol)) {
+      try {
+        const networkConfig = NETWORKS[networkSymbol];
+        const registryAddress = networkConfig.contracts.bridgesRegistry;
+        console.log(`🔍 Fetching createdAt from bridge registry: ${registryAddress}`);
+        
+        const registryInfo = await getBridgeInfoFromRegistry(provider, registryAddress, bridgeAddress);
+        if (registryInfo && registryInfo.createdAt) {
+          createdAt = registryInfo.createdAt;
+          console.log(`✅ Fetched createdAt from registry: ${createdAt} (${new Date(createdAt * 1000).toISOString()})`);
+        }
+      } catch (error) {
+        console.warn(`⚠️ Failed to fetch createdAt from registry: ${error.message}`);
+        // Don't fail the entire detection if registry lookup fails
+      }
+    }
+
+    // Add createdAt to bridge config if available
+    if (createdAt) {
+      bridgeConfig.createdAt = createdAt;
+    }
+
+    // Validate and handle oracle address
+    if (bridgeData.oracleAddress) {
+      console.log(`🔍 Processing oracle address for bridge: ${bridgeData.oracleAddress}`);
+      
+      // Validate the oracle contract
+      const oracleValidation = await validateOracleContract(provider, bridgeData.oracleAddress);
+      
+      if (!oracleValidation.isValid) {
+        console.error(`❌ Oracle validation failed: ${oracleValidation.error}`);
+        return {
+          success: false,
+          bridgeConfig: null,
+          bridgeType: null,
+          message: `Bridge oracle validation failed: ${oracleValidation.error}`,
+          invalidOracle: true
+        };
+      }
+      
+      // Check if oracle exists in configuration
+      const oracleCheck = checkOracleInConfig(bridgeData.oracleAddress, networkSymbol, settings);
+      
+      if (!oracleCheck.exists) {
+        console.log(`⚠️ Oracle not found in configuration, needs to be added`);
+        // Generate a unique key for the new oracle
+        const newOracleKey = generateOracleKey(networkSymbol, settings);
+        
+        // Add the oracle to bridge config with a flag indicating it needs to be added to settings
+        bridgeConfig.oracleAddress = bridgeData.oracleAddress;
+        bridgeConfig.oracleNeedsAddition = {
+          key: newOracleKey,
+          address: bridgeData.oracleAddress,
+          name: `Oracle ${newOracleKey}`,
+          description: `Auto-detected oracle from bridge ${bridgeAddress}`
+        };
+        
+        console.log(`✅ Oracle marked for addition to settings: ${newOracleKey}`);
+      } else {
+        // Oracle exists in configuration, use it
+        bridgeConfig.oracleAddress = bridgeData.oracleAddress;
+        console.log(`✅ Oracle found in configuration: ${oracleCheck.oracleKey}`);
+      }
+    } else {
+      // No oracle address detected - this is invalid for import bridges
+      if (bridgeType === BRIDGE_TYPES.IMPORT || bridgeType === BRIDGE_TYPES.IMPORT_WRAPPER) {
+        console.error(`❌ Import bridge must have an oracle address`);
+        return {
+          success: false,
+          bridgeConfig: null,
+          bridgeType: null,
+          message: 'Import bridge must have an oracle address',
+          invalidOracle: true
+        };
+      }
+      
+      // For export bridges, oracle address is not required
+      console.log(`ℹ️ Export bridge - no oracle address required`);
     }
 
     return {

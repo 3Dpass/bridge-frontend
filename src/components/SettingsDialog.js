@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { ethers } from 'ethers';
 import { useWeb3 } from '../contexts/Web3Context';
 import { useSettings } from '../contexts/SettingsContext';
 import { NETWORKS } from '../config/networks';
@@ -6,7 +7,9 @@ import { autoDetectToken, isNativeToken } from '../utils/token-detector';
 import { autoDetectBridge } from '../utils/bridge-detector';
 import { autoDetectAssistant } from '../utils/assistant-detector';
 import { updateBridgeInfoFromRegistry, hasBridgesRegistry } from '../utils/update-bridge-info';
+import { validateOracleContract } from '../utils/bridge-detector';
 import { getProvider, updateProviderSettings } from '../utils/provider-manager';
+import { getNetworkWithSettings } from '../utils/settings';
 import { 
   Settings, 
   Network, 
@@ -24,6 +27,7 @@ import {
   Users,
   RefreshCw
 } from 'lucide-react';
+import CreateNewAssistant from './CreateNewAssistant';
 import { motion, AnimatePresence } from 'framer-motion';
 import toast from 'react-hot-toast';
 
@@ -40,6 +44,8 @@ const SettingsDialog = ({ isOpen, onClose }) => {
     removeCustomBridgeInstanceForNetwork,
     addCustomAssistantContractForNetwork,
     removeCustomAssistantContractForNetwork,
+    updateOracle,
+    removeOracle,
     resetSettings,
     validateTokenConfig,
     getBridgeInstancesWithSettings,
@@ -54,6 +60,19 @@ const SettingsDialog = ({ isOpen, onClose }) => {
   const [showAddAssistant, setShowAddAssistant] = useState({});
   const [newAssistant, setNewAssistant] = useState({});
   const [detectedTokens, setDetectedTokens] = useState({});
+  const [showCreateAssistant, setShowCreateAssistant] = useState({});
+  const [showAddOracle, setShowAddOracle] = useState({});
+  const [newOracle, setNewOracle] = useState({});
+
+  // Check if an oracle with given address already exists
+  const findExistingOracleByAddress = (networkKey, oracleAddress) => {
+    const networkWithSettings = getNetworkWithSettings(networkKey);
+    const existingOracles = networkWithSettings?.oracles || {};
+    
+    return Object.keys(existingOracles).find(key => 
+      existingOracles[key].address.toLowerCase() === oracleAddress.toLowerCase()
+    );
+  };
 
   // Get all tokens with settings (local function)
   const getTokensWithSettings = () => {
@@ -98,6 +117,12 @@ const SettingsDialog = ({ isOpen, onClose }) => {
         
         for (const [networkKey, networkBridges] of Object.entries(allBridges)) {
           for (const [bridgeKey, bridgeConfig] of Object.entries(networkBridges)) {
+            // Skip if bridgeConfig is null or undefined
+            if (!bridgeConfig) {
+              console.log(`🔍 Skipping ${bridgeKey} on ${networkKey}: bridgeConfig is null/undefined`);
+              continue;
+            }
+            
             // Only check bridges that don't have upToDate status set or have failed detection
             if ((bridgeConfig.upToDate === undefined || bridgeConfig.upToDate === null) && bridgeConfig.address) {
               console.log(`🔍 Checking ${bridgeKey} (${bridgeConfig.address}) on ${networkKey}`);
@@ -109,6 +134,22 @@ const SettingsDialog = ({ isOpen, onClose }) => {
                 console.log(`🔍 Detection result for ${bridgeKey}:`, result);
                 
                 if (result.success) {
+                  // Handle oracle addition if needed
+                  if (result.bridgeConfig.oracleNeedsAddition) {
+                    console.log(`🔍 Adding new oracle to settings:`, result.bridgeConfig.oracleNeedsAddition);
+                    const { key, address, name, description } = result.bridgeConfig.oracleNeedsAddition;
+                    
+                    // Add the oracle to settings
+                    updateOracle(networkKey, key, {
+                      address,
+                      name,
+                      description
+                    });
+                    
+                    // Remove the oracleNeedsAddition flag from bridge config
+                    delete result.bridgeConfig.oracleNeedsAddition;
+                  }
+                  
                   const comparison = compareBridgeData(bridgeConfig, result.bridgeConfig);
                   const upToDate = !comparison.hasDifferences;
                   
@@ -119,6 +160,15 @@ const SettingsDialog = ({ isOpen, onClose }) => {
                   });
                   
                   console.log(`🔍 Auto-checked ${bridgeKey}: ${upToDate ? 'Up to date' : 'Needs update'}`);
+                } else if (result.invalidOracle) {
+                  console.error(`🔍 Bridge has invalid oracle: ${result.message}`);
+                  // Mark bridge as invalid due to oracle issues
+                  addCustomBridgeInstanceForNetwork(networkKey, bridgeKey, {
+                    ...bridgeConfig,
+                    upToDate: false,
+                    invalidOracle: true,
+                    oracleError: result.message
+                  });
                 } else {
                   console.warn(`🔍 Bridge detection failed for ${bridgeKey}:`, result.message);
                   // Set status as unknown to avoid repeated failed attempts
@@ -143,7 +193,7 @@ const SettingsDialog = ({ isOpen, onClose }) => {
       // Run the check after a short delay to avoid blocking the UI
       setTimeout(checkExistingBridgesStatus, 1000);
     }
-  }, [isOpen, settings, addCustomBridgeInstanceForNetwork, getBridgeInstancesWithSettings]);
+  }, [isOpen, settings, addCustomBridgeInstanceForNetwork, getBridgeInstancesWithSettings, updateOracle]);
 
   // Generate unique bridge key based on detected bridge data
   const generateBridgeKey = (bridgeConfig, networkKey) => {
@@ -370,6 +420,52 @@ const SettingsDialog = ({ isOpen, onClose }) => {
     toast.success(`Token ${tokenSymbol} removed successfully`);
   };
 
+  // Handle adding a new oracle
+  const handleAddOracle = (networkKey) => {
+    const oracle = newOracle[networkKey];
+    if (!oracle || !oracle.key || !oracle.address || !oracle.name) {
+      toast.error('Please fill in all oracle fields');
+      return;
+    }
+
+    if (!validateContractAddress(oracle.address)) {
+      toast.error('Invalid oracle address');
+      return;
+    }
+
+    // Check if an oracle with this address already exists
+    const existingOracleKey = findExistingOracleByAddress(networkKey, oracle.address);
+
+    let finalOracleKey = oracle.key;
+    let isUpdate = false;
+
+    if (existingOracleKey) {
+      // Update existing oracle instead of creating duplicate
+      finalOracleKey = existingOracleKey;
+      isUpdate = true;
+      console.log(`🔄 Updating existing oracle ${existingOracleKey} with address ${oracle.address}`);
+    } else {
+      console.log(`➕ Adding new oracle ${oracle.key} with address ${oracle.address}`);
+    }
+
+    updateOracle(networkKey, finalOracleKey, {
+      address: oracle.address,
+      name: oracle.name,
+      description: oracle.description || '',
+    });
+
+    setNewOracle(prev => ({ ...prev, [networkKey]: {} }));
+    setShowAddOracle(prev => ({ ...prev, [networkKey]: false }));
+    
+    toast.success(`Oracle ${finalOracleKey} ${isUpdate ? 'updated' : 'added'} successfully`);
+  };
+
+  // Handle removing an oracle
+  const handleRemoveOracle = (networkKey, oracleKey) => {
+    removeOracle(networkKey, oracleKey);
+    toast.success(`Oracle ${oracleKey} removed successfully`);
+  };
+
   // Handle adding a new bridge instance
   const handleAddBridge = (networkKey) => {
     const bridge = newBridge[networkKey];
@@ -485,7 +581,8 @@ const SettingsDialog = ({ isOpen, onClose }) => {
       'foreignTokenSymbol',
       'foreignTokenAddress',
       'stakeTokenSymbol',
-      'stakeTokenAddress'
+      'stakeTokenAddress',
+      'oracleAddress'
     ];
     
     const differences = {};
@@ -818,6 +915,17 @@ const SettingsDialog = ({ isOpen, onClose }) => {
   const handleRemoveAssistant = (networkKey, assistantKey) => {
     removeCustomAssistantContractForNetwork(networkKey, assistantKey);
     toast.success(`Assistant ${assistantKey} removed successfully`);
+  };
+
+  // Handle assistant created from factory
+  const handleAssistantCreated = (networkKey, assistantAddress, assistantConfig) => {
+    // Generate a unique key for the new assistant
+    const assistantKey = `${assistantConfig.shareSymbol}_${assistantConfig.type.toUpperCase()}_ASSISTANT`;
+    
+    // Add the assistant to settings
+    addCustomAssistantContractForNetwork(networkKey, assistantKey, assistantConfig);
+    
+    toast.success(`Assistant ${assistantKey} added to settings`);
   };
 
   // Handle discovering bridges and assistants from registry
@@ -1971,8 +2079,58 @@ const SettingsDialog = ({ isOpen, onClose }) => {
                       />
                     </div>
                     
-                    {/* Description */}
-                    <div className="grid grid-cols-1 gap-3">
+                    {/* Oracle Address | Description */}
+                    <div className="grid grid-cols-2 gap-3">
+                      <input
+                        type="text"
+                        placeholder="Oracle Address (0x...) (required for import bridges)"
+                        value={newBridge[networkKey]?.oracleAddress || ''}
+                        onChange={async (e) => {
+                          const oracleAddress = e.target.value;
+                          setNewBridge(prev => ({ 
+                            ...prev, 
+                            [networkKey]: { ...prev[networkKey], oracleAddress }
+                          }));
+                          
+                          // Auto-verify oracle when a valid address is entered
+                          if (oracleAddress && validateContractAddress(oracleAddress)) {
+                            console.log(`🔍 Verifying oracle at: ${oracleAddress} on network: ${networkKey}`);
+                            try {
+                              // Get the appropriate provider for this network
+                              const networkProvider = getProvider(networkKey);
+                              const providerUrl = networkProvider.connection.url;
+                              console.log(`Using provider for ${networkKey}:`, providerUrl);
+                              
+                              // Show which provider is being used
+                              toast.loading(`Verifying oracle via ${providerUrl.includes('127.0.0.1') ? 'local' : 'remote'} provider...`);
+                              
+                              // Verify oracle contract exists and has expected functions
+                              const oracleContract = new ethers.Contract(oracleAddress, [
+                                'function getPrice(address token) view returns (uint256)',
+                                'function getPrice20(address token) view returns (uint256)',
+                                'function validatePrice(uint256 price) pure returns (bool)'
+                              ], networkProvider);
+                              
+                              // Try to call a basic function to verify it's a valid oracle
+                              await oracleContract.getPrice20(ethers.constants.AddressZero);
+                              
+                              toast.success(`Oracle verified successfully`);
+                              console.log(`✅ Successfully verified oracle at: ${oracleAddress}`);
+                              
+                            } catch (error) {
+                              console.warn('Oracle verification failed:', error.message);
+                              toast.error(`Oracle verification failed: ${error.message}`);
+                            }
+                          }
+                        }}
+                        className={`input-field text-sm ${
+                          newBridge[networkKey]?.oracleAddress && !validateContractAddress(newBridge[networkKey]?.oracleAddress)
+                            ? 'border-error-500'
+                            : newBridge[networkKey]?.fieldDifferences?.oracleAddress
+                            ? 'border-yellow-500 bg-yellow-50/10'
+                            : ''
+                        }`}
+                      />
                       <input
                         type="text"
                         placeholder="Description (optional)"
@@ -1984,6 +2142,28 @@ const SettingsDialog = ({ isOpen, onClose }) => {
                         className="input-field text-sm"
                       />
                     </div>
+                    
+                                            {/* Oracle Selection Help */}
+                        <div className="text-xs text-secondary-400 p-2 bg-dark-700 rounded">
+                          <p>💡 <strong>Oracle Address:</strong> Each bridge must specify which oracle it uses. You can:</p>
+                          <ul className="list-disc list-inside mt-1 space-y-1">
+                            <li>Use one of the network's configured oracles (see Oracles section above)</li>
+                            <li>Enter a custom oracle address (will be validated on-chain)</li>
+                            <li><strong>Required for import bridges</strong> - export bridges don't need oracles</li>
+                          </ul>
+                        </div>
+                    
+                    {/* Creation Date (Read-only) */}
+                    {newBridge[networkKey]?.createdAt && (
+                      <div className="grid grid-cols-1 gap-3">
+                        <div className="flex items-center gap-2 p-2 bg-dark-700 rounded border border-secondary-600">
+                          <span className="text-xs text-secondary-400">Created:</span>
+                          <span className="text-xs text-white">
+                            {new Date(newBridge[networkKey].createdAt * 1000).toLocaleString()}
+                          </span>
+                        </div>
+                      </div>
+                    )}
                     
                     {/* Address validation error messages */}
                     {((newBridge[networkKey]?.homeTokenAddress && !validateTokenAddress(newBridge[networkKey]?.homeTokenAddress)) || 
@@ -2026,6 +2206,10 @@ const SettingsDialog = ({ isOpen, onClose }) => {
                                   !validateTokenAddress(newBridge[networkKey]?.homeTokenAddress) ||
                                   !validateTokenAddress(newBridge[networkKey]?.foreignTokenAddress) ||
                                   !validateTokenAddress(newBridge[networkKey]?.stakeTokenAddress) ||
+                                  // Oracle validation: required for import bridges, optional for export bridges
+                                  (['import', 'import_wrapper'].includes(newBridge[networkKey]?.type) && 
+                                   (!newBridge[networkKey]?.oracleAddress || !validateContractAddress(newBridge[networkKey]?.oracleAddress))) ||
+                                  (newBridge[networkKey]?.oracleAddress && !validateContractAddress(newBridge[networkKey]?.oracleAddress)) ||
                                   newBridge[networkKey]?.homeTokenSymbol === 'Invalid Address' ||
                                   newBridge[networkKey]?.homeTokenSymbol === 'Error' ||
                                   newBridge[networkKey]?.foreignTokenSymbol === 'Invalid Address' ||
@@ -2055,6 +2239,18 @@ const SettingsDialog = ({ isOpen, onClose }) => {
                         Invalid bridge address
                       </p>
                             )}
+                            {newBridge[networkKey]?.oracleAddress && !validateContractAddress(newBridge[networkKey]?.oracleAddress) && (
+                      <p className="text-error-500 text-xs flex items-center gap-1">
+                        <AlertCircle className="w-3 h-3" />
+                        Invalid oracle address
+                      </p>
+                            )}
+                            {['import', 'import_wrapper'].includes(newBridge[networkKey]?.type) && !newBridge[networkKey]?.oracleAddress && (
+                      <p className="text-error-500 text-xs flex items-center gap-1">
+                        <AlertCircle className="w-3 h-3" />
+                        Oracle address is required for import bridges
+                      </p>
+                            )}
                             {newBridge[networkKey]?.alreadyExists && !newBridge[networkKey]?.needsUpdate && (
                       <p className="text-error-500 text-xs flex items-center gap-1">
                         <AlertCircle className="w-3 h-3" />
@@ -2068,6 +2264,248 @@ const SettingsDialog = ({ isOpen, onClose }) => {
                       </p>
                             )}
 
+                          </div>
+                    )}
+                  </div>
+                )}
+              </div>
+
+                  {/* Oracles for this Network */}
+                  <div className="mb-4">
+                    <div className="flex items-center justify-between mb-2">
+                      <div className="flex items-center gap-2">
+                        <Link className="w-4 h-4 text-primary-500" />
+                        <label className="text-sm font-medium text-secondary-300">
+                          Oracles
+                        </label>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <input
+                          type="checkbox"
+                          id={`customOracles-${networkKey}`}
+                          checked={settings[networkKey]?.customOracles || false}
+                          onChange={(e) => updateNetworkSetting(networkKey, 'customOracles', e.target.checked)}
+                          className="w-4 h-4 text-primary-600 bg-dark-800 border-secondary-600 rounded focus:ring-primary-500"
+                        />
+                        <label htmlFor={`customOracles-${networkKey}`} className="text-xs text-secondary-400">
+                          Custom
+                        </label>
+                      </div>
+                    </div>
+
+                    {/* Existing Oracles */}
+                    <div className="space-y-2 mb-3">
+                      {Object.entries({ 
+                        ...NETWORKS[networkKey]?.oracles || {}, 
+                        ...settings[networkKey]?.oracles || {} 
+                      }).map(([oracleKey, oracleConfig]) => (
+                        <div key={oracleKey} className="flex items-center gap-2 p-2 bg-dark-800 rounded border border-secondary-700">
+                          <div className="flex-1 min-w-0">
+                            <div className="flex items-center gap-2">
+                              <span className="text-sm font-medium text-white">{oracleKey}</span>
+                              <span className="text-xs text-secondary-400">{oracleConfig.name}</span>
+                              {settings[networkKey]?.customOracles && settings[networkKey]?.oracles?.[oracleKey] && (
+                                <span className="px-1 py-0.5 bg-yellow-600 text-white text-xs rounded-full">Custom</span>
+                              )}
+                            </div>
+                            <div className="text-xs text-secondary-500 truncate">{oracleConfig.address}</div>
+                            {oracleConfig.description && (
+                              <div className="text-xs text-secondary-400">{oracleConfig.description}</div>
+                            )}
+                          </div>
+                          <div className="flex items-center gap-1">
+                            <button
+                              onClick={() => copyToClipboard(oracleConfig.address, `${oracleKey} address`)}
+                              className="btn-secondary px-2 py-1"
+                            >
+                              {copiedField === `${oracleKey} address` ? (
+                                <CheckCircle className="w-3 h-3" />
+                              ) : (
+                                <Copy className="w-3 h-3" />
+                              )}
+                            </button>
+                            {settings[networkKey]?.customOracles && settings[networkKey]?.oracles?.[oracleKey] && (
+                              <button
+                                onClick={() => handleRemoveOracle(networkKey, oracleKey)}
+                                className="btn-error px-2 py-1"
+                                title="Remove oracle"
+                              >
+                                <Trash2 className="w-3 h-3" />
+                              </button>
+                            )}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+
+                    {/* Add New Oracle */}
+                    {settings[networkKey]?.customOracles && (
+                      <div className="space-y-3">
+                        {!showAddOracle[networkKey] ? (
+                          <button
+                            onClick={() => setShowAddOracle(prev => ({ ...prev, [networkKey]: true }))}
+                            className="btn-secondary flex items-center gap-2 w-full"
+                          >
+                            <Plus className="w-4 h-4" />
+                            Add/Update an existing Oracle
+                          </button>
+                        ) : (
+                          <div className="p-3 bg-dark-800 rounded border border-secondary-700 space-y-3">
+                            {/* Oracle Address | Oracle Name */}
+                            <div className="grid grid-cols-2 gap-3">
+                              <input
+                                type="text"
+                                placeholder="Oracle Address (0x...) (required)"
+                                value={newOracle[networkKey]?.address || ''}
+                                onChange={async (e) => {
+                                  const oracleAddress = e.target.value;
+                                  setNewOracle(prev => ({ 
+                                    ...prev, 
+                                    [networkKey]: { ...prev[networkKey], address: oracleAddress }
+                                  }));
+                                  
+                                  // Auto-verify oracle when a valid address is entered
+                                  if (oracleAddress && validateContractAddress(oracleAddress)) {
+                                    console.log(`🔍 Verifying oracle at: ${oracleAddress} on network: ${networkKey}`);
+                                    try {
+                                      // Get the appropriate provider for this network
+                                      const networkProvider = getProvider(networkKey);
+                                      const providerUrl = networkProvider.connection.url;
+                                      console.log(`Using provider for ${networkKey}:`, providerUrl);
+                                      
+                                      // Show which provider is being used
+                                      toast.loading(`Verifying oracle via ${providerUrl.includes('127.0.0.1') ? 'local' : 'remote'} provider...`);
+                                      
+                                      // Validate the oracle contract on-chain
+                                      const oracleValidation = await validateOracleContract(networkProvider, oracleAddress);
+                                      
+                                      if (oracleValidation.isValid) {
+                                        toast.success(`Oracle verified successfully`);
+                                        console.log(`✅ Successfully verified oracle at: ${oracleAddress}`);
+                                        
+                                        // Auto-generate key if not already set
+                                        if (!newOracle[networkKey]?.key) {
+                                          // Generate a unique key based on the oracle address
+                                          const shortAddress = oracleAddress.slice(2, 8); // Remove '0x' and take first 6 chars
+                                          const timestamp = Date.now().toString().slice(-4); // Last 4 digits of timestamp
+                                          const generatedKey = `oracle_${shortAddress}_${timestamp}`;
+                                          
+                                          setNewOracle(prev => ({ 
+                                            ...prev, 
+                                            [networkKey]: { 
+                                              ...prev[networkKey], 
+                                              key: generatedKey
+                                            }
+                                          }));
+                                        }
+                                        
+                                        // Auto-generate description if not already set
+                                        if (!newOracle[networkKey]?.description) {
+                                          setNewOracle(prev => ({ 
+                                            ...prev, 
+                                            [networkKey]: { 
+                                              ...prev[networkKey], 
+                                              description: `Verified oracle contract at ${oracleAddress}` 
+                                            }
+                                          }));
+                                        }
+                                        
+                                        // Auto-generate name if not already set
+                                        if (!newOracle[networkKey]?.name) {
+                                          setNewOracle(prev => ({ 
+                                            ...prev, 
+                                            [networkKey]: { 
+                                              ...prev[networkKey], 
+                                              name: `Oracle ${oracleAddress.slice(0, 8)}...` 
+                                            }
+                                          }));
+                                        }
+                                      } else {
+                                        toast.error(`Oracle verification failed: ${oracleValidation.error}`);
+                                        console.warn('Oracle verification failed:', oracleValidation.error);
+                                      }
+                                    } catch (error) {
+                                      console.warn('Oracle verification failed:', error.message);
+                                      toast.error(`Oracle verification failed: ${error.message}`);
+                                    }
+                                  }
+                                }}
+                                className={`input-field text-sm ${
+                                  newOracle[networkKey]?.address && !validateContractAddress(newOracle[networkKey]?.address)
+                                    ? 'border-error-500'
+                                    : ''
+                                }`}
+                              />
+                              <input
+                                type="text"
+                                placeholder="Oracle Name (e.g., Backup Oracle) *"
+                                value={newOracle[networkKey]?.name || ''}
+                                onChange={(e) => setNewOracle(prev => ({ 
+                                  ...prev, 
+                                  [networkKey]: { ...prev[networkKey], name: e.target.value }
+                                }))}
+                                className="input-field text-sm"
+                              />
+                            </div>
+                            
+                            {/* Oracle Key | Description */}
+                            <div className="grid grid-cols-2 gap-3">
+                              <input
+                                type="text"
+                                placeholder="Oracle Key (e.g., backup, secondary) *"
+                                value={newOracle[networkKey]?.key || ''}
+                                onChange={(e) => setNewOracle(prev => ({ 
+                                  ...prev, 
+                                  [networkKey]: { ...prev[networkKey], key: e.target.value }
+                                }))}
+                                className="input-field text-sm"
+                              />
+                              <input
+                                type="text"
+                                placeholder="Description (optional)"
+                                value={newOracle[networkKey]?.description || ''}
+                                onChange={(e) => setNewOracle(prev => ({ 
+                                  ...prev, 
+                                  [networkKey]: { ...prev[networkKey], description: e.target.value }
+                                }))}
+                                className="input-field text-sm"
+                              />
+                            </div>
+                            
+
+                            
+                            {/* Action Buttons */}
+                            <div className="flex gap-2">
+                              <button
+                                onClick={() => handleAddOracle(networkKey)}
+                                disabled={
+                                  !newOracle[networkKey]?.key ||
+                                  !newOracle[networkKey]?.address ||
+                                  !newOracle[networkKey]?.name ||
+                                  !validateContractAddress(newOracle[networkKey]?.address)
+                                }
+                                className="btn-primary px-3 disabled:opacity-50 disabled:cursor-not-allowed"
+                              >
+                                Save
+                              </button>
+                              <button
+                                onClick={() => {
+                                  setShowAddOracle(prev => ({ ...prev, [networkKey]: false }));
+                                  setNewOracle(prev => ({ ...prev, [networkKey]: {} }));
+                                }}
+                                className="btn-outline px-3"
+                              >
+                                Cancel
+                              </button>
+                            </div>
+                            
+                            {/* Validation Error Messages */}
+                            {newOracle[networkKey]?.address && !validateContractAddress(newOracle[networkKey]?.address) && (
+                              <p className="text-error-500 text-xs flex items-center gap-1">
+                                <AlertCircle className="w-3 h-3" />
+                                Invalid oracle address
+                              </p>
+                            )}
                           </div>
                     )}
                   </div>
@@ -2216,6 +2654,7 @@ const SettingsDialog = ({ isOpen, onClose }) => {
                     {settings[networkKey]?.customAssistants && (
                       <div className="space-y-3">
                         {!showAddAssistant[networkKey] ? (
+                          <div className="space-y-2">
                           <button
                             onClick={() => setShowAddAssistant(prev => ({ ...prev, [networkKey]: true }))}
                     className="btn-secondary flex items-center gap-2 w-full"
@@ -2223,6 +2662,14 @@ const SettingsDialog = ({ isOpen, onClose }) => {
                     <Plus className="w-4 h-4" />
                     Add/Update an existing Assistant
                   </button>
+                            <button
+                              onClick={() => setShowCreateAssistant(prev => ({ ...prev, [networkKey]: true }))}
+                              className="btn-primary flex items-center gap-2 w-full"
+                            >
+                              <Plus className="w-4 h-4" />
+                              Create new Assistant from Factory
+                            </button>
+                          </div>
                 ) : (
                           <div className="p-3 bg-dark-800 rounded border border-secondary-700 space-y-3">
                     <div className="grid grid-cols-2 gap-3">
@@ -2427,6 +2874,19 @@ const SettingsDialog = ({ isOpen, onClose }) => {
                       className="input-field text-sm"
                     />
                     </div>
+                    
+                    {/* Creation Date (Read-only) */}
+                    {newAssistant[networkKey]?.createdAt && (
+                      <div className="grid grid-cols-1 gap-3">
+                        <div className="flex items-center gap-2 p-2 bg-dark-700 rounded border border-secondary-600">
+                          <span className="text-xs text-secondary-400">Created:</span>
+                          <span className="text-xs text-white">
+                            {new Date(newAssistant[networkKey].createdAt * 1000).toLocaleString()}
+                          </span>
+                        </div>
+                      </div>
+                    )}
+                    
                     <div className="flex gap-2">
                       <button
                                 onClick={() => handleAddAssistant(networkKey)}
@@ -2558,6 +3018,20 @@ const SettingsDialog = ({ isOpen, onClose }) => {
           </div>
         </motion.div>
       </motion.div>
+
+      {/* Create New Assistant Dialog */}
+      {Object.entries(NETWORKS).map(([networkKey, networkConfig]) => (
+        showCreateAssistant[networkKey] && (
+          <CreateNewAssistant
+            key={networkKey}
+            networkKey={networkKey}
+            onClose={() => setShowCreateAssistant(prev => ({ ...prev, [networkKey]: false }))}
+            onAssistantCreated={(assistantAddress, assistantConfig) => 
+              handleAssistantCreated(networkKey, assistantAddress, assistantConfig)
+            }
+          />
+        )
+      ))}
     </AnimatePresence>
   );
 };

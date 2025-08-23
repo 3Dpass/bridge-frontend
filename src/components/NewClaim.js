@@ -1,9 +1,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { useWeb3 } from '../contexts/Web3Context';
+import { useSettings } from '../contexts/SettingsContext';
 import { NETWORKS } from '../config/networks';
-import { 
-  getBridgeInstances
-} from '../config/networks';
 import { 
   get3DPassTokenMetadata, 
   get3DPassTokenBalance,
@@ -29,6 +27,7 @@ import toast from 'react-hot-toast';
 
 const NewClaim = ({ isOpen, onClose, selectedToken = null }) => {
   const { account, provider, network, isConnected, signer } = useWeb3();
+  const { getBridgeInstancesWithSettings } = useSettings();
   
   // Form state
   const [formData, setFormData] = useState({
@@ -132,7 +131,7 @@ const NewClaim = ({ isOpen, onClose, selectedToken = null }) => {
     const tokenSymbol = getTokenSymbolFromPrecompile(formData.tokenAddress);
     if (!tokenSymbol) return;
 
-    const allBridges = getBridgeInstances();
+    const allBridges = getBridgeInstancesWithSettings();
     console.log('🔍 determineBridge called with:', { tokenAddress: formData.tokenAddress, tokenSymbol });
     console.log('📋 All available bridges:', allBridges);
     console.log('📋 Bridge keys:', Object.keys(allBridges));
@@ -208,7 +207,7 @@ const NewClaim = ({ isOpen, onClose, selectedToken = null }) => {
 
     console.log('❌ No bridge found for token:', tokenSymbol);
     setSelectedBridge(null);
-  }, [formData.tokenAddress]);
+  }, [formData.tokenAddress, getBridgeInstancesWithSettings]);
 
   // Load required stake with a specific amount
   const loadRequiredStakeWithAmount = useCallback(async (amount) => {

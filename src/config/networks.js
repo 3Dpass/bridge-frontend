@@ -11,6 +11,8 @@ export const NETWORKS = {
     rpcUrl: 'https://mainnet.infura.io/v3/a68b71d194e7493db5231530985b00b7',
     explorer: 'https://etherscan.io',
     erc20Precompile: false,
+    isHybrid: false,
+    isEVM: true,
     nativeCurrency: {
       name: 'Ether',
       symbol: 'ETH',
@@ -20,8 +22,14 @@ export const NETWORKS = {
       // Official Counterstake Bridge contract addresses
       exportFactory: '0x74aF8A878317E0F6e72e302FbcDF5f3009186398', // ETHEREUM_BRIDGE_FACTORY
       importFactory: '0xf7742caF6Dae87AE6D6fbE70F8aD002a3f1952b9', // ETHEREUM_BRIDGE_FACTORY (same for import)
-      oracle: '0xAC4AA997A171A6CbbF5540D08537D5Cb1605E191', // ETHEREUM oracle
       assistantFactory: '0x0aD0Cce772ffcF8f9e70031cC8c1b7c20af5212F', // ETHEREUM_ASSISTANT_FACTORY
+    },
+    oracles: {
+      default: {
+        address: '0xAC4AA997A171A6CbbF5540D08537D5Cb1605E191', // ETHEREUM oracle
+        name: 'Ethereum Oracle',
+        description: 'Main oracle for Ethereum price feeds',
+      },
     },
     tokens: {
       ETH: {
@@ -146,6 +154,7 @@ export const NETWORKS = {
         foreignTokenAddress: '0x1234567890123456789012345678901234567890',
         stakeTokenSymbol: 'ETH',
         stakeTokenAddress: ADDRESS_ZERO,
+        oracleAddress: '0xAC4AA997A171A6CbbF5540D08537D5Cb1605E191',
         description: 'wP3D Import Bridge (Ethereum → 3DPass)',
         isIssuerBurner: true
       },
@@ -160,6 +169,7 @@ export const NETWORKS = {
         foreignTokenAddress: '0x2345678901234567890123456789012345678901',
         stakeTokenSymbol: 'ETH',
         stakeTokenAddress: ADDRESS_ZERO,
+        oracleAddress: '0xAC4AA997A171A6CbbF5540D08537D5Cb1605E191',
         description: 'wFIRE Import Bridge (Ethereum → 3DPass)',
         isIssuerBurner: true
       },
@@ -174,6 +184,7 @@ export const NETWORKS = {
         foreignTokenAddress: '0x3456789012345678901234567890123456789012',
         stakeTokenSymbol: 'ETH',
         stakeTokenAddress: ADDRESS_ZERO,
+        oracleAddress: '0xAC4AA997A171A6CbbF5540D08537D5Cb1605E191',
         description: 'wWATER Import Bridge (Ethereum → 3DPass)',
         isIssuerBurner: true
       }
@@ -207,7 +218,8 @@ export const NETWORKS = {
     symbol: 'BSC',
     rpcUrl: 'https://bsc-dataseed1.binance.org',
     explorer: 'https://bscscan.com',
-    isHybrid: false,
+    isHybrid: true,
+    isEVM: true,
     erc20Precompile: false,
     nativeCurrency: {
       name: 'BNB',
@@ -218,8 +230,14 @@ export const NETWORKS = {
       // Official Counterstake Bridge contract addresses
       exportFactory: '0xa5893a1A1FF15031d8AB5aC24531D3B3418612EE', // BSC_BRIDGE_FACTORY
       importFactory: '0x0aD0Cce772ffcF8f9e70031cC8c1b7c20af5212F', // BSC_BRIDGE_FACTORY (same for import)
-      oracle: '0xdD52899A001a4260CDc43307413A5014642f37A2', // BSC oracle
       assistantFactory: '0x9F60328982ab3e34020A9D43763db43d03Add7CF', // BSC_ASSISTANT_FACTORY
+    },
+    oracles: {
+      default: {
+        address: '0xdD52899A001a4260CDc43307413A5014642f37A2', // BSC oracle
+        name: 'BSC Oracle',
+        description: 'Main oracle for BSC price feeds',
+      },
     },
     tokens: {
       BNB: {
@@ -296,6 +314,7 @@ export const NETWORKS = {
     rpcUrl: 'http://127.0.0.1:9978',
     explorer: 'https://3dpscan.xyz',
     isHybrid: true,
+    isEVM: true,
     erc20Precompile: true,
     nativeCurrency: {
       name: 'P3D',
@@ -307,8 +326,14 @@ export const NETWORKS = {
       bridgesRegistry: '0xBDe856499b710dc8E428a6B616A4260AAFa60dd0', // BridgesRegistry from deployment
       exportFactory: '0x1445f694117d847522b81A97881850DbB965db9A', // CounterstakeFactory from deployment
       importFactory: '0x1445f694117d847522b81A97881850DbB965db9A', // Same factory for both
-      oracle: '0xAc647d0caB27e912C844F27716154f54EDD519cE', // Oracle from deployment
       assistantFactory: '0x20bc80863d472aBafE45a6c6Fad87236960f6ac2', // AssistantFactory from deployment
+    },
+    oracles: {
+      default: {
+        address: '0xAc647d0caB27e912C844F27716154f54EDD519cE', // Oracle from deployment
+        name: 'Default Oracle',
+        description: 'Main oracle for price feeds',
+      },
     },
     tokens: {
       P3D: {
@@ -477,6 +502,7 @@ export const NETWORKS = {
       foreignTokenAddress: '0xfBFBfbFA000000000000000000000000000000de',
       stakeTokenSymbol: 'P3D',
       stakeTokenAddress: P3D_PRECOMPILE_ADDRESS,
+      oracleAddress: '0xAc647d0caB27e912C844F27716154f54EDD519cE',
       description: 'USDT Import Wrapper Bridge (Ethereum → 3DPass)',
       isIssuerBurner: true
     },
@@ -491,13 +517,14 @@ export const NETWORKS = {
       foreignTokenAddress: '0xFbfbFBfA0000000000000000000000000000006f',
       stakeTokenSymbol: 'P3D',
       stakeTokenAddress: P3D_PRECOMPILE_ADDRESS,
+      oracleAddress: '0xAc647d0caB27e912C844F27716154f54EDD519cE',
       description: 'USDC Import Wrapper Bridge (Ethereum → 3DPass)',
       isIssuerBurner: true
     },
     BUSD_IMPORT: {
       address: '0xccDdB081d48D7F312846ea4ECF18A963455c3C71',
       type: 'import_wrapper',
-        homeNetwork: 'Binance Smart Chain',
+      homeNetwork: 'Binance Smart Chain',
       homeTokenSymbol: 'BUSD',
       homeTokenAddress: '0xe9e7CEA3DedcA5984780Bafc599bD69ADd087D56',
       foreignNetwork: '3DPass',
@@ -505,7 +532,8 @@ export const NETWORKS = {
       foreignTokenAddress: '0xFbFBFBfA0000000000000000000000000000014D',
       stakeTokenSymbol: 'P3D',
       stakeTokenAddress: P3D_PRECOMPILE_ADDRESS,
-        description: 'BUSD Import Wrapper Bridge (Binance Smart Chain → 3DPass)',
+      oracleAddress: '0xAc647d0caB27e912C844F27716154f54EDD519cE',
+      description: 'BUSD Import Wrapper Bridge (Binance Smart Chain → 3DPass)',
       isIssuerBurner: true
       }
     },

@@ -6,6 +6,7 @@ import {
 } from '../contracts/abi';
 import { autoDetectToken } from './token-detector';
 import { NETWORKS } from '../config/networks';
+import { hasBridgesRegistry, getAssistantInfoFromRegistry } from './update-bridge-info';
 
 /**
  * Assistant type detection based on assistant contract
@@ -483,6 +484,30 @@ export const autoDetectAssistantWithBridge = async (provider, assistantAddress, 
     // Generate unique assistant key
     const assistantKey = generateAssistantKey(assistantConfig, existingAssistants);
     assistantConfig.key = assistantKey;
+
+    // Try to fetch createdAt from bridge registry if available
+    let createdAt = null;
+    if (hasBridgesRegistry(networkSymbol)) {
+      try {
+        const networkConfig = NETWORKS[networkSymbol];
+        const registryAddress = networkConfig.contracts.bridgesRegistry;
+        console.log(`🔍 Fetching createdAt from bridge registry for assistant: ${registryAddress}`);
+        
+        const registryInfo = await getAssistantInfoFromRegistry(provider, registryAddress, assistantAddress);
+        if (registryInfo && registryInfo.createdAt) {
+          createdAt = registryInfo.createdAt;
+          console.log(`✅ Fetched createdAt from registry for assistant: ${createdAt} (${new Date(createdAt * 1000).toISOString()})`);
+        }
+      } catch (error) {
+        console.warn(`⚠️ Failed to fetch createdAt from registry for assistant: ${error.message}`);
+        // Don't fail the entire detection if registry lookup fails
+      }
+    }
+
+    // Add createdAt to assistant config if available
+    if (createdAt) {
+      assistantConfig.createdAt = createdAt;
+    }
 
     return {
       success: true,

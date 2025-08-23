@@ -48,9 +48,15 @@ export const SettingsProvider = ({ children }) => {
           rpcUrl: network.rpcUrl,
           contracts: { ...network.contracts },
           tokens: { ...network.tokens },
+          isEVM: network.isEVM,
+          oracles: { ...network.oracles },
+          createdAt: network.createdAt,
           customRpc: false,
           customContracts: false,
           customTokens: false,
+          customIsEVM: false,
+          customOracles: false,
+          customCreatedAt: false,
         };
       });
       setSettings(defaultSettings);
@@ -91,6 +97,74 @@ export const SettingsProvider = ({ children }) => {
           ...prev[networkKey]?.contracts,
           [contractType]: address,
         }
+      }
+    }));
+  }, []);
+
+  // Update isEVM setting for a network
+  const updateIsEVMSetting = useCallback((networkKey, isEVM) => {
+    setSettings(prev => ({
+      ...prev,
+      [networkKey]: {
+        ...prev[networkKey],
+        isEVM: isEVM,
+        customIsEVM: true,
+      }
+    }));
+  }, []);
+
+  // Update oracles for a network
+  const updateOracles = useCallback((networkKey, oracles) => {
+    setSettings(prev => ({
+      ...prev,
+      [networkKey]: {
+        ...prev[networkKey],
+        oracles: oracles,
+        customOracles: true,
+      }
+    }));
+  }, []);
+
+  // Add or update a specific oracle for a network
+  const updateOracle = useCallback((networkKey, oracleKey, oracleConfig) => {
+    setSettings(prev => ({
+      ...prev,
+      [networkKey]: {
+        ...prev[networkKey],
+        oracles: {
+          ...prev[networkKey]?.oracles,
+          [oracleKey]: oracleConfig,
+        },
+        customOracles: true,
+      }
+    }));
+  }, []);
+
+  // Remove a specific oracle from a network
+  const removeOracle = useCallback((networkKey, oracleKey) => {
+    setSettings(prev => {
+      const newOracles = { ...prev[networkKey]?.oracles };
+      delete newOracles[oracleKey];
+      
+      return {
+        ...prev,
+        [networkKey]: {
+          ...prev[networkKey],
+          oracles: newOracles,
+          customOracles: Object.keys(newOracles).length > 0,
+        }
+      };
+    });
+  }, []);
+
+  // Update createdAt for a network
+  const updateCreatedAt = useCallback((networkKey, createdAt) => {
+    setSettings(prev => ({
+      ...prev,
+      [networkKey]: {
+        ...prev[networkKey],
+        createdAt: createdAt,
+        customCreatedAt: true,
       }
     }));
   }, []);
@@ -246,9 +320,15 @@ export const SettingsProvider = ({ children }) => {
           rpcUrl: network.rpcUrl,
           contracts: { ...network.contracts },
           tokens: { ...network.tokens },
+          isEVM: network.isEVM,
+          oracles: { ...network.oracles },
+          createdAt: network.createdAt,
           customRpc: false,
           customContracts: false,
           customTokens: false,
+          customIsEVM: false,
+          customOracles: false,
+          customCreatedAt: false,
         };
       });
       setSettings(defaultSettings);
@@ -271,9 +351,15 @@ export const SettingsProvider = ({ children }) => {
           rpcUrl: network.rpcUrl,
           contracts: { ...network.contracts },
           tokens: { ...network.tokens },
+          isEVM: network.isEVM,
+          oracles: { ...network.oracles },
+          createdAt: network.createdAt,
           customRpc: false,
           customContracts: false,
           customTokens: false,
+          customIsEVM: false,
+          customOracles: false,
+          customCreatedAt: false,
         }
       }));
       return { success: true };
@@ -317,6 +403,24 @@ export const SettingsProvider = ({ children }) => {
         ...customNetwork.tokens,
         ...networkSettings.tokens,
       };
+    }
+
+    // Apply custom isEVM if enabled
+    if (networkSettings.customIsEVM !== undefined) {
+      customNetwork.isEVM = networkSettings.isEVM;
+    }
+
+    // Apply custom oracles if enabled
+    if (networkSettings.customOracles && networkSettings.oracles) {
+      customNetwork.oracles = {
+        ...customNetwork.oracles,
+        ...networkSettings.oracles,
+      };
+    }
+
+    // Apply custom createdAt if enabled
+    if (networkSettings.customCreatedAt !== undefined) {
+      customNetwork.createdAt = networkSettings.createdAt;
     }
 
     return customNetwork;
@@ -637,6 +741,11 @@ export const SettingsProvider = ({ children }) => {
     saveSettings,
     updateNetworkSetting,
     updateContractAddress,
+    updateIsEVMSetting,
+    updateOracles,
+    updateOracle,
+    removeOracle,
+    updateCreatedAt,
     updateTokenConfig,
     addCustomToken,
     removeCustomToken,

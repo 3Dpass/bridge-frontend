@@ -70,6 +70,24 @@ export const getNetworkWithSettings = (networkKey) => {
     };
   }
 
+  // Apply custom isEVM if enabled
+  if (networkSettings.customIsEVM !== undefined) {
+    customNetwork.isEVM = networkSettings.isEVM;
+  }
+
+  // Apply custom oracles if enabled
+  if (networkSettings.customOracles && networkSettings.oracles) {
+    customNetwork.oracles = {
+      ...customNetwork.oracles,
+      ...networkSettings.oracles,
+    };
+  }
+
+  // Apply custom createdAt if enabled
+  if (networkSettings.customCreatedAt !== undefined) {
+    customNetwork.createdAt = networkSettings.createdAt;
+  }
+
   return customNetwork;
 };
 
