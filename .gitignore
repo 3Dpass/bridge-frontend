@@ -85,7 +85,7 @@ jspm_packages/
 
 # Gatsby files
 .cache/
-public
+# public/  # Commented out since we want to track public/index.html and public/logo.svg
 
 # Storybook build outputs
 .out
