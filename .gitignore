@@ -97,6 +97,7 @@ temp/
 
 # Truffle build artifacts
 build/contracts/
+src/contracts/evm_substrate/build/
 
 # Hardhat artifacts
 artifacts/
