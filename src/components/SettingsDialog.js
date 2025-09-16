@@ -28,6 +28,7 @@ import {
   RefreshCw
 } from 'lucide-react';
 import CreateNewAssistant from './CreateNewAssistant';
+import CreateNewBridge from './CreateNewBridge';
 import { motion, AnimatePresence } from 'framer-motion';
 import toast from 'react-hot-toast';
 
@@ -61,6 +62,7 @@ const SettingsDialog = ({ isOpen, onClose }) => {
   const [newAssistant, setNewAssistant] = useState({});
   const [detectedTokens, setDetectedTokens] = useState({});
   const [showCreateAssistant, setShowCreateAssistant] = useState({});
+  const [showCreateBridge, setShowCreateBridge] = useState({});
   const [showAddOracle, setShowAddOracle] = useState({});
   const [newOracle, setNewOracle] = useState({});
 
@@ -572,6 +574,11 @@ const SettingsDialog = ({ isOpen, onClose }) => {
 
   // Compare bridge data to detect differences
   const compareBridgeData = (existingBridge, detectedBridge) => {
+    console.log(`🔍 Comparing bridge data:`, {
+      existing: existingBridge,
+      detected: detectedBridge
+    });
+    
     const fieldsToCompare = [
       'type',
       'homeNetwork',
@@ -589,17 +596,30 @@ const SettingsDialog = ({ isOpen, onClose }) => {
     let hasDifferences = false;
     
     for (const field of fieldsToCompare) {
-      const existingValue = existingBridge[field];
-      const detectedValue = detectedBridge[field];
+      let existingValue = existingBridge[field];
+      let detectedValue = detectedBridge[field];
+      
+      // Special handling for oracleAddress field
+      if (field === 'oracleAddress') {
+        // For export bridges, both null and undefined should be considered equivalent
+        if (existingBridge.type === 'export' || detectedBridge.type === 'export') {
+          // Normalize null/undefined to null for export bridges
+          existingValue = existingValue || null;
+          detectedValue = detectedValue || null;
+        }
+      }
       
       if (existingValue !== detectedValue) {
         differences[field] = true;
         hasDifferences = true;
-        console.log(`🔍 Bridge data mismatch in ${field}: existing="${existingValue}" vs detected="${detectedValue}"`);
+        console.log(`🔍 Bridge data mismatch in ${field}: existing="${existingValue}" (${typeof existingValue}) vs detected="${detectedValue}" (${typeof detectedValue})`);
       } else {
         differences[field] = false;
+        console.log(`✅ Bridge data match in ${field}: "${existingValue}"`);
       }
     }
+    
+    console.log(`🔍 Bridge comparison result: hasDifferences=${hasDifferences}`, differences);
     
     return {
       hasDifferences,
@@ -926,6 +946,17 @@ const SettingsDialog = ({ isOpen, onClose }) => {
     addCustomAssistantContractForNetwork(networkKey, assistantKey, assistantConfig);
     
     toast.success(`Assistant ${assistantKey} added to settings`);
+  };
+
+  // Handle bridge created from factory
+  const handleBridgeCreated = (networkKey, bridgeAddress, bridgeConfig) => {
+    // Generate a unique key for the new bridge
+    const bridgeKey = `${bridgeConfig.homeAsset}_${bridgeConfig.foreignAsset}_${bridgeConfig.type.toUpperCase()}`;
+    
+    // Add the bridge to settings
+    addCustomBridgeInstanceForNetwork(networkKey, bridgeKey, bridgeConfig);
+    
+    toast.success(`Bridge ${bridgeKey} added to settings`);
   };
 
   // Handle discovering bridges and assistants from registry
@@ -1354,7 +1385,7 @@ const SettingsDialog = ({ isOpen, onClose }) => {
                             className="btn-secondary flex items-center gap-2 w-full"
                           >
                             <Plus className="w-4 h-4" />
-                            Add/Update an existing Token
+                            Add an existing Token
                           </button>
                         ) : (
                           <div className="p-3 bg-dark-800 rounded border border-secondary-700 space-y-3">
@@ -1786,13 +1817,22 @@ const SettingsDialog = ({ isOpen, onClose }) => {
                     {settings[networkKey]?.customBridges && (
                       <div className="space-y-3">
                         {!showAddBridge[networkKey] ? (
+                          <div className="space-y-3">
                               <button
                             onClick={() => setShowAddBridge(prev => ({ ...prev, [networkKey]: true }))}
                     className="btn-secondary flex items-center gap-2 w-full"
                   >
                     <Plus className="w-4 h-4" />
-                    Add/Update an existing Bridge
+                    Add an existing Bridge
                   </button>
+                            <button
+                              onClick={() => setShowCreateBridge(prev => ({ ...prev, [networkKey]: true }))}
+                              className="btn-primary flex items-center gap-2 w-full"
+                            >
+                              <Plus className="w-4 h-4" />
+                              Create new Bridge from Factory
+                            </button>
+                          </div>
                 ) : (
                           <div className="p-3 bg-dark-800 rounded border border-secondary-700 space-y-3">
                     {/* Bridge Address */}
@@ -2079,79 +2119,99 @@ const SettingsDialog = ({ isOpen, onClose }) => {
                       />
                     </div>
                     
-                    {/* Oracle Address | Description */}
-                    <div className="grid grid-cols-2 gap-3">
-                      <input
-                        type="text"
-                        placeholder="Oracle Address (0x...) (required for import bridges)"
-                        value={newBridge[networkKey]?.oracleAddress || ''}
-                        onChange={async (e) => {
-                          const oracleAddress = e.target.value;
-                          setNewBridge(prev => ({ 
-                            ...prev, 
-                            [networkKey]: { ...prev[networkKey], oracleAddress }
-                          }));
-                          
-                          // Auto-verify oracle when a valid address is entered
-                          if (oracleAddress && validateContractAddress(oracleAddress)) {
-                            console.log(`🔍 Verifying oracle at: ${oracleAddress} on network: ${networkKey}`);
-                            try {
-                              // Get the appropriate provider for this network
-                              const networkProvider = getProvider(networkKey);
-                              const providerUrl = networkProvider.connection.url;
-                              console.log(`Using provider for ${networkKey}:`, providerUrl);
+                    {/* Oracle Address | Description - Only show for import bridges */}
+                    {['import', 'import_wrapper'].includes(newBridge[networkKey]?.type) && (
+                      <>
+                        <div className="grid grid-cols-2 gap-3">
+                          <input
+                            type="text"
+                            placeholder="Oracle Address (0x...) (required for import bridges)"
+                            value={newBridge[networkKey]?.oracleAddress || ''}
+                            onChange={async (e) => {
+                              const oracleAddress = e.target.value;
+                              setNewBridge(prev => ({ 
+                                ...prev, 
+                                [networkKey]: { ...prev[networkKey], oracleAddress }
+                              }));
                               
-                              // Show which provider is being used
-                              toast.loading(`Verifying oracle via ${providerUrl.includes('127.0.0.1') ? 'local' : 'remote'} provider...`);
-                              
-                              // Verify oracle contract exists and has expected functions
-                              const oracleContract = new ethers.Contract(oracleAddress, [
-                                'function getPrice(address token) view returns (uint256)',
-                                'function getPrice20(address token) view returns (uint256)',
-                                'function validatePrice(uint256 price) pure returns (bool)'
-                              ], networkProvider);
-                              
-                              // Try to call a basic function to verify it's a valid oracle
-                              await oracleContract.getPrice20(ethers.constants.AddressZero);
-                              
-                              toast.success(`Oracle verified successfully`);
-                              console.log(`✅ Successfully verified oracle at: ${oracleAddress}`);
-                              
-                            } catch (error) {
-                              console.warn('Oracle verification failed:', error.message);
-                              toast.error(`Oracle verification failed: ${error.message}`);
-                            }
-                          }
-                        }}
-                        className={`input-field text-sm ${
-                          newBridge[networkKey]?.oracleAddress && !validateContractAddress(newBridge[networkKey]?.oracleAddress)
-                            ? 'border-error-500'
-                            : newBridge[networkKey]?.fieldDifferences?.oracleAddress
-                            ? 'border-yellow-500 bg-yellow-50/10'
-                            : ''
-                        }`}
-                      />
-                      <input
-                        type="text"
-                        placeholder="Description (optional)"
-                                value={newBridge[networkKey]?.description || ''}
-                                onChange={(e) => setNewBridge(prev => ({ 
-                                  ...prev, 
-                                  [networkKey]: { ...prev[networkKey], description: e.target.value }
-                                }))}
-                        className="input-field text-sm"
-                      />
-                    </div>
-                    
-                                            {/* Oracle Selection Help */}
+                              // Auto-verify oracle when a valid address is entered
+                              if (oracleAddress && validateContractAddress(oracleAddress)) {
+                                console.log(`🔍 Verifying oracle at: ${oracleAddress} on network: ${networkKey}`);
+                                try {
+                                  // Get the appropriate provider for this network
+                                  const networkProvider = getProvider(networkKey);
+                                  const providerUrl = networkProvider.connection.url;
+                                  console.log(`Using provider for ${networkKey}:`, providerUrl);
+                                  
+                                  // Show which provider is being used
+                                  toast.loading(`Verifying oracle via ${providerUrl.includes('127.0.0.1') ? 'local' : 'remote'} provider...`);
+                                  
+                                  // Verify oracle contract exists and has expected functions
+                                  const oracleContract = new ethers.Contract(oracleAddress, [
+                                    'function getPrice(address token) view returns (uint256)',
+                                    'function getPrice20(address token) view returns (uint256)',
+                                    'function validatePrice(uint256 price) pure returns (bool)'
+                                  ], networkProvider);
+                                  
+                                  // Try to call a basic function to verify it's a valid oracle
+                                  await oracleContract.getPrice20(ethers.constants.AddressZero);
+                                  
+                                  toast.success(`Oracle verified successfully`);
+                                  console.log(`✅ Successfully verified oracle at: ${oracleAddress}`);
+                                  
+                                } catch (error) {
+                                  console.warn('Oracle verification failed:', error.message);
+                                  toast.error(`Oracle verification failed: ${error.message}`);
+                                }
+                              }
+                            }}
+                            className={`input-field text-sm ${
+                              newBridge[networkKey]?.oracleAddress && !validateContractAddress(newBridge[networkKey]?.oracleAddress)
+                                ? 'border-error-500'
+                                : newBridge[networkKey]?.fieldDifferences?.oracleAddress
+                                ? 'border-yellow-500 bg-yellow-50/10'
+                                : ''
+                            }`}
+                          />
+                          <input
+                            type="text"
+                            placeholder="Description (optional)"
+                                    value={newBridge[networkKey]?.description || ''}
+                                    onChange={(e) => setNewBridge(prev => ({ 
+                                      ...prev, 
+                                      [networkKey]: { ...prev[networkKey], description: e.target.value }
+                                    }))}
+                            className="input-field text-sm"
+                          />
+                        </div>
+                        
+                        {/* Oracle Selection Help */}
                         <div className="text-xs text-secondary-400 p-2 bg-dark-700 rounded">
-                          <p>💡 <strong>Oracle Address:</strong> Each bridge must specify which oracle it uses. You can:</p>
+                          <p>💡 <strong>Oracle Address:</strong> Import bridges must specify which oracle they use. You can:</p>
                           <ul className="list-disc list-inside mt-1 space-y-1">
                             <li>Use one of the network's configured oracles (see Oracles section above)</li>
                             <li>Enter a custom oracle address (will be validated on-chain)</li>
-                            <li><strong>Required for import bridges</strong> - export bridges don't need oracles</li>
+                            <li><strong>Required for import bridges</strong> - used for price validation</li>
                           </ul>
                         </div>
+                      </>
+                    )}
+                    
+                    {/* Description field for export bridges (when oracle field is hidden) */}
+                    {!['import', 'import_wrapper'].includes(newBridge[networkKey]?.type) && (
+                      <div className="grid grid-cols-1 gap-3">
+                        <input
+                          type="text"
+                          placeholder="Description (optional)"
+                          value={newBridge[networkKey]?.description || ''}
+                          onChange={(e) => setNewBridge(prev => ({ 
+                            ...prev, 
+                            [networkKey]: { ...prev[networkKey], description: e.target.value }
+                          }))}
+                          className="input-field text-sm"
+                        />
+                      </div>
+                    )}
                     
                     {/* Creation Date (Read-only) */}
                     {newBridge[networkKey]?.createdAt && (
@@ -2347,7 +2407,7 @@ const SettingsDialog = ({ isOpen, onClose }) => {
                             className="btn-secondary flex items-center gap-2 w-full"
                           >
                             <Plus className="w-4 h-4" />
-                            Add/Update an existing Oracle
+                            Add an existing Oracle
                           </button>
                         ) : (
                           <div className="p-3 bg-dark-800 rounded border border-secondary-700 space-y-3">
@@ -2580,7 +2640,7 @@ const SettingsDialog = ({ isOpen, onClose }) => {
                               )}
                             </div>
                             <div className="flex items-center gap-1">
-                  <button
+                              <button
                                 onClick={() => copyToClipboard(assistantConfig.address, `${assistantKey} address`)}
                                 className="btn-secondary px-1 py-0.5"
                               >
@@ -2660,7 +2720,7 @@ const SettingsDialog = ({ isOpen, onClose }) => {
                     className="btn-secondary flex items-center gap-2 w-full"
                   >
                     <Plus className="w-4 h-4" />
-                    Add/Update an existing Assistant
+                    Add an existing Assistant
                   </button>
                             <button
                               onClick={() => setShowCreateAssistant(prev => ({ ...prev, [networkKey]: true }))}
@@ -3028,6 +3088,20 @@ const SettingsDialog = ({ isOpen, onClose }) => {
             onClose={() => setShowCreateAssistant(prev => ({ ...prev, [networkKey]: false }))}
             onAssistantCreated={(assistantAddress, assistantConfig) => 
               handleAssistantCreated(networkKey, assistantAddress, assistantConfig)
+            }
+          />
+        )
+      ))}
+
+      {/* Create New Bridge Dialog */}
+      {Object.entries(NETWORKS).map(([networkKey, networkConfig]) => (
+        showCreateBridge[networkKey] && (
+          <CreateNewBridge
+            key={networkKey}
+            networkKey={networkKey}
+            onClose={() => setShowCreateBridge(prev => ({ ...prev, [networkKey]: false }))}
+            onBridgeCreated={(bridgeAddress, bridgeConfig) => 
+              handleBridgeCreated(networkKey, bridgeAddress, bridgeConfig)
             }
           />
         )

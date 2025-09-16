@@ -77,28 +77,22 @@ function App() {
                 </p>
               </motion.div>
 
-              <div className="grid grid-cols-1 md:grid-cols-4 gap-8">
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-8">
                 {[
                   {
                     step: '1',
                     title: 'Initiate Transfer',
-                    description: 'Select source and destination networks, enter amount and destination address.',
-                    icon: '🚀',
-                  },
-                  {
-                    step: '2',
-                    title: 'Offer Rewards',
-                    description: 'Offer 2-3% to the bridge nodes to speed up the transfer.',
+                    description: 'Select source and destination, offer 2-3% to the bridge nodes.',
                     icon: '💰',
                   },
                   {
-                    step: '3',
-                    title: 'Watchdogs Claim',
+                    step: '2',
+                    title: 'Counterstake consensus',
                     description: 'Nodes claim valid transfers and challenge fraudulent ones.',
                     icon: '🤖',
                   },
                   {
-                    step: '4',
+                    step: '3',
                     title: 'Receive Tokens',
                     description: 'Receive tokens on destination chain.',
                     icon: '✅',

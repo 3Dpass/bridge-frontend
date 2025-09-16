@@ -14,7 +14,6 @@ A modern React.js Web3 frontend for the Counterstake Bridge, enabling cross-chai
 ## Supported Networks
 
 - **Ethereum** (Mainnet & Goerli Testnet)
-- **BSC** (Mainnet & Testnet)
 - **3DPass** (Mainnet & Testnet)
 
 ## Supported Tokens
@@ -22,18 +21,10 @@ A modern React.js Web3 frontend for the Counterstake Bridge, enabling cross-chai
 ### Ethereum
 - ETH (Native)
 - USDT
-- USDC
-
-### BSC
-- BNB (Native)
-- BUSD
-- USDT
 
 ### 3DPass
 - P3D (Native, ERC20 Precompile at `0x0802`)
 - wUSDT (Wrapped USDT, ERC20 Precompile at `0xde`)
-- wUSDC (Wrapped USDC, ERC20 Precompile at `0x6f`)
-- wBUSD (Wrapped BUSD, ERC20 Precompile at `0x14D`)
 
 **Note**: In 3DPass, all tokens (including the native P3D) are accessed through ERC20 precompile addresses, not through native token mechanisms like other networks.
 
@@ -96,8 +87,8 @@ export const NETWORKS = {
     name: 'Ethereum',
     rpcUrl: 'https://mainnet.infura.io/v3/YOUR_INFURA_KEY',
     contracts: {
-      exportFactory: '0x...',
-      importFactory: '0x...',
+      counterstakeFactory: '0x...',
+      assistantFactory: '0x...',
       oracle: '0x...',
     },
     // ... other config

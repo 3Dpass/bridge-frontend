@@ -27,17 +27,22 @@ export const ASSISTANT_TYPES = {
  */
 const hasFunctionSelector = async (provider, contractAddress, functionSelector) => {
   try {
-    // Method 1: Try to create a contract interface with the function
+    console.log(`  🔍 Looking for function selector: ${functionSelector}`);
+    
+    // Method 1: Try interface creation first (most reliable for this case)
     try {
       new ethers.Contract(contractAddress, [functionSelector], provider);
-      // If we can create the contract, the function exists
       console.log(`  ✅ Function exists (interface creation successful): ${functionSelector}`);
       return true;
     } catch (interfaceError) {
+      if (interfaceError.message.includes('unsupported fragment')) {
+        console.log(`  ❌ Function not found via interface (unsupported fragment): ${functionSelector}`);
+        return false;
+      }
       console.log(`  ❌ Function not found via interface: ${functionSelector} - ${interfaceError.message}`);
     }
     
-    // Method 2: Try to call the function with a static call (this will fail but tell us if function exists)
+    // Method 2: Try static call (will fail due to onlyManager modifier, but that's OK)
     try {
       const contract = new ethers.Contract(contractAddress, [functionSelector], provider);
       // Try to call the function - it will fail due to onlyManager modifier, but that's OK
@@ -48,22 +53,21 @@ const hasFunctionSelector = async (provider, contractAddress, functionSelector) 
       // If it's an execution revert, the function exists but call failed
       if (staticCallError.message.includes('execution reverted') || 
           staticCallError.message.includes('call revert') ||
-          staticCallError.message.includes('onlyManager')) {
+          staticCallError.message.includes('onlyManager') ||
+          staticCallError.message.includes('caller is not the manager')) {
         console.log(`  ✅ Function exists (static call reverted as expected): ${functionSelector}`);
         return true;
       }
       console.log(`  ❌ Function not found via static call: ${functionSelector} - ${staticCallError.message}`);
     }
     
-    // Method 3: Check function selector in bytecode (fallback)
+    // Method 3: Bytecode check as fallback (less reliable)
     const selector = ethers.utils.id(functionSelector).substring(0, 10);
-    console.log(`  🔍 Looking for function selector: ${functionSelector}`);
     console.log(`  🔍 Function selector (4 bytes): ${selector}`);
     
     // Get contract bytecode
     const bytecode = await provider.getCode(contractAddress);
     console.log(`  🔍 Contract bytecode length: ${bytecode.length}`);
-    console.log(`  🔍 Full bytecode: ${bytecode}`);
     
     // Check if selector exists in bytecode
     const selectorWithoutPrefix = selector.substring(2); // Remove '0x' prefix
@@ -71,7 +75,13 @@ const hasFunctionSelector = async (provider, contractAddress, functionSelector) 
     console.log(`  🔍 Looking for selector: ${selectorWithoutPrefix}`);
     console.log(`  🔍 Selector found in bytecode: ${found}`);
     
-    return found;
+    if (found) {
+      console.log(`  ✅ Function exists (bytecode check): ${functionSelector}`);
+      return true;
+    }
+    
+    console.log(`  ❌ Function not found: ${functionSelector}`);
+    return false;
   } catch (error) {
     console.error('Error checking function selector:', error);
     return false;
@@ -88,9 +98,55 @@ const hasFunctionSelector = async (provider, contractAddress, functionSelector) 
 export const detectAssistantType = async (provider, assistantAddress, bridgeAddress) => {
   try {
     console.log(`🔍 Detecting assistant type for address: ${assistantAddress}`);
+    console.log(`🔍 Bridge address: ${bridgeAddress}`);
     
-    // Check if approvePrecompile function exists in the contract
-    // Try different possible function signatures
+    // First, determine the bridge type to understand what kind of assistant this should be
+    let bridgeType = null;
+    
+    // Check if it's an EXPORT bridge
+    try {
+      console.log(`  Checking if bridge is EXPORT type...`);
+      const exportBridge = new ethers.Contract(bridgeAddress, EXPORT_ABI, provider);
+      await exportBridge.foreign_network();
+      bridgeType = 'export';
+      console.log(`  ✅ Bridge is EXPORT type`);
+    } catch (error) {
+      console.log(`  ❌ Not an EXPORT bridge: ${error.message}`);
+    }
+    
+    // Check if it's an IMPORT_WRAPPER bridge
+    if (!bridgeType) {
+      try {
+        console.log(`  Checking if bridge is IMPORT_WRAPPER type...`);
+        const importWrapperBridge = new ethers.Contract(bridgeAddress, IMPORT_WRAPPER_ABI, provider);
+        await importWrapperBridge.home_network();
+        bridgeType = 'import_wrapper';
+        console.log(`  ✅ Bridge is IMPORT_WRAPPER type`);
+      } catch (error) {
+        console.log(`  ❌ Not an IMPORT_WRAPPER bridge: ${error.message}`);
+      }
+    }
+    
+    // Check if it's an IMPORT bridge
+    if (!bridgeType) {
+      try {
+        console.log(`  Checking if bridge is IMPORT type...`);
+        const importBridge = new ethers.Contract(bridgeAddress, IMPORT_ABI, provider);
+        await importBridge.home_network();
+        bridgeType = 'import';
+        console.log(`  ✅ Bridge is IMPORT type`);
+      } catch (error) {
+        console.log(`  ❌ Not an IMPORT bridge: ${error.message}`);
+      }
+    }
+    
+    if (!bridgeType) {
+      throw new Error('Unable to determine bridge type');
+    }
+    
+    console.log(`🔍 Detected bridge type: ${bridgeType}`);
+    
+    // Now check if the assistant has approvePrecompile function to determine if it's a wrapper
     const possibleSignatures = [
       'approvePrecompile()',
       'approvePrecompile() external',
@@ -102,6 +158,7 @@ export const detectAssistantType = async (provider, assistantAddress, bridgeAddr
     
     let hasApprovePrecompile = false;
     for (const signature of possibleSignatures) {
+      console.log(`🔍 Checking signature: ${signature}`);
       hasApprovePrecompile = await hasFunctionSelector(provider, assistantAddress, signature);
       if (hasApprovePrecompile) {
         console.log(`  ✅ Found approvePrecompile with signature: ${signature}`);
@@ -109,53 +166,33 @@ export const detectAssistantType = async (provider, assistantAddress, bridgeAddr
       }
     }
     
-    if (hasApprovePrecompile) {
-      console.log(`  ✅ approvePrecompile function found - this is a wrapper assistant`);
-      
-      // Determine which type of wrapper assistant
-      try {
-        console.log(`  Determining wrapper assistant type...`);
-        const exportBridge = new ethers.Contract(bridgeAddress, EXPORT_ABI, provider);
-        await exportBridge.foreign_network();
+    console.log(`🔍 Final result: hasApprovePrecompile = ${hasApprovePrecompile}`);
+    
+    // Determine assistant type based on bridge type and approvePrecompile function
+    if (bridgeType === 'export') {
+      if (hasApprovePrecompile) {
         console.log(`  ✅ EXPORT_WRAPPER assistant detected!`);
         return 'export_wrapper';
-      } catch (error) {
-        console.log(`  ❌ Not an export wrapper: ${error.message}`);
-        
-        try {
-          const importWrapperBridge = new ethers.Contract(bridgeAddress, IMPORT_WRAPPER_ABI, provider);
-          await importWrapperBridge.home_network();
-          console.log(`  ✅ IMPORT_WRAPPER assistant detected!`);
-          return 'import_wrapper';
-        } catch (error) {
-          console.log(`  ❌ Not an import wrapper: ${error.message}`);
-          throw new Error('Unable to determine wrapper assistant type');
-        }
-      }
-    } else {
-      console.log(`  ❌ approvePrecompile function not found - this is a regular assistant`);
-      
-      // Determine if it's export or import by checking the bridge type
-      try {
-        console.log(`  Checking bridge type to determine assistant type...`);
-        const exportBridge = new ethers.Contract(bridgeAddress, EXPORT_ABI, provider);
-        await exportBridge.foreign_network();
+      } else {
         console.log(`  ✅ Regular EXPORT assistant detected!`);
         return ASSISTANT_TYPES.EXPORT;
-      } catch (error) {
-        console.log(`  ❌ Not an export bridge: ${error.message}`);
-        
-        try {
-          const importBridge = new ethers.Contract(bridgeAddress, IMPORT_ABI, provider);
-          await importBridge.home_network();
-          console.log(`  ✅ Regular IMPORT assistant detected!`);
-          return ASSISTANT_TYPES.IMPORT;
-        } catch (error) {
-          console.log(`  ❌ Not an import bridge: ${error.message}`);
-          throw new Error('Unable to determine assistant type');
-        }
+      }
+    } else if (bridgeType === 'import_wrapper') {
+      // For import_wrapper bridges, the assistant is always import_wrapper type
+      // regardless of whether it has approvePrecompile function
+      console.log(`  ✅ IMPORT_WRAPPER assistant detected!`);
+      return 'import_wrapper';
+    } else if (bridgeType === 'import') {
+      if (hasApprovePrecompile) {
+        console.log(`  ✅ IMPORT_WRAPPER assistant detected!`);
+        return 'import_wrapper';
+      } else {
+        console.log(`  ✅ Regular IMPORT assistant detected!`);
+        return ASSISTANT_TYPES.IMPORT;
       }
     }
+    
+    throw new Error(`Unable to determine assistant type for bridge type: ${bridgeType}`);
     
   } catch (error) {
     console.error('Error detecting assistant type:', error);

@@ -275,6 +275,14 @@ export const getExportBridgeData = async (provider, bridgeAddress, networkSymbol
 
     const { tokenAddress: stakeTokenAddress } = settings;
 
+    // Convert network names to match config names (do this first for token discovery)
+    let normalizedForeignNetwork = foreignNetwork;
+    if (foreignNetwork === 'BSC') {
+      normalizedForeignNetwork = 'Binance Smart Chain';
+    } else if (foreignNetwork === '3dpass') {
+      normalizedForeignNetwork = '3DPass';
+    }
+
     // Discover token symbols from their respective networks
     let foreignTokenSymbol = null;
     let stakeTokenSymbol = null;
@@ -282,18 +290,18 @@ export const getExportBridgeData = async (provider, bridgeAddress, networkSymbol
     // Discover foreign token symbol from foreign network
     if (foreignAsset && foreignAsset !== ADDRESS_ZERO) {
       try {
-        console.log(`🔍 Discovering foreign token symbol for ${foreignAsset} on ${foreignNetwork} network`);
+        console.log(`🔍 Discovering foreign token symbol for ${foreignAsset} on ${normalizedForeignNetwork} network`);
         
         // Validate address format first
         if (!ethers.utils.isAddress(foreignAsset)) {
           console.warn(`⚠️ Invalid foreign asset address format: ${foreignAsset}`);
           foreignTokenSymbol = 'Invalid Address';
         } else {
-          foreignTokenSymbol = await discoverTokenSymbol(foreignAsset, foreignNetwork, settings);
+          foreignTokenSymbol = await discoverTokenSymbol(foreignAsset, normalizedForeignNetwork, settings);
           if (foreignTokenSymbol) {
             console.log(`✅ Successfully discovered foreign token symbol: ${foreignTokenSymbol}`);
           } else {
-            console.log(`❌ Failed to discover foreign token symbol for ${foreignAsset} on ${foreignNetwork}`);
+            console.log(`❌ Failed to discover foreign token symbol for ${foreignAsset} on ${normalizedForeignNetwork}`);
           }
         }
       } catch (error) {
@@ -311,9 +319,6 @@ export const getExportBridgeData = async (provider, bridgeAddress, networkSymbol
         console.warn('Failed to discover stake token symbol:', error);
       }
     }
-
-    // Convert network names to match config names
-    const normalizedForeignNetwork = foreignNetwork === 'BSC' ? 'Binance Smart Chain' : foreignNetwork;
 
     return {
       foreignNetwork: normalizedForeignNetwork,
@@ -387,7 +392,12 @@ export const getImportBridgeData = async (provider, bridgeAddress, networkSymbol
     }
 
     // Convert network names to match config names
-    const normalizedHomeNetwork = homeNetwork === 'BSC' ? 'Binance Smart Chain' : homeNetwork;
+    let normalizedHomeNetwork = homeNetwork;
+    if (homeNetwork === 'BSC') {
+      normalizedHomeNetwork = 'Binance Smart Chain';
+    } else if (homeNetwork === '3dpass') {
+      normalizedHomeNetwork = '3DPass';
+    }
 
     return {
       homeNetwork: normalizedHomeNetwork,
@@ -620,8 +630,13 @@ export const getImportWrapperBridgeData = async (provider, bridgeAddress, networ
       }
     }
 
-    // Convert BSC to Binance Smart Chain for consistency
-    const normalizedHomeNetwork = homeNetwork === 'BSC' ? 'Binance Smart Chain' : homeNetwork;
+    // Convert network names to match config names
+    let normalizedHomeNetwork = homeNetwork;
+    if (homeNetwork === 'BSC') {
+      normalizedHomeNetwork = 'Binance Smart Chain';
+    } else if (homeNetwork === '3dpass') {
+      normalizedHomeNetwork = '3DPass';
+    }
 
     return {
       homeNetwork: normalizedHomeNetwork,
