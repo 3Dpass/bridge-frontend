@@ -130,10 +130,16 @@ function App() {
                   href="https://counterstake.org" 
                   className="text-secondary-400 text-sm hover:text-white transition-colors"
                 >
-                  Counterstake Bridge
+                  Counterstake.org
                 </a>
                 <a 
-                  href="https://github.com/byteball/counterstake-bridge"
+                  href="https://github.com/3Dpass/counterstake-bridge/tree/v1.1-substrate" 
+                  className="text-secondary-400 text-sm hover:text-white transition-colors"
+                >
+                  How to setup Node
+                </a>
+                <a 
+                  href="https://github.com/3Dpass/bridge-frontend"
                   target="_blank"
                   rel="noopener noreferrer"
                   className="text-secondary-400 hover:text-white transition-colors"

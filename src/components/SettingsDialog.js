@@ -1169,7 +1169,7 @@ const SettingsDialog = ({ isOpen, onClose }) => {
                         title="Discover bridges and assistants from BridgesRegistry"
                       >
                         <RefreshCw className="w-4 h-4" />
-                        Update from Registry
+                        Update
                       </button>
                     )}
                   </div>
@@ -1830,7 +1830,7 @@ const SettingsDialog = ({ isOpen, onClose }) => {
                               className="btn-primary flex items-center gap-2 w-full"
                             >
                               <Plus className="w-4 h-4" />
-                              Create new Bridge Instance from Factory
+                              Create new Bridge Instance
                             </button>
                           </div>
                 ) : (
@@ -2727,7 +2727,7 @@ const SettingsDialog = ({ isOpen, onClose }) => {
                               className="btn-primary flex items-center gap-2 w-full"
                             >
                               <Plus className="w-4 h-4" />
-                              Create new Pool-Assistant from Factory
+                              Create new Pool-Assistant
                             </button>
                           </div>
                 ) : (

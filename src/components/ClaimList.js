@@ -832,9 +832,6 @@ const ClaimList = () => {
     <div className="max-w-4xl mx-auto">
       {/* Header */}
       <div className="flex items-center justify-between mb-6">
-        <div>
-          <h2 className="text-2xl font-bold text-white mb-2">Claims</h2>
-        </div>
         <div className="flex items-center gap-3">
           {/* Filter Toggle */}
           <div className="flex bg-dark-800 rounded-lg p-1">

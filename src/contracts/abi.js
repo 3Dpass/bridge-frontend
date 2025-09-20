@@ -97,6 +97,7 @@ export const IMPORT_WRAPPER_ABI = [
   "function setOracle(address oracleAddr)",
   "function validateMinPrice(uint min_price20) pure",
   "function setMinPrice(uint min_price20)",
+  "function enactImportWrapper()",
   "function transferToHomeChain(string home_address, string data, uint amount, uint reward)",
   "function claim(string txid, uint32 txts, uint amount, int reward, uint stake, string sender_address, address payable recipient_address, string data) payable",
   "function challenge(uint claim_num, uint8 stake_on, uint stake) payable",
@@ -528,7 +529,7 @@ export const IPRECOMPILE_ERC20_ABI = [
   "event Approval(address indexed owner, address indexed spender, uint256 value)",
 ];
 
-// ILocalAsset Interface ABI (3DPass specific - was missing)
+// LocalAsset Interface ABI (3DPass specific - was missing)
 export const ILOCAL_ASSET_ABI = [
   "function mint(address to, uint256 value) external returns (bool)",
   "function burn(address from, uint256 value) external returns (bool)",
@@ -540,6 +541,15 @@ export const ILOCAL_ASSET_ABI = [
   "function setTeam(address issuer, address admin, address freezer) external returns (bool)",
   "function setMetadata(string name, string symbol, uint8 decimals) external returns (bool)",
   "function clearMetadata() external returns (bool)",
+  "function isOwner(address account) external view returns (bool)",
+  "function isIssuer(address account) external view returns (bool)",
+  "function isAdmin(address account) external view returns (bool)",
+  "function isFreezer(address account) external view returns (bool)",
+  "function status() external view returns (string)",
+  "function reserved() external view returns (uint256)",
+  "function minBalance() external view returns (uint256)",
+  "function reservedOf(address account) external view returns (uint256)",
+  "function objDetails() external view returns (bool isValid, uint8 objIdx, uint8 propIdx, uint256 maxSupply)",
 ];
 
 // Counterstake ABI for claim-related functions (from actual compiled contract)
