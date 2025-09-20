@@ -1830,7 +1830,7 @@ const SettingsDialog = ({ isOpen, onClose }) => {
                               className="btn-primary flex items-center gap-2 w-full"
                             >
                               <Plus className="w-4 h-4" />
-                              Create new Bridge from Factory
+                              Create new Bridge Instance from Factory
                             </button>
                           </div>
                 ) : (
@@ -2727,7 +2727,7 @@ const SettingsDialog = ({ isOpen, onClose }) => {
                               className="btn-primary flex items-center gap-2 w-full"
                             >
                               <Plus className="w-4 h-4" />
-                              Create new Assistant from Factory
+                              Create new Pool-Assistant from Factory
                             </button>
                           </div>
                 ) : (

@@ -499,7 +499,7 @@ const CreateNewBridge = ({ networkKey, onClose, onBridgeCreated }) => {
           <div className="flex items-center justify-between p-4 border-b border-secondary-800">
             <div className="flex items-center gap-3">
               <ArrowRightLeft className="w-6 h-6 text-primary-500" />
-              <h2 className="text-xl font-bold text-white">Create New Bridge</h2>
+              <h2 className="text-xl font-bold text-white">Create New Bridge Instance</h2>
             </div>
             <button
               onClick={onClose}

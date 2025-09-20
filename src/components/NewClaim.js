@@ -1,7 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { useWeb3 } from '../contexts/Web3Context';
 import { useSettings } from '../contexts/SettingsContext';
-import { NETWORKS } from '../config/networks';
 import { 
   get3DPassTokenMetadata, 
   get3DPassTokenBalance,
@@ -45,43 +44,62 @@ const NewClaim = ({ isOpen, onClose, selectedToken = null }) => {
   const [submitting, setSubmitting] = useState(false);
   const [tokenMetadata, setTokenMetadata] = useState(null);
   const [tokenBalance, setTokenBalance] = useState('0');
+  const [stakeTokenBalance, setStakeTokenBalance] = useState('0');
+  const [isLoadingStakeBalance, setIsLoadingStakeBalance] = useState(false);
   const [selectedBridge, setSelectedBridge] = useState(null);
   const [requiredStake, setRequiredStake] = useState('0');
   const [allowance, setAllowance] = useState('0');
-  const [needsApproval, setNeedsApproval] = useState(false);
+  const [needsApproval, setNeedsApproval] = useState(true);
   const [availableTokens, setAvailableTokens] = useState([]);
 
   // Initialize form when component mounts or token changes
   useEffect(() => {
-    if (isOpen && selectedToken) {
-      setFormData(prev => ({
-        ...prev,
-        tokenAddress: selectedToken.address,
-        recipientAddress: account || ''
-      }));
+    if (isOpen) {
+      if (selectedToken) {
+        setFormData(prev => ({
+          ...prev,
+          tokenAddress: selectedToken.address,
+          recipientAddress: account || '',
+          senderAddress: account || ''
+        }));
+      } else if (account) {
+        // If no selected token but account is available, still set the addresses
+        setFormData(prev => ({
+          ...prev,
+          recipientAddress: account,
+          senderAddress: account
+        }));
+      }
+      // Reset approval state when form opens or token changes
+      setNeedsApproval(true);
     }
   }, [isOpen, selectedToken, account]);
 
-  // Load available tokens for 3DPass network
+  // Load available tokens from bridge configurations
   const loadAvailableTokens = useCallback(async () => {
     if (!provider) return;
 
     try {
       const tokens = [];
+      const allBridges = getBridgeInstancesWithSettings();
       
-      // Add P3D (native token)
-      const p3dMetadata = await get3DPassTokenMetadata(provider, NETWORKS.THREEDPASS.tokens.P3D.address);
-      tokens.push(p3dMetadata);
+      // Get unique token addresses from all bridges
+      const tokenAddresses = new Set();
       
-      // Add other 3DPass tokens
-      const tokenAddresses = [
-        '0xfBFBfbFA000000000000000000000000000000de', // wUSDT
-        '0xFbfbFBfA0000000000000000000000000000006f', // wUSDC
-        '0xFbFBFBfA0000000000000000000000000000014D', // wBUSD
-        '0xFbfBFBfA000000000000000000000000000001bC', // FIRE
-        '0xfBFBFBfa0000000000000000000000000000022b', // WATER
-      ];
+      Object.values(allBridges).forEach(bridge => {
+        // For export bridges: homeTokenAddress is the token on 3DPass side
+        if (bridge.type === 'export' && bridge.homeTokenAddress) {
+          tokenAddresses.add(bridge.homeTokenAddress.toLowerCase());
+        }
+        // For import wrapper bridges: foreignTokenAddress is the token on 3DPass side
+        else if (bridge.type === 'import_wrapper' && bridge.foreignTokenAddress) {
+          tokenAddresses.add(bridge.foreignTokenAddress.toLowerCase());
+        }
+      });
 
+      console.log('🔍 Found token addresses from bridges:', Array.from(tokenAddresses));
+
+      // Load metadata for each unique token address
       for (const address of tokenAddresses) {
         try {
           const metadata = await get3DPassTokenMetadata(provider, address);
@@ -91,12 +109,13 @@ const NewClaim = ({ isOpen, onClose, selectedToken = null }) => {
         }
       }
 
+      console.log('🔍 Loaded tokens from bridges:', tokens.map(t => ({ symbol: t.symbol, address: t.address })));
       setAvailableTokens(tokens);
     } catch (error) {
       console.error('Error loading available tokens:', error);
       toast.error('Failed to load available tokens');
     }
-  }, [provider]);
+  }, [provider, getBridgeInstancesWithSettings]);
 
   // Load token metadata
   const loadTokenMetadata = useCallback(async () => {
@@ -123,6 +142,25 @@ const NewClaim = ({ isOpen, onClose, selectedToken = null }) => {
       setTokenBalance('0');
     }
   }, [formData.tokenAddress, provider, account]);
+
+  // Load stake token balance (P3D)
+  const loadStakeTokenBalance = useCallback(async () => {
+    if (!selectedBridge || !provider || !account) return;
+
+    setIsLoadingStakeBalance(true);
+    try {
+      const stakeTokenAddress = selectedBridge.stakeTokenAddress;
+      if (stakeTokenAddress) {
+        const balance = await get3DPassTokenBalance(provider, stakeTokenAddress, account);
+        setStakeTokenBalance(balance);
+      }
+    } catch (error) {
+      console.error('Error loading stake token balance:', error);
+      setStakeTokenBalance('0');
+    } finally {
+      setIsLoadingStakeBalance(false);
+    }
+  }, [selectedBridge, provider, account]);
 
   // Determine the correct bridge based on token
   const determineBridge = useCallback(() => {
@@ -300,6 +338,13 @@ const NewClaim = ({ isOpen, onClose, selectedToken = null }) => {
     }
   }, [selectedBridge, provider, loadRequiredStakeWithAmount, formData.amount]);
 
+  // Load stake token balance when bridge is selected
+  useEffect(() => {
+    if (selectedBridge && provider && account) {
+      loadStakeTokenBalance();
+    }
+  }, [selectedBridge, provider, account, loadStakeTokenBalance]);
+
   // Load required stake when bridge and amount change
   useEffect(() => {
     if (selectedBridge && formData.amount && provider) {
@@ -343,7 +388,25 @@ const NewClaim = ({ isOpen, onClose, selectedToken = null }) => {
       await checkAllowance();
     } catch (error) {
       console.error('Error approving token:', error);
-      toast.error(`Approval failed: ${error.message}`);
+      
+      // Handle different types of errors gracefully
+      let errorMessage = 'Approval failed';
+      
+      if (error.code === 4001 || error.message?.includes('User denied transaction') || error.message?.includes('user rejected transaction')) {
+        errorMessage = 'Transaction cancelled';
+      } else if (error.code === -32603 || error.message?.includes('insufficient funds')) {
+        errorMessage = 'Insufficient funds for transaction';
+      } else if (error.message?.includes('gas')) {
+        errorMessage = 'Transaction failed due to gas issues. Please try again.';
+      } else if (error.message?.includes('revert')) {
+        errorMessage = 'Transaction failed. Please check your inputs and try again.';
+      } else if (error.message?.includes('network')) {
+        errorMessage = 'Network error. Please check your connection and try again.';
+      } else {
+        errorMessage = `Approval failed: ${error.message}`;
+      }
+      
+      toast.error(errorMessage);
     } finally {
       setSubmitting(false);
     }
@@ -449,16 +512,19 @@ const NewClaim = ({ isOpen, onClose, selectedToken = null }) => {
         transaction: error.transaction
       });
       
-      // Provide more specific error messages
+      // Handle different types of errors gracefully
       let errorMessage = 'Claim failed';
-      if (error.message.includes('insufficient funds')) {
+      
+      if (error.code === 4001 || error.message?.includes('User denied transaction') || error.message?.includes('user rejected transaction')) {
+        errorMessage = 'Transaction cancelled by user';
+      } else if (error.code === -32603 || error.message?.includes('insufficient funds')) {
         errorMessage = 'Insufficient funds for transaction';
-      } else if (error.message.includes('gas')) {
-        errorMessage = 'Gas estimation failed - check your inputs';
-      } else if (error.message.includes('execution reverted')) {
-        errorMessage = 'Transaction reverted - check claim parameters';
-      } else if (error.message.includes('Internal JSON-RPC error')) {
-        errorMessage = 'Network error - please try again';
+      } else if (error.message?.includes('gas')) {
+        errorMessage = 'Transaction failed due to gas issues. Please try again.';
+      } else if (error.message?.includes('execution reverted') || error.message?.includes('revert')) {
+        errorMessage = 'Transaction failed. Please check your inputs and try again.';
+      } else if (error.message?.includes('Internal JSON-RPC error') || error.message?.includes('network')) {
+        errorMessage = 'Network error. Please check your connection and try again.';
       } else {
         errorMessage = `Claim failed: ${error.message}`;
       }
@@ -469,27 +535,29 @@ const NewClaim = ({ isOpen, onClose, selectedToken = null }) => {
     }
   };
 
-       // Validate form
-  const validateForm = () => {
-    if (!isConnected) return 'Please connect your wallet';
-    if (network?.id !== 1333) return 'This feature is only available on 3DPass network';
-     if (!formData.tokenAddress) return 'Please select a token';
-     if (!formData.amount || parseFloat(formData.amount) <= 0) return 'Please enter a valid amount';
-     if (!formData.txid) return 'Please enter a transaction ID';
-     if (!formData.senderAddress) return 'Please enter sender address';
-     if (!formData.recipientAddress) return 'Please enter recipient address';
-     if (!ethers.utils.isAddress(formData.recipientAddress)) return 'Invalid recipient address';
-     if (!selectedBridge) return 'No bridge found for selected token';
-     if (needsApproval) return 'Please approve the bridge to spend your tokens';
-     
-     const amount = parseFloat(formData.amount);
-     const balance = parseFloat(tokenBalance);
-     if (amount > balance) return 'Insufficient token balance';
-     
-     return null;
-   };
-
-  const validationError = validateForm();
+       // Check if form is valid (for button state)
+  const isFormValid = () => {
+    if (!isConnected) return false;
+    if (network?.id !== 1333) return false;
+    if (!formData.tokenAddress) return false;
+    if (!formData.amount || parseFloat(formData.amount) <= 0) return false;
+    if (!formData.txid) return false;
+    if (!formData.senderAddress) return false;
+    if (!formData.recipientAddress) return false;
+    if (!ethers.utils.isAddress(formData.recipientAddress)) return false;
+    if (!selectedBridge) return false;
+    // Note: needsApproval check removed - button visibility is controlled separately
+    
+    // Check stake token balance instead of claim token balance
+    // Skip balance check if still loading to prevent false negatives
+    if (!isLoadingStakeBalance) {
+      const stakeAmount = parseFloat(requiredStake);
+      const stakeBalance = parseFloat(stakeTokenBalance); // P3D balance for staking
+      if (stakeAmount > stakeBalance) return false;
+    }
+    
+    return true;
+  };
 
   if (!isOpen) return null;
 
@@ -507,7 +575,7 @@ const NewClaim = ({ isOpen, onClose, selectedToken = null }) => {
           animate={{ scale: 1, opacity: 1, y: 0 }}
           exit={{ scale: 0.95, opacity: 0, y: -20 }}
           transition={{ type: "spring", damping: 25, stiffness: 300 }}
-          className="bg-dark-900 border border-secondary-800 rounded-xl shadow-2xl w-full max-w-4xl max-h-[calc(100vh-7.2rem)] sm:max-h-[calc(100vh-10.8rem)] overflow-hidden relative"
+          className="bg-dark-900 border border-secondary-800 rounded-xl shadow-2xl w-full max-w-4xl max-h-[calc(100vh-4rem)] sm:max-h-[calc(100vh-6rem)] overflow-hidden relative"
           onClick={(e) => e.stopPropagation()}
         >
           {/* Header */}
@@ -525,19 +593,19 @@ const NewClaim = ({ isOpen, onClose, selectedToken = null }) => {
           </div>
 
           {/* Content */}
-          <div className="p-4 sm:p-6 overflow-y-auto max-h-[calc(96vh-14.4rem)] sm:max-h-[calc(96vh-18rem)]">
+          <div className="p-4 sm:p-6 overflow-y-auto max-h-[calc(96vh-8rem)] sm:max-h-[calc(96vh-10rem)]">
             <div className="space-y-6">
               <form onSubmit={handleSubmit} className="space-y-6">
                 {/* Token Selection */}
                 <div className="card">
                   <div className="flex items-center gap-3 mb-4">
                     <Coins className="w-5 h-5 text-primary-500" />
-                    <h3 className="text-lg font-semibold text-white">Token Selection</h3>
+                    <h3 className="text-lg font-semibold text-white">Token to receive</h3>
                   </div>
                   
                   <div>
                     <label className="block text-sm font-medium text-secondary-300 mb-2">
-                      Token
+                      Select a token to finish your transfer with
                     </label>
                     <select
                       value={formData.tokenAddress}
@@ -567,6 +635,32 @@ const NewClaim = ({ isOpen, onClose, selectedToken = null }) => {
                           <p className="font-medium text-white">{tokenBalance}</p>
                         </div>
                       </div>
+                      
+                      {/* Stake Token Balance Display */}
+                      {selectedBridge && (
+                        <div className="mt-3 p-3 bg-dark-800 rounded-lg">
+                          <div className="flex items-center justify-between">
+                            <div>
+                              <p className="text-sm text-secondary-400">Stake Token Balance</p>
+                              <p className="text-sm text-white">{selectedBridge.stakeTokenSymbol || 'P3D'}</p>
+                            </div>
+                            <div className="text-right">
+                              <p className={`font-medium ${
+                                !isLoadingStakeBalance && parseFloat(stakeTokenBalance) < parseFloat(requiredStake) 
+                                  ? 'text-red-400' 
+                                  : 'text-white'
+                              }`}>
+                                {isLoadingStakeBalance ? 'Loading...' : stakeTokenBalance}
+                                {!isLoadingStakeBalance && parseFloat(stakeTokenBalance) < parseFloat(requiredStake) && (
+                                  <span className="text-xs text-red-400 ml-1">
+                                    (Insufficient for stake: {requiredStake})
+                                  </span>
+                                )}
+                              </p>
+                            </div>
+                          </div>
+                        </div>
+                      )}
                     </div>
                   )}
                 </div>
@@ -624,7 +718,7 @@ const NewClaim = ({ isOpen, onClose, selectedToken = null }) => {
               <div className="card">
                 <div className="flex items-center gap-3 mb-4">
                   <ExternalLink className="w-5 h-5 text-primary-500" />
-                  <h3 className="text-lg font-semibold text-white">Claim Details</h3>
+                  <h3 className="text-lg font-semibold text-white">Transaction Details</h3>
                 </div>
                 
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -659,7 +753,7 @@ const NewClaim = ({ isOpen, onClose, selectedToken = null }) => {
 
                 <div>
                   <label className="block text-sm font-medium text-secondary-300 mb-2">
-                    Transaction ID
+                    Transaction ID (from source network)
                   </label>
                   <input
                     type="text"
@@ -673,20 +767,20 @@ const NewClaim = ({ isOpen, onClose, selectedToken = null }) => {
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                   <div>
                     <label className="block text-sm font-medium text-secondary-300 mb-2">
-                      Transaction Timestamp (optional)
+                      Timestamp (optional)
                     </label>
                     <input
                       type="number"
                       value={formData.txts}
                       onChange={(e) => handleInputChange('txts', e.target.value)}
                       className="input-field w-full"
-                      placeholder="Unix timestamp"
+                      placeholder="Unix timestamp from transaction"
                     />
                   </div>
 
                   <div>
                     <label className="block text-sm font-medium text-secondary-300 mb-2">
-                      Data (optional)
+                      Additional data from transaction (optional)
                     </label>
                     <input
                       type="text"
@@ -740,8 +834,8 @@ const NewClaim = ({ isOpen, onClose, selectedToken = null }) => {
                   <button
                     type="button"
                     onClick={handleApproval}
-                    disabled={submitting}
-                    className="btn-warning flex items-center gap-2"
+                    disabled={submitting || !isFormValid()}
+                    className="btn-warning flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
                   >
                     {submitting ? (
                       <Loader2 className="w-4 h-4 animate-spin" />
@@ -750,16 +844,6 @@ const NewClaim = ({ isOpen, onClose, selectedToken = null }) => {
                     )}
                     Approve Bridge
                   </button>
-                </div>
-              )}
-
-              {/* Validation Error */}
-              {validationError && (
-                <div className="card border-error-700 bg-error-900/50">
-                  <div className="flex items-center gap-3">
-                    <AlertCircle className="w-5 h-5 text-error-400" />
-                    <p className="text-sm text-error-300">{validationError}</p>
-                  </div>
                 </div>
               )}
 
@@ -772,23 +856,26 @@ const NewClaim = ({ isOpen, onClose, selectedToken = null }) => {
                 >
                   Cancel
                 </button>
-                <button
-                  type="submit"
-                  disabled={!!validationError || submitting || needsApproval}
-                  className="btn-primary flex-1 flex items-center justify-center gap-2"
-                >
-                  {submitting ? (
-                    <>
-                      <Loader2 className="w-4 h-4 animate-spin" />
-                      Submitting...
-                    </>
-                  ) : (
-                    <>
-                      <ExternalLink className="w-4 h-4" />
-                      Submit Claim
-                    </>
-                  )}
-                </button>
+                {/* Only show Submit button if no approval is needed */}
+                {!needsApproval && (
+                  <button
+                    type="submit"
+                    disabled={!isFormValid() || submitting}
+                    className="btn-primary flex-1 flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
+                  >
+                    {submitting ? (
+                      <>
+                        <Loader2 className="w-4 h-4 animate-spin" />
+                        Submitting...
+                      </>
+                    ) : (
+                      <>
+                        <ExternalLink className="w-4 h-4" />
+                        Submit Claim
+                      </>
+                    )}
+                  </button>
+                )}
               </div>
             </form>
           </div>

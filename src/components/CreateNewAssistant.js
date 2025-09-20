@@ -3,7 +3,7 @@ import { useWeb3 } from '../contexts/Web3Context';
 import { useSettings } from '../contexts/SettingsContext';
 import { getNetworkWithSettings } from '../utils/settings';
 import { NETWORKS } from '../config/networks';
-import { ASSISTANT_FACTORY_ABI, EXPORT_ASSISTANT_ABI, IMPORT_ASSISTANT_ABI, IMPORT_WRAPPER_ASSISTANT_ABI, EXPORT_WRAPPER_ASSISTANT_ABI } from '../contracts/abi';
+import { ASSISTANT_FACTORY_ABI, EXPORT_ASSISTANT_ABI, IMPORT_ASSISTANT_ABI, IMPORT_WRAPPER_ASSISTANT_ABI, EXPORT_WRAPPER_ASSISTANT_ABI, IP3D_ABI, IPRECOMPILE_ERC20_ABI } from '../contracts/abi';
 import { getProvider } from '../utils/provider-manager';
 import { 
   Plus, 
@@ -222,14 +222,14 @@ const CreateNewAssistant = ({ networkKey, onClose, onAssistantCreated }) => {
         return;
       }
       
-      // Import the appropriate ABI based on token type
+      // Get the appropriate ABI based on token type
       let precompileABI;
       if (stakeTokenAddress.toLowerCase() === getNetworkWithSettings(networkKey)?.contracts?.nativeTokenPrecompile?.toLowerCase()) {
         // P3D precompile
-        precompileABI = require('../contracts/evm_substrate/build/contracts/IP3D.json').abi;
+        precompileABI = IP3D_ABI;
       } else {
         // ERC20 precompile
-        precompileABI = require('../contracts/evm_substrate/build/contracts/IPrecompileERC20.json').abi;
+        precompileABI = IPRECOMPILE_ERC20_ABI;
       }
       
       // Create precompile contract instance
@@ -468,7 +468,7 @@ const CreateNewAssistant = ({ networkKey, onClose, onAssistantCreated }) => {
           <div className="flex items-center justify-between p-4 border-b border-secondary-800">
             <div className="flex items-center gap-3">
               <Plus className="w-6 h-6 text-primary-500" />
-              <h2 className="text-xl font-bold text-white">Create New Assistant</h2>
+              <h2 className="text-xl font-bold text-white">Create New Pool-Assistant</h2>
             </div>
             <button
               onClick={onClose}
