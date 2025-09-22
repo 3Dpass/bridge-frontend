@@ -408,11 +408,15 @@ export const checkIfTransferClaimed = async (contract, transferHash) => {
  */
 export const getBlockTimestamp = async (provider, blockNumber) => {
   try {
+    console.log(`🔍 Getting block timestamp for block ${blockNumber}`);
     const block = await provider.getBlock(blockNumber);
+    
+    console.log(`🔍 Block ${blockNumber} timestamp: ${block.timestamp} (${new Date(block.timestamp * 1000).toISOString()})`);
+    
     return block.timestamp;
   } catch (error) {
-    console.error('Error getting block timestamp:', error);
-    return Date.now() / 1000; // Fallback to current time
+    console.error(`❌ Error getting block timestamp for block ${blockNumber}:`, error);
+    throw new Error(`Cannot get timestamp for block ${blockNumber}: ${error.message}`);
   }
 };
 

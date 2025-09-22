@@ -14,7 +14,8 @@ import {
   Plus,
   Download,
   ArrowDown,
-  AlertTriangle
+  AlertTriangle,
+  Copy
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import toast from 'react-hot-toast';
@@ -28,6 +29,7 @@ const ClaimList = () => {
   const [claims, setClaims] = useState([]);
   const [aggregatedData, setAggregatedData] = useState(null);
   const [loading, setLoading] = useState(false);
+  const [isInitialLoad, setIsInitialLoad] = useState(true);
   const [filter, setFilter] = useState('all'); // 'all', 'my', 'suspicious', 'pending'
   const [currentBlock, setCurrentBlock] = useState(null);
   const [showNewClaim, setShowNewClaim] = useState(false);
@@ -42,91 +44,153 @@ const ClaimList = () => {
     // Import transfers (NewRepatriation) create claims on the foreign network (Ethereum)
     // Export transfers (NewExpatriation) create claims on the home network (3DPass)
     
+    console.log('🔍 getRequiredNetwork called with transfer:', {
+      eventType: transfer.eventType,
+      fromNetwork: transfer.fromNetwork,
+      toNetwork: transfer.toNetwork
+    });
+    
     if (transfer.eventType === 'NewRepatriation') {
       // Import transfer: claim should be created on foreign network (Ethereum)
-      return Object.values(NETWORKS).find(network => 
+      const network = Object.values(NETWORKS).find(network => 
         network.name === transfer.toNetwork
       );
+      console.log('🔍 NewRepatriation - looking for network:', transfer.toNetwork, 'found:', network?.name);
+      return network;
     } else if (transfer.eventType === 'NewExpatriation') {
-      // Export transfer: claim should be created on home network (3DPass)
-      return Object.values(NETWORKS).find(network => 
-        network.name === transfer.fromNetwork
+      // Export transfer: claim should be created on destination network (3DPass)
+      const network = Object.values(NETWORKS).find(network => 
+        network.name === transfer.toNetwork
       );
+      console.log('🔍 NewExpatriation - looking for network:', transfer.toNetwork, 'found:', network?.name);
+      return network;
     }
     
+    console.log('🔍 No matching event type found');
     return null;
   }, []);
 
-  const checkNetwork = useCallback(async () => {
-    if (!window.ethereum) return false;
+  const getRequiredNetworkForClaim = useCallback((claim) => {
+    // For claims, we need to determine which network the claim exists on
+    // This is the network where the bridge contract is deployed
     
+    console.log('🔍 getRequiredNetworkForClaim called with claim:', {
+      bridgeAddress: claim.bridgeAddress,
+      networkName: claim.networkName,
+      bridgeType: claim.bridgeType
+    });
+    
+    // Find the network that contains this bridge address
+    const networksWithSettings = getNetworkWithSettings ? Object.values(NETWORKS) : [];
+    
+    for (const networkConfig of networksWithSettings) {
+      if (networkConfig && networkConfig.bridges) {
+        for (const bridgeKey in networkConfig.bridges) {
+          const bridge = networkConfig.bridges[bridgeKey];
+          if (bridge.address === claim.bridgeAddress) {
+            const result = {
+              ...networkConfig,
+              chainId: networkConfig.id,
+              bridgeAddress: bridge.address
+            };
+            console.log('✅ Found required network for claim:', result);
+            return result;
+          }
+        }
+      }
+    }
+    
+    console.log('❌ No required network found for claim:', claim.bridgeAddress);
+    return null;
+  }, [getNetworkWithSettings]);
+
+  const checkNetwork = useCallback(async () => {
     try {
-      const chainId = await window.ethereum.request({ method: 'eth_chainId' });
-      const currentChainId = parseInt(chainId, 16);
-      return currentChainId;
+      const currentChainId = await window.ethereum.request({ method: 'eth_chainId' });
+      const currentChainIdNumber = parseInt(currentChainId, 16);
+      console.log('🔍 Current chain ID:', currentChainIdNumber);
+      return currentChainIdNumber;
     } catch (error) {
       console.error('Error checking network:', error);
-      return false;
+      return null;
     }
   }, []);
 
   const switchToRequiredNetwork = useCallback(async (requiredNetwork) => {
-    if (!window.ethereum || !requiredNetwork) return false;
-
     try {
-      const currentChainId = await checkNetwork();
-      const requiredChainId = requiredNetwork.id;
-
-      if (currentChainId === requiredChainId) {
-        return true; // Already on the correct network
-      }
-
-      console.log(`🔄 Switching from chain ${currentChainId} to ${requiredChainId} (${requiredNetwork.name})`);
+      console.log('🔄 Switching to network:', requiredNetwork.name, 'Chain ID:', requiredNetwork.chainId);
+      
+      const chainIdHex = `0x${requiredNetwork.chainId.toString(16)}`;
       
       try {
-        // Try to switch to the network
         await window.ethereum.request({
           method: 'wallet_switchEthereumChain',
-          params: [{ chainId: `0x${requiredChainId.toString(16)}` }],
+          params: [{ chainId: chainIdHex }],
         });
-        console.log(`✅ Successfully switched to ${requiredNetwork.name}`);
+        console.log('✅ Network switched successfully');
         return true;
       } catch (switchError) {
-        // If the network doesn't exist, try to add it
+        console.log('⚠️ Network not added, attempting to add it...');
+        
         if (switchError.code === 4902) {
-          console.log(`🔧 Network ${requiredNetwork.name} not found, attempting to add it...`);
-          
           try {
             await window.ethereum.request({
               method: 'wallet_addEthereumChain',
               params: [{
-                chainId: `0x${requiredChainId.toString(16)}`,
+                chainId: chainIdHex,
                 chainName: requiredNetwork.name,
-                nativeCurrency: {
-                  name: requiredNetwork.nativeCurrency?.name || 'ETH',
-                  symbol: requiredNetwork.nativeCurrency?.symbol || 'ETH',
-                  decimals: requiredNetwork.nativeCurrency?.decimals || 18,
-                },
+                nativeCurrency: requiredNetwork.nativeCurrency,
                 rpcUrls: [requiredNetwork.rpcUrl],
-                blockExplorerUrls: requiredNetwork.explorer ? [requiredNetwork.explorer] : undefined,
+                blockExplorerUrls: [requiredNetwork.explorer],
               }],
             });
-            console.log(`✅ Successfully added and switched to ${requiredNetwork.name}`);
+            console.log('✅ Network added and switched successfully');
             return true;
           } catch (addError) {
-            console.error(`❌ Failed to add network ${requiredNetwork.name}:`, addError);
-            throw addError;
+            console.error('❌ Failed to add network:', addError);
+            return false;
           }
         } else {
-          console.error(`❌ Failed to switch to network ${requiredNetwork.name}:`, switchError);
-          throw switchError;
+          console.error('❌ Failed to switch network:', switchError);
+          return false;
         }
       }
     } catch (error) {
-      console.error('Network switching error:', error);
-      throw error;
+      console.error('❌ Network switching error:', error);
+      return false;
     }
-  }, [checkNetwork]);
+  }, []);
+
+  const handleChallenge = useCallback(async (claim) => {
+    console.log('🔘 Challenge button clicked for claim:', claim.claimNum);
+    
+    // Check if we need to switch networks first
+    const requiredNetwork = getRequiredNetworkForClaim(claim);
+    if (!requiredNetwork) {
+      toast.error('Could not determine required network for this claim');
+      return;
+    }
+    
+    const currentChainId = await checkNetwork();
+    if (currentChainId !== requiredNetwork.chainId) {
+      console.log('🚨 NETWORK SWITCHING WILL BE TRIGGERED NOW!');
+      console.log('🔄 Wrong network detected, switching automatically...');
+      toast(`Switching to ${requiredNetwork.name} network...`);
+      const switchSuccess = await switchToRequiredNetwork(requiredNetwork);
+      console.log('🔍 Network switch result:', switchSuccess);
+      if (!switchSuccess) {
+        toast.error('Failed to switch to the required network');
+        return;
+      }
+      // Wait a moment for the network to settle
+      await new Promise(resolve => setTimeout(resolve, 1000));
+    }
+    
+    setSelectedClaim(claim);
+    setShowChallengeModal(true);
+  }, [getRequiredNetworkForClaim, checkNetwork, switchToRequiredNetwork]);
+
+
 
   // All useCallback hooks must be at the top level
   const formatAmount = useCallback((amount, decimals = 18) => {
@@ -194,8 +258,8 @@ const ClaimList = () => {
       
       let formatted = rawValue.toFixed(decimalPlaces);
       
-      // Only trim trailing zeros if the value is not very small
-      if (rawValue >= 1e-15) {
+      // Only trim trailing zeros if the value is not very small and not a whole number
+      if (rawValue >= 1e-15 && rawValue % 1 !== 0) {
         formatted = formatted.replace(/\.?0+$/, '');
       }
       
@@ -213,17 +277,47 @@ const ClaimList = () => {
       return claim.bridgeTokenSymbol;
     }
     
-    // Fallback to bridge configuration
-    if (claim.bridgeType === 'import' || claim.bridgeType === 'import_wrapper') {
-      return claim.homeTokenSymbol || 'Unknown';
-    }
-    if (claim.bridgeType === 'export') {
-      return claim.foreignTokenSymbol || 'Unknown';
-    }
+    // Check if this is a pending transfer vs completed claim
+    // Use the explicit status field we set
+    const isPending = claim.status === 'pending';
+    const isCompletedClaim = claim.status === 'completed';
     
-    // Final fallback to network symbol
-    return network?.symbol || 'Unknown';
-  }, [network?.symbol]);
+    console.log('🔍 getTransferTokenSymbol debug:', {
+      claimStatus: claim.status,
+      eventType: claim.eventType,
+      claimNum: claim.claimNum,
+      isPending,
+      isCompletedClaim,
+      homeTokenSymbol: claim.homeTokenSymbol,
+      foreignTokenSymbol: claim.foreignTokenSymbol,
+      bridgeType: claim.bridgeType
+    });
+    
+    if (isPending) {
+      // For pending transfers, show the original asset (home token)
+      const result = claim.homeTokenSymbol || 'Unknown';
+      console.log('🔍 Using home token (pending):', result);
+      return result;  // Show original token (USDT)
+    } else if (isCompletedClaim) {
+      // For completed claims, show the wrapped asset (foreign token)
+      const result = claim.foreignTokenSymbol || 'Unknown';
+      console.log('🔍 Using foreign token (completed):', result);
+      return result;  // Show wrapped token (wUSDT)
+    } else {
+      // Fallback: if we can't determine the type, use the bridge type
+      if (claim.bridgeType === 'export') {
+        // For export bridges, show the home token (original asset)
+        const result = claim.homeTokenSymbol || 'Unknown';
+        console.log('🔍 Using home token (export fallback):', result);
+        return result;
+      } else {
+        // For import bridges, show the foreign token (wrapped asset)
+        const result = claim.foreignTokenSymbol || 'Unknown';
+        console.log('🔍 Using foreign token (import fallback):', result);
+        return result;
+      }
+    }
+  }, []);
 
   const getTokenDecimals = useCallback((claim) => {
     // Get decimals from network configuration
@@ -409,12 +503,46 @@ const ClaimList = () => {
     };
   }, [getTokenDecimals, getStakeTokenDecimals, getTransferTokenSymbol, getStakeTokenSymbol, formatAmount]);
 
+  const handleWithdraw = useCallback(async (claim) => {
+    console.log('🔘 Withdraw button clicked for claim:', claim.claimNum);
+    
+    // Check if we need to switch networks first
+    const requiredNetwork = getRequiredNetworkForClaim(claim);
+    if (!requiredNetwork) {
+      toast.error('Could not determine required network for this claim');
+      return;
+    }
+    
+    const currentChainId = await checkNetwork();
+    if (currentChainId !== requiredNetwork.chainId) {
+      console.log('🚨 NETWORK SWITCHING WILL BE TRIGGERED NOW!');
+      console.log('🔄 Wrong network detected, switching automatically...');
+      toast(`Switching to ${requiredNetwork.name} network...`);
+      const switchSuccess = await switchToRequiredNetwork(requiredNetwork);
+      console.log('🔍 Network switch result:', switchSuccess);
+      if (!switchSuccess) {
+        toast.error('Failed to switch to the required network');
+        return;
+      }
+      // Wait a moment for the network to settle
+      await new Promise(resolve => setTimeout(resolve, 1000));
+    }
+    
+    setSelectedClaim(prepareClaimForWithdraw(claim));
+    setShowWithdrawModal(true);
+  }, [getRequiredNetworkForClaim, checkNetwork, switchToRequiredNetwork, prepareClaimForWithdraw]);
+
   // Load claims and transfers from all networks with fraud detection
   const loadClaimsAndTransfers = useCallback(async () => {
     // No connection check needed - we can load all data without wallet connection
-    console.log('🔍 loadClaimsAndTransfers: Loading claims and transfers from all networks (no wallet connection required)');
+        console.log('🔍 loadClaimsAndTransfers: Loading claims and transfers from all networks (no wallet connection required)');
+        console.log('🔍 Current filter:', filter);
+        console.log('🔍 Current account:', account);
 
-    setLoading(true);
+    // Only show loading spinner on initial load
+    if (isInitialLoad) {
+      setLoading(true);
+    }
     try {
       // Fetch claims from all networks
       console.log('🔍 Fetching claims from all networks...');
@@ -440,6 +568,27 @@ const ClaimList = () => {
       // Aggregate claims and transfers with fraud detection
       console.log('🔍 Aggregating claims and transfers with fraud detection...');
       const aggregated = aggregateClaimsAndTransfers(allClaims, allTransfers);
+
+      console.log('🔍 Aggregated data:', {
+        completedTransfers: aggregated.completedTransfers.length,
+        suspiciousClaims: aggregated.suspiciousClaims.length,
+        pendingTransfers: aggregated.pendingTransfers.length,
+        fraudDetected: aggregated.fraudDetected
+      });
+      
+      // Debug: Show details of pending transfers
+      if (aggregated.pendingTransfers.length > 0) {
+        console.log('🔍 Pending transfers details:', aggregated.pendingTransfers.map(t => ({
+          eventType: t.eventType,
+          senderAddress: t.senderAddress,
+          amount: t.amount?.toString(),
+          transactionHash: t.transactionHash,
+          blockNumber: t.blockNumber,
+          status: t.status
+        })));
+      } else {
+        console.log('🔍 No pending transfers found');
+      }
 
       // Set the aggregated data
       setAggregatedData(aggregated);
@@ -474,8 +623,12 @@ const ClaimList = () => {
       toast.error(`Failed to load data: ${error.message}`);
     } finally {
       setLoading(false);
+      // Mark that initial load is complete
+      if (isInitialLoad) {
+        setIsInitialLoad(false);
+      }
     }
-  }, [account, currentBlock, getNetworkWithSettings, getBridgeInstancesWithSettings, filter, getTransferTokenSymbol, getTokenDecimals, getHistorySearchDepth, getClaimSearchDepth]);
+  }, [account, currentBlock, getNetworkWithSettings, getBridgeInstancesWithSettings, filter, getTransferTokenSymbol, getTokenDecimals, getHistorySearchDepth, getClaimSearchDepth, isInitialLoad]);
 
 
 
@@ -566,6 +719,16 @@ const ClaimList = () => {
     return `${address.slice(0, 6)}...${address.slice(-4)}`;
   };
 
+  const copyToClipboard = async (text, label) => {
+    try {
+      await navigator.clipboard.writeText(text);
+      toast.success(`${label} copied to clipboard`);
+    } catch (error) {
+      console.error('Failed to copy to clipboard:', error);
+      toast.error('Failed to copy to clipboard');
+    }
+  };
+
   const formatDate = (timestamp) => {
     return new Date(timestamp * 1000).toLocaleString();
   };
@@ -652,22 +815,6 @@ const ClaimList = () => {
             
           </div>
           
-          {/* New Claim Button */}
-          {network?.id === 1333 && (
-            <button
-              onClick={() => {
-                if (!account) {
-                  toast.error('Please connect your wallet to create new claims');
-                  return;
-                }
-                setShowNewClaim(true);
-              }}
-              className="btn-primary flex items-center gap-2"
-            >
-              <Plus className="w-4 h-4" />
-              New Claim
-            </button>
-          )}
           
 
           
@@ -719,14 +866,14 @@ const ClaimList = () => {
           if (aggregatedData) {
             switch (filter) {
               case 'all':
-                displayData = [...aggregatedData.completedTransfers, ...aggregatedData.suspiciousClaims];
+                displayData = [...aggregatedData.completedTransfers, ...aggregatedData.suspiciousClaims, ...aggregatedData.pendingTransfers];
                 break;
               case 'my':
                 if (account) {
-                  displayData = [...aggregatedData.completedTransfers, ...aggregatedData.suspiciousClaims]
+                  displayData = [...aggregatedData.completedTransfers, ...aggregatedData.suspiciousClaims, ...aggregatedData.pendingTransfers]
                     .filter(item => item.recipientAddress && item.recipientAddress.toLowerCase() === account.toLowerCase());
                 } else {
-                  displayData = [...aggregatedData.completedTransfers, ...aggregatedData.suspiciousClaims];
+                  displayData = [...aggregatedData.completedTransfers, ...aggregatedData.suspiciousClaims, ...aggregatedData.pendingTransfers];
                 }
                 break;
               case 'suspicious':
@@ -744,10 +891,43 @@ const ClaimList = () => {
 
           return displayData.map((item, index) => {
             // Handle both claims and transfers
-            const claim = item.transfer ? item : item; // item is already a claim
             const isTransfer = item.eventType; // Check if this is a transfer
             const isSuspicious = item.isFraudulent;
-            const isPending = item.status === 'pending';
+            // A pending transfer has eventType but no claimNum
+            // A completed claim has claimNum but no eventType
+            const isPending = item.eventType && !item.claimNum;
+            
+            
+            // For pending transfers, use the transfer data directly
+            // For claims, use the claim data
+            const claim = isPending ? {
+              ...item,
+              recipientAddress: item.senderAddress, // For pending transfers, sender becomes recipient
+              senderAddress: item.senderAddress,
+              amount: item.amount,
+              data: item.data,
+              bridgeType: item.bridgeType,
+              networkName: item.networkName,
+              networkKey: item.networkKey,
+              bridgeAddress: item.bridgeAddress,
+              blockNumber: item.blockNumber,
+              transactionHash: item.transactionHash,
+              // Add default values for claim-specific fields
+              currentOutcome: 0,
+              yesStake: null,
+              noStake: null,
+              expiryTs: null,
+              finished: false,
+              withdrawn: false,
+              claimNum: null,
+              // Ensure pending transfers are clearly marked
+              status: 'pending'
+            } : {
+              ...item,
+              // Ensure completed claims don't have eventType
+              eventType: undefined,
+              status: 'completed'
+            };
             
           // Debug: Log the claim data to see what we're working with
             console.log(`🔍 Item ${index + 1} data:`, {
@@ -790,7 +970,7 @@ const ClaimList = () => {
                 <div className="flex-1">
                   <div className="flex items-center gap-3 mb-3">
                     <span className="text-sm font-medium text-white">
-                      {isTransfer ? `Transfer #${index + 1}` : `Claim #${claim.claimNum}`}
+                      {isPending ? `Transfer #${index + 1}` : (isTransfer ? `Transfer #${index + 1}` : `Claim #${claim.claimNum}`)}
                     </span>
                     {isSuspicious && <AlertTriangle className="w-4 h-4 text-red-500" />}
                     {isPending && <Clock className="w-4 h-4 text-yellow-500" />}
@@ -801,7 +981,7 @@ const ClaimList = () => {
                       getStatusColor(status)
                     }`}>
                       {isSuspicious ? 'Suspicious' : 
-                       isPending ? 'Pending Claim' : 
+                       isPending ? 'Pending...' : 
                        getStatusText(status)}
                     </span>
                     <span className="text-sm text-secondary-400">
@@ -839,6 +1019,13 @@ const ClaimList = () => {
                       <span className="text-white ml-2 font-mono">
                         {formatAddress(claim.senderAddress)}
                       </span>
+                      <button
+                        onClick={() => copyToClipboard(claim.senderAddress, 'Sender address')}
+                        className="ml-2 p-1 hover:bg-dark-700 rounded transition-colors"
+                        title="Copy sender address"
+                      >
+                        <Copy className="w-3 h-3 text-secondary-400 hover:text-white" />
+                      </button>
                     </div>
                     
                     <div>
@@ -846,71 +1033,86 @@ const ClaimList = () => {
                       <span className="text-white ml-2 font-mono">
                         {formatAddress(claim.recipientAddress)}
                       </span>
+                      <button
+                        onClick={() => copyToClipboard(claim.recipientAddress, 'Recipient address')}
+                        className="ml-2 p-1 hover:bg-dark-700 rounded transition-colors"
+                        title="Copy recipient address"
+                      >
+                        <Copy className="w-3 h-3 text-secondary-400 hover:text-white" />
+                      </button>
                     </div>
                   </div>
 
-                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 text-sm mb-3">
-                    <div>
-                      <span className="text-secondary-400">Current Outcome:</span>
-                      <span className="text-white ml-2 font-medium">
-                        {getOutcomeText(claim.currentOutcome)}
-                      </span>
+                  {/* Only show claim-specific data for actual claims, not pending transfers */}
+                  {!isPending && (
+                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 text-sm mb-3">
+                      <div>
+                        <span className="text-secondary-400">Current Outcome:</span>
+                        <span className="text-white ml-2 font-medium">
+                          {getOutcomeText(claim.currentOutcome)}
+                        </span>
+                      </div>
+                      
+                      <div>
+                        <span className="text-secondary-400">YES Stakes:</span>
+                        <span className="text-white ml-2 font-medium">
+                          {(() => {
+                            const stakeDecimals = getStakeTokenDecimals(claim);
+                            const formatted = formatAmount(claim.yesStake, stakeDecimals);
+                            console.log(`🔍 YES Stake formatting for claim:`, {
+                              rawStake: claim.yesStake?.toString(),
+                              rawStakeType: typeof claim.yesStake,
+                              rawStakeHasToNumber: typeof claim.yesStake?.toNumber === 'function',
+                              stakeTokenSymbol: getStakeTokenSymbol(claim),
+                              stakeDecimals,
+                              formatted
+                            });
+                            return `${formatted} ${getStakeTokenSymbol(claim)}`;
+                          })()}
+                        </span>
+                      </div>
+                      
+                      <div>
+                        <span className="text-secondary-400">NO Stakes:</span>
+                        <span className="text-white ml-2 font-medium">
+                          {(() => {
+                            const stakeDecimals = getStakeTokenDecimals(claim);
+                            const formatted = formatAmount(claim.noStake, stakeDecimals);
+                            console.log(`🔍 NO Stake formatting for claim:`, {
+                              rawStake: claim.noStake?.toString(),
+                              rawStakeType: typeof claim.noStake,
+                              rawStakeHasToNumber: typeof claim.noStake?.toNumber === 'function',
+                              stakeTokenSymbol: getStakeTokenSymbol(claim),
+                              stakeDecimals,
+                              formatted
+                            });
+                            return `${formatted} ${getStakeTokenSymbol(claim)}`;
+                          })()}
+                        </span>
+                      </div>
                     </div>
-                    
-                    <div>
-                      <span className="text-secondary-400">YES Stakes:</span>
-                      <span className="text-white ml-2 font-medium">
-                        {(() => {
-                          const stakeDecimals = getStakeTokenDecimals(claim);
-                          const formatted = formatAmount(claim.yesStake, stakeDecimals);
-                          console.log(`🔍 YES Stake formatting for claim:`, {
-                            rawStake: claim.yesStake?.toString(),
-                            rawStakeType: typeof claim.yesStake,
-                            rawStakeHasToNumber: typeof claim.yesStake?.toNumber === 'function',
-                            stakeTokenSymbol: getStakeTokenSymbol(claim),
-                            stakeDecimals,
-                            formatted
-                          });
-                          return `${formatted} ${getStakeTokenSymbol(claim)}`;
-                        })()}
-                      </span>
-                    </div>
-                    
-                    <div>
-                      <span className="text-secondary-400">NO Stakes:</span>
-                      <span className="text-white ml-2 font-medium">
-                        {(() => {
-                          const stakeDecimals = getStakeTokenDecimals(claim);
-                          const formatted = formatAmount(claim.noStake, stakeDecimals);
-                          console.log(`🔍 NO Stake formatting for claim:`, {
-                            rawStake: claim.noStake?.toString(),
-                            rawStakeType: typeof claim.noStake,
-                            rawStakeHasToNumber: typeof claim.noStake?.toNumber === 'function',
-                            stakeTokenSymbol: getStakeTokenSymbol(claim),
-                            stakeDecimals,
-                            formatted
-                          });
-                          return `${formatted} ${getStakeTokenSymbol(claim)}`;
-                        })()}
-                      </span>
-                    </div>
-                  </div>
+                  )}
 
-                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 text-sm mb-3">
-                    <div>
-                      <span className="text-secondary-400">Expiry:</span>
-                      <span className="text-white ml-2">
-                        {formatDate(claim.expiryTs)}
-                      </span>
-                    </div>
-                  </div>
+                  {/* Only show expiry information for actual claims, not pending transfers */}
+                  {!isPending && (
+                    <>
+                      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 text-sm mb-3">
+                        <div>
+                          <span className="text-secondary-400">Expiry:</span>
+                          <span className="text-white ml-2">
+                            {formatDate(claim.expiryTs)}
+                          </span>
+                        </div>
+                      </div>
 
-                  {status === 'active' && (
-                    <div className="mt-2">
-                      <span className="text-warning-400 text-sm font-medium">
-                        {getTimeRemaining(claim.expiryTs)}
-                      </span>
-                    </div>
+                      {status === 'active' && (
+                        <div className="mt-2">
+                          <span className="text-warning-400 text-sm font-medium">
+                            {getTimeRemaining(claim.expiryTs)}
+                          </span>
+                        </div>
+                      )}
+                    </>
                   )}
 
                   {/* Action Buttons */}
@@ -959,8 +1161,7 @@ const ClaimList = () => {
                             toast.error('Please connect your wallet to withdraw claims');
                             return;
                           }
-                          setSelectedClaim(prepareClaimForWithdraw(claim));
-                          setShowWithdrawModal(true);
+                          handleWithdraw(claim);
                         }}
                         className="btn-primary flex items-center gap-2 text-sm"
                       >
@@ -977,14 +1178,7 @@ const ClaimList = () => {
                             toast.error('Please connect your wallet to challenge claims');
                             return;
                           }
-                          console.log('🔍 Setting selected claim for challenge:', {
-                            displayClaimNum: claim.claimNum,
-                            actualClaimNum: claim.actualClaimNum,
-                            claim_num: claim.claim_num,
-                            fullClaim: claim
-                          });
-                          setSelectedClaim(claim);
-                          setShowChallengeModal(true);
+                          handleChallenge(claim);
                         }}
                         className="btn-secondary flex items-center gap-2 text-sm"
                       >
@@ -1031,6 +1225,15 @@ const ClaimList = () => {
                       <>
                         <span className="mx-2">•</span>
                         <span>Block: {claim.blockNumber}</span>
+                        <span className="mx-2">•</span>
+                        <span>Txid: {formatAddress(claim.transactionHash)}</span>
+                        <button
+                          onClick={() => copyToClipboard(claim.transactionHash, 'Transaction ID')}
+                          className="ml-1 p-1 hover:bg-dark-700 rounded transition-colors"
+                          title="Copy transaction ID"
+                        >
+                          <Copy className="w-3 h-3 text-secondary-400 hover:text-white" />
+                        </button>
                       </>
                     )}
                   </div>

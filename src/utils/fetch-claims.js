@@ -175,14 +175,14 @@ export const fetchClaimsFromAllNetworks = async ({
                 foreignTokenSymbol: bridgeInstance.foreignTokenSymbol
               });
               
-              // For import bridges, the amount should be in the home token (e.g., USDT from Ethereum)
-              // For export bridges, the amount should be in the home token (e.g., P3D from 3DPass)
+              // For import bridges, the user receives the foreign token (e.g., wUSDT on 3DPass)
+              // For export bridges, the user receives the home token (e.g., P3D on 3DPass)
               if (bridgeInstance.type === 'import' || bridgeInstance.type === 'import_wrapper') {
-                // Import bridges: amount is in the home token (e.g., USDT from foreign network)
-                bridgeTokenSymbol = bridgeInstance.homeTokenSymbol;
-                bridgeTokenAddress = bridgeInstance.homeTokenAddress;
+                // Import bridges: user receives the foreign token (e.g., wUSDT on 3DPass)
+                bridgeTokenSymbol = bridgeInstance.foreignTokenSymbol;
+                bridgeTokenAddress = bridgeInstance.foreignTokenAddress;
               } else if (bridgeInstance.type === 'export') {
-                // Export bridges: amount is in the home token (e.g., P3D from current network)
+                // Export bridges: user receives the home token (e.g., P3D on 3DPass)
                 bridgeTokenSymbol = bridgeInstance.homeTokenSymbol;
                 bridgeTokenAddress = bridgeInstance.homeTokenAddress;
               } else {

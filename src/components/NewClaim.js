@@ -26,7 +26,7 @@ import toast from 'react-hot-toast';
 
 const NewClaim = ({ isOpen, onClose, selectedToken = null, selectedTransfer = null }) => {
   const { account, provider, network, isConnected, signer } = useWeb3();
-  const { getBridgeInstancesWithSettings } = useSettings();
+  const { getBridgeInstancesWithSettings, getNetworkWithSettings } = useSettings();
   
   // Form state
   const [formData, setFormData] = useState({
@@ -58,12 +58,30 @@ const NewClaim = ({ isOpen, onClose, selectedToken = null, selectedTransfer = nu
       if (selectedTransfer) {
         // Pre-fill form with transfer data
         console.log('🔍 Pre-filling form with transfer data:', selectedTransfer);
+        
+        // Use the timestamp that was already fetched when the expatriation was discovered
+        const calculateTxts = () => {
+          const txtsValue = selectedTransfer.timestamp || selectedTransfer.blockTimestamp;
+          
+          console.log('🔍 Available timestamp data:', {
+            transferTimestamp: selectedTransfer.timestamp,
+            blockTimestamp: selectedTransfer.blockTimestamp,
+            blockNumber: selectedTransfer.blockNumber
+          });
+          
+          console.log(`🔍 Using timestamp: ${txtsValue} (${new Date(txtsValue * 1000).toISOString()})`);
+          return txtsValue;
+        };
+        
+        const txtsValue = calculateTxts();
         setFormData(prev => ({
           ...prev,
-          tokenAddress: selectedTransfer.toTokenAddress || '',
-          amount: selectedTransfer.amount || '',
+          tokenAddress: (selectedTransfer.foreignTokenAddress || selectedTransfer.homeTokenAddress || selectedTransfer.toTokenAddress || '').toLowerCase(),
+          amount: selectedTransfer.amount ? 
+            (typeof selectedTransfer.amount === 'string' ? selectedTransfer.amount : 
+             ethers.utils.formatUnits(selectedTransfer.amount, 6)) : '',
           txid: selectedTransfer.txid || selectedTransfer.transactionHash || '',
-          txts: selectedTransfer.timestamp || selectedTransfer.blockTimestamp || '',
+          txts: txtsValue,
           senderAddress: selectedTransfer.fromAddress || selectedTransfer.senderAddress || '',
           recipientAddress: selectedTransfer.toAddress || selectedTransfer.recipientAddress || account || '',
           data: selectedTransfer.data || '0x'
@@ -86,7 +104,7 @@ const NewClaim = ({ isOpen, onClose, selectedToken = null, selectedTransfer = nu
       // Reset approval state when form opens or token changes
       setNeedsApproval(true);
     }
-  }, [isOpen, selectedToken, selectedTransfer, account]);
+  }, [isOpen, selectedToken, selectedTransfer, account, provider, getNetworkWithSettings]);
 
   // Load available tokens from bridge configurations
   const loadAvailableTokens = useCallback(async () => {
@@ -100,11 +118,11 @@ const NewClaim = ({ isOpen, onClose, selectedToken = null, selectedTransfer = nu
       const tokenAddresses = new Set();
       
       Object.values(allBridges).forEach(bridge => {
-        // For export bridges: homeTokenAddress is the token on 3DPass side
-        if (bridge.type === 'export' && bridge.homeTokenAddress) {
-          tokenAddresses.add(bridge.homeTokenAddress.toLowerCase());
+        // For export bridges: foreignTokenAddress is the token on 3DPass side (where we are)
+        if (bridge.type === 'export' && bridge.foreignTokenAddress) {
+          tokenAddresses.add(bridge.foreignTokenAddress.toLowerCase());
         }
-        // For import wrapper bridges: foreignTokenAddress is the token on 3DPass side
+        // For import wrapper bridges: foreignTokenAddress is the token on 3DPass side (where we are)
         else if (bridge.type === 'import_wrapper' && bridge.foreignTokenAddress) {
           tokenAddresses.add(bridge.foreignTokenAddress.toLowerCase());
         }
@@ -280,51 +298,31 @@ const NewClaim = ({ isOpen, onClose, selectedToken = null, selectedTransfer = nu
     }
   }, [selectedBridge, provider, tokenMetadata]);
 
-  // Load required stake
-  const loadRequiredStake = useCallback(async () => {
-    if (!selectedBridge || !formData.amount || !provider) return;
-
-    try {
-      const bridgeContract = new ethers.Contract(
-        selectedBridge.address,
-        COUNTERSTAKE_ABI,
-        provider
-      );
-
-      const amountWei = ethers.utils.parseUnits(formData.amount, tokenMetadata?.decimals || 18);
-      const stake = await bridgeContract.getRequiredStake(amountWei);
-      setRequiredStake(ethers.utils.formatEther(stake));
-    } catch (error) {
-      console.error('Error loading required stake:', error);
-      setRequiredStake('0');
-    }
-  }, [selectedBridge, formData.amount, provider, tokenMetadata]);
 
   // Check allowance
   const checkAllowance = useCallback(async () => {
     if (!selectedBridge || !formData.amount || !provider || !account) return;
 
     try {
-      const amountWei = ethers.utils.parseUnits(formData.amount, tokenMetadata?.decimals || 18);
+      // Check P3D token allowance for staking, not the claim token allowance
       const stakeWei = ethers.utils.parseEther(requiredStake);
-      const totalNeeded = amountWei.add(stakeWei);
 
       const currentAllowance = await get3DPassTokenAllowance(
         provider,
-        formData.tokenAddress,
+        selectedBridge.stakeTokenAddress, // P3D token address
         account,
         selectedBridge.address
       );
 
-      const allowanceWei = ethers.utils.parseUnits(currentAllowance, tokenMetadata?.decimals || 18);
+      const allowanceWei = ethers.utils.parseEther(currentAllowance);
       setAllowance(currentAllowance);
-      setNeedsApproval(allowanceWei.lt(totalNeeded));
+      setNeedsApproval(allowanceWei.lt(stakeWei)); // Allow if allowance >= required stake
     } catch (error) {
-      console.error('Error checking allowance:', error);
+      console.error('Error checking P3D allowance:', error);
       setAllowance('0');
       setNeedsApproval(true);
     }
-  }, [selectedBridge, formData.amount, formData.tokenAddress, provider, account, tokenMetadata, requiredStake]);
+  }, [selectedBridge, formData.amount, provider, account, requiredStake]);
 
   // Load available tokens
   useEffect(() => {
@@ -358,12 +356,6 @@ const NewClaim = ({ isOpen, onClose, selectedToken = null, selectedTransfer = nu
     }
   }, [selectedBridge, provider, account, loadStakeTokenBalance]);
 
-  // Load required stake when bridge and amount change
-  useEffect(() => {
-    if (selectedBridge && formData.amount && provider) {
-      loadRequiredStake();
-    }
-  }, [selectedBridge, formData.amount, provider, loadRequiredStake]);
 
   // Check allowance when bridge and amount change
   useEffect(() => {
@@ -371,6 +363,32 @@ const NewClaim = ({ isOpen, onClose, selectedToken = null, selectedTransfer = nu
       checkAllowance();
     }
   }, [selectedBridge, formData.amount, provider, account, checkAllowance]);
+
+  // Auto-select token when selectedTransfer is provided and availableTokens are loaded
+  useEffect(() => {
+    if (selectedTransfer && availableTokens.length > 0 && formData.tokenAddress) {
+      console.log('🔍 Auto-selecting token for transfer:', {
+        transferForeignTokenAddress: selectedTransfer.foreignTokenAddress,
+        transferHomeTokenAddress: selectedTransfer.homeTokenAddress,
+        formTokenAddress: formData.tokenAddress,
+        availableTokens: availableTokens.map(t => ({ symbol: t.symbol, address: t.address }))
+      });
+      
+      // Find the matching token in availableTokens
+      const matchingToken = availableTokens.find(token => 
+        token.address.toLowerCase() === formData.tokenAddress.toLowerCase()
+      );
+      
+      if (matchingToken) {
+        console.log('✅ Found matching token for auto-selection:', matchingToken);
+        // The token is already set in formData.tokenAddress, so the dropdown should show it as selected
+        // We just need to trigger the token metadata loading
+        loadTokenMetadata();
+      } else {
+        console.log('❌ No matching token found in availableTokens for address:', formData.tokenAddress);
+      }
+    }
+  }, [selectedTransfer, availableTokens, formData.tokenAddress, loadTokenMetadata]);
 
   // Handle form input changes
   const handleInputChange = (field, value) => {
@@ -386,24 +404,21 @@ const NewClaim = ({ isOpen, onClose, selectedToken = null, selectedTransfer = nu
 
     setSubmitting(true);
     try {
-      const amountWei = ethers.utils.parseUnits(formData.amount, tokenMetadata?.decimals || 18);
-      const stakeWei = ethers.utils.parseEther(requiredStake);
-      const totalNeeded = amountWei.add(stakeWei);
-
+      // Approve the P3D stake token, not the claim token
       await approve3DPassToken(
         signer,
-        formData.tokenAddress,
-        selectedBridge.address,
-        ethers.utils.formatUnits(totalNeeded, tokenMetadata?.decimals || 18)
+        selectedBridge.stakeTokenAddress, // P3D token address for staking
+        selectedBridge.address,           // Bridge contract address
+        requiredStake                     // P3D stake amount
       );
 
-      toast.success('Approval successful!');
+      toast.success('P3D approval successful!');
       await checkAllowance();
     } catch (error) {
-      console.error('Error approving token:', error);
+      console.error('Error approving P3D token:', error);
       
       // Handle different types of errors gracefully
-      let errorMessage = 'Approval failed';
+      let errorMessage = 'P3D approval failed';
       
       if (error.code === 4001 || error.message?.includes('User denied transaction') || error.message?.includes('user rejected transaction')) {
         errorMessage = 'Transaction cancelled';
@@ -416,7 +431,7 @@ const NewClaim = ({ isOpen, onClose, selectedToken = null, selectedTransfer = nu
       } else if (error.message?.includes('network')) {
         errorMessage = 'Network error. Please check your connection and try again.';
       } else {
-        errorMessage = `Approval failed: ${error.message}`;
+        errorMessage = `P3D approval failed: ${error.message}`;
       }
       
       toast.error(errorMessage);
@@ -464,6 +479,7 @@ const NewClaim = ({ isOpen, onClose, selectedToken = null, selectedTransfer = nu
         amountWei: amountWei.toString(),
         rewardWei: rewardWei.toString(),
         txts: txts,
+        txtsHex: '0x' + txts.toString(16),
         stakeWei: stakeWei.toString(),
         txid: formData.txid,
         senderAddress: formData.senderAddress,
@@ -493,6 +509,44 @@ const NewClaim = ({ isOpen, onClose, selectedToken = null, selectedTransfer = nu
         formData.data
       ]);
 
+      // Check if a claim already exists for this transfer
+      try {
+        console.log('🔍 Checking if claim already exists...');
+        const lastClaimNum = await bridgeContract.last_claim_num();
+        console.log('🔍 Last claim number:', lastClaimNum.toString());
+        
+        // Try to get ongoing claims
+        const ongoingClaims = await bridgeContract.getOngoingClaimNums();
+        console.log('🔍 Ongoing claims:', ongoingClaims.map(n => n.toString()));
+        
+        // Check if any ongoing claim matches our parameters
+        for (const claimNum of ongoingClaims) {
+          try {
+            const claim = await bridgeContract.getClaim(claimNum);
+            console.log(`🔍 Claim ${claimNum}:`, {
+              txid: claim.txid,
+              sender_address: claim.sender_address,
+              recipient_address: claim.recipient_address,
+              amount: claim.amount.toString(),
+              txts: claim.txts.toString(),
+              data: claim.data
+            });
+            
+            // Check if this matches our transfer
+            if (claim.txid === formData.txid && 
+                claim.sender_address === formData.senderAddress &&
+                claim.recipient_address.toLowerCase() === formData.recipientAddress.toLowerCase()) {
+              console.log(`⚠️ Found existing claim ${claimNum} for this transfer!`);
+              throw new Error(`This transfer has already been claimed (Claim #${claimNum})`);
+            }
+          } catch (claimError) {
+            console.log(`🔍 Error getting claim ${claimNum}:`, claimError.message);
+          }
+        }
+      } catch (checkError) {
+        console.log('🔍 Error checking existing claims:', checkError.message);
+      }
+
       const claimTx = await bridgeContract.claim(
         formData.txid,
         txts,
@@ -503,8 +557,8 @@ const NewClaim = ({ isOpen, onClose, selectedToken = null, selectedTransfer = nu
         formData.recipientAddress,
         formData.data,
         { 
-          gasLimit: 900000,
-          value: stakeWei // Send stake as ETH value
+          value: 0, // No ETH value needed, P3D is transferred via transferFrom
+          gasLimit: 500000 // Higher gas limit for claim transaction
         }
       );
 
@@ -610,24 +664,6 @@ const NewClaim = ({ isOpen, onClose, selectedToken = null, selectedTransfer = nu
           {/* Content */}
           <div className="p-4 sm:p-6 overflow-y-auto max-h-[calc(96vh-8rem)] sm:max-h-[calc(96vh-10rem)]">
             <div className="space-y-6">
-              {/* Transfer Info Banner */}
-              {selectedTransfer && (
-                <div className="card border-blue-700 bg-blue-900/20">
-                  <div className="flex items-center gap-3 mb-2">
-                    <Info className="w-5 h-5 text-blue-500" />
-                    <h3 className="text-lg font-semibold text-white">Transfer Data Pre-filled</h3>
-                  </div>
-                  <p className="text-sm text-blue-300">
-                    The form has been automatically filled with data from the detected transfer. 
-                    Please review and adjust the details as needed before submitting your claim.
-                  </p>
-                  <div className="mt-3 text-xs text-blue-400">
-                    <p>Transfer: {selectedTransfer.fromNetwork} → {selectedTransfer.toNetwork}</p>
-                    <p>Amount: {selectedTransfer.amount} {selectedTransfer.fromTokenSymbol}</p>
-                    <p>Block: {selectedTransfer.blockNumber}</p>
-                  </div>
-                </div>
-              )}
 
               <form onSubmit={handleSubmit} className="space-y-6">
                 {/* Token Selection */}
@@ -858,12 +894,22 @@ const NewClaim = ({ isOpen, onClose, selectedToken = null, selectedTransfer = nu
                 <div className="card">
                   <div className="flex items-center gap-3 mb-4">
                     <AlertCircle className="w-5 h-5 text-warning-500" />
-                    <h3 className="text-lg font-semibold text-white">Approval Required</h3>
+                    <h3 className="text-lg font-semibold text-white">P3D Approval Required</h3>
                   </div>
                   
                   <p className="text-sm text-secondary-400 mb-4">
-                    The bridge needs permission to spend your tokens. Current allowance: {allowance}
+                    The bridge needs permission to spend your P3D tokens for staking. 
+                    Current P3D allowance: {allowance} P3D
                   </p>
+                  
+                  <div className="bg-warning-900/20 border border-warning-700 rounded-lg p-3 mb-4">
+                    <p className="text-sm text-warning-200">
+                      <strong>Required:</strong> {requiredStake} P3D for staking
+                    </p>
+                    <p className="text-sm text-warning-200">
+                      <strong>Your Balance:</strong> {stakeTokenBalance} P3D
+                    </p>
+                  </div>
                   
                   <button
                     type="button"
@@ -876,8 +922,35 @@ const NewClaim = ({ isOpen, onClose, selectedToken = null, selectedTransfer = nu
                     ) : (
                       <CheckCircle className="w-4 h-4" />
                     )}
-                    Approve Bridge
+                    Approve P3D for Bridge
                   </button>
+                </div>
+              )}
+
+              {/* Approved Section */}
+              {!needsApproval && selectedBridge && (
+                <div className="card">
+                  <div className="flex items-center gap-3 mb-4">
+                    <CheckCircle className="w-5 h-5 text-success-500" />
+                    <h3 className="text-lg font-semibold text-white">P3D Approval Complete</h3>
+                  </div>
+                  
+                  <p className="text-success-300 text-sm mb-4">
+                    Bridge contract is now approved to spend your P3D tokens for staking.
+                  </p>
+                  
+                  <div className="bg-success-900/20 border border-success-700 rounded-lg p-3">
+                    <div className="space-y-2">
+                      <div className="flex justify-between">
+                        <span className="text-success-300 text-sm">Current allowance:</span>
+                        <span className="text-success-400 font-medium text-sm">{allowance} P3D</span>
+                      </div>
+                      <div className="flex justify-between">
+                        <span className="text-success-300 text-sm">Required for staking:</span>
+                        <span className="text-success-400 font-medium text-sm">{requiredStake} P3D</span>
+                      </div>
+                    </div>
+                  </div>
                 </div>
               )}
 

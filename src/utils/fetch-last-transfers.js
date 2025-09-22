@@ -1,6 +1,7 @@
 import { ethers } from 'ethers';
 import { NETWORKS } from '../config/networks';
 import { estimateBlocksFromTimeframe, getBlockTime } from './block-estimator';
+import { getBlockTimestamp } from './bridge-contracts';
 
 /**
  * Fetch last transfers (NewExpatriation and NewRepatriation events) from all networks
@@ -185,6 +186,7 @@ export const fetchLastTransfers = async ({
               blockNumber: event.blockNumber,
               transactionHash: event.transactionHash,
               logIndex: event.logIndex,
+              timestamp: await getBlockTimestamp(networkProvider, event.blockNumber),
               
               // Bridge information
               bridgeInstance,
@@ -219,7 +221,8 @@ export const fetchLastTransfers = async ({
               fromNetwork: transferWithInfo.fromNetwork,
               toNetwork: transferWithInfo.toNetwork,
               blockNumber: transferWithInfo.blockNumber,
-              transactionHash: transferWithInfo.transactionHash
+              transactionHash: transferWithInfo.transactionHash,
+              timestamp: transferWithInfo.timestamp
             });
             
             allTransfers.push(transferWithInfo);
@@ -240,6 +243,7 @@ export const fetchLastTransfers = async ({
               blockNumber: event.blockNumber,
               transactionHash: event.transactionHash,
               logIndex: event.logIndex,
+              timestamp: await getBlockTimestamp(networkProvider, event.blockNumber),
               
               // Bridge information
               bridgeInstance,
@@ -274,7 +278,8 @@ export const fetchLastTransfers = async ({
               fromNetwork: transferWithInfo.fromNetwork,
               toNetwork: transferWithInfo.toNetwork,
               blockNumber: transferWithInfo.blockNumber,
-              transactionHash: transferWithInfo.transactionHash
+              transactionHash: transferWithInfo.transactionHash,
+              timestamp: transferWithInfo.timestamp
             });
             
             allTransfers.push(transferWithInfo);
