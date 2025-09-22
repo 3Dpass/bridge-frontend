@@ -4,11 +4,12 @@ import { SettingsProvider } from './contexts/SettingsContext';
 import Header from './components/Header';
 import BridgeForm from './components/BridgeForm';
 import ClaimList from './components/ClaimList';
+import AssistantsList from './components/AssistantsList';
 import { Toaster } from 'react-hot-toast';
 import { motion } from 'framer-motion';
 
 function App() {
-  const [activeTab, setActiveTab] = useState('bridge'); // 'bridge' or 'transfers'
+  const [activeTab, setActiveTab] = useState('bridge'); // 'bridge', 'transfers', or 'pools'
 
     return (
     <Web3Provider>
@@ -42,6 +43,16 @@ function App() {
                 >
                   Claim
                 </button>
+                <button
+                  onClick={() => setActiveTab('pools')}
+                  className={`flex-1 py-2 px-4 rounded-md text-sm font-medium transition-colors ${
+                    activeTab === 'pools'
+                      ? 'bg-primary-600 text-white'
+                      : 'text-secondary-400 hover:text-white hover:bg-dark-700'
+                  }`}
+                >
+                  Pools
+                </button>
               </div>
             </div>
           </section>
@@ -58,6 +69,15 @@ function App() {
             <section id="transfers" className="mb-16">
               <div className="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8">
                 <ClaimList />
+              </div>
+            </section>
+          )}
+
+          {/* Pools Section */}
+          {activeTab === 'pools' && (
+            <section id="pools" className="mb-16">
+              <div className="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8">
+                <AssistantsList />
               </div>
             </section>
           )}
@@ -83,19 +103,16 @@ function App() {
                     step: '1',
                     title: 'Initiate Transfer',
                     description: 'Select source and destination, offer 2-3% to the bridge nodes.',
-                    icon: '💰',
                   },
                   {
                     step: '2',
                     title: 'Counterstake consensus',
                     description: 'Nodes claim valid transfers and challenge fraudulent ones.',
-                    icon: '🤖',
                   },
                   {
                     step: '3',
                     title: 'Receive Tokens',
                     description: 'Receive tokens on destination chain.',
-                    icon: '✅',
                   },
                 ].map((item, index) => (
                   <motion.div
@@ -107,11 +124,10 @@ function App() {
                     className="card text-center relative"
                   >
                     <div className="absolute -top-4 left-1/2 transform -translate-x-1/2">
-                      <div className="w-8 h-8 bg-primary-600 rounded-full flex items-center justify-center">
+                      <div className="w-8 h-8 bg-primary-600 rounded-full flex items-center justify-center border-2 border-dark-800">
                         <span className="text-white font-bold text-sm">{item.step}</span>
                       </div>
                     </div>
-                    <div className="text-4xl mb-4 mt-4">{item.icon}</div>
                     <h3 className="text-lg font-semibold text-white mb-2">{item.title}</h3>
                     <p className="text-secondary-400 text-sm">{item.description}</p>
                   </motion.div>

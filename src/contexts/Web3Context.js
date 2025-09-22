@@ -1,4 +1,5 @@
 import React, { createContext, useContext, useState, useEffect, useCallback } from 'react';
+import { ethers } from 'ethers';
 import {
   connectWallet,
 } from '../utils/web3';
@@ -202,12 +203,22 @@ export const Web3Provider = ({ children }) => {
     const handleChainChangedFromProvider = async (chainId) => {
       console.log('🔍 Chain changed:', chainId);
       try {
-        const newNetwork = await getCurrentNetworkFromProvider(provider);
+        // Recreate provider and signer when network changes to avoid NETWORK_ERROR
+        const newProvider = new ethers.providers.Web3Provider(window.ethereum);
+        const newSigner = newProvider.getSigner();
+        
+        // Update provider and signer first
+        setProvider(newProvider);
+        setSigner(newSigner);
+        
+        // Now get the network from the new provider
+        const newNetwork = await getCurrentNetworkFromProvider(newProvider);
+        console.log('🔄 Setting new network:', newNetwork);
         setNetwork(newNetwork);
         setDetectedNetwork(newNetwork);
         
-        // Reload the page to ensure everything is in sync
-        window.location.reload();
+        // Don't reload the page - let components handle the network change
+        console.log('✅ Network updated without page reload');
       } catch (error) {
         console.error('Error handling chain change:', error);
       }
@@ -343,7 +354,7 @@ export const Web3Provider = ({ children }) => {
     account,
     provider,
     signer,
-    network: getCurrentNetwork(), // Use centralized network detection
+    network: network || detectedNetwork, // Use state directly for reactivity
     isConnecting,
     isConnected,
     error,

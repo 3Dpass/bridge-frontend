@@ -750,7 +750,7 @@ export const IERC20_PRECOMPILE_ABI = [
   "function transferFrom(address from, address to, uint256 value) returns (bool)",
 ];
 
-// Batch ABI (was missing)
+// Batch ABI (3DPass precompile interface)
 export const BATCH_ABI = [
   // Events
   "event SubcallSucceeded(uint256 index)",
@@ -759,6 +759,7 @@ export const BATCH_ABI = [
   // State changing functions
   "function batchSome(address[] to, uint256[] value, bytes[] callData, uint64[] gasLimit)",
   "function batchSomeUntilFailure(address[] to, uint256[] value, bytes[] callData, uint64[] gasLimit)",
+  "function batchAll(address[] to, uint256[] value, bytes[] callData, uint64[] gasLimit)",
 ];
 
 // IBatch ABI (was missing)

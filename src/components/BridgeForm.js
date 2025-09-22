@@ -47,6 +47,7 @@ const BridgeForm = () => {
   const [showExpatriationFlow, setShowExpatriationFlow] = useState(false);
   const [showRepatriationFlow, setShowRepatriationFlow] = useState(false);
   const [showDestinationAddress, setShowDestinationAddress] = useState(false);
+  const [isSwitchingNetwork, setIsSwitchingNetwork] = useState(false);
 
   // Get available networks (include current network)
   const getAvailableNetworks = () => {
@@ -486,6 +487,77 @@ const BridgeForm = () => {
     }
   }, [formData.sourceNetwork, formData.sourceToken, formData.destinationNetwork, formData.destinationToken, getAvailableSourceTokens, getAvailableDestinationTokens, findBridgeInstanceAndOperation]);
 
+  // Switch to selected network
+  const switchToNetwork = async (networkName) => {
+    if (!window.ethereum) {
+      console.error('MetaMask not available');
+      return false;
+    }
+
+    setIsSwitchingNetwork(true);
+    
+    try {
+      // Find the network configuration
+      const networkKey = Object.keys(NETWORKS).find(key => NETWORKS[key].name === networkName);
+      if (!networkKey) {
+        console.error('Network not found:', networkName);
+        return false;
+      }
+
+      const networkConfig = NETWORKS[networkKey];
+      const chainId = `0x${networkConfig.id.toString(16)}`;
+
+      console.log('🔄 Switching to network:', { networkName, chainId });
+
+      await window.ethereum.request({
+        method: 'wallet_switchEthereumChain',
+        params: [{ chainId }],
+      });
+
+      console.log('✅ Network switched successfully to:', networkName);
+      toast.success(`Switched to ${networkName} network`);
+      return true;
+    } catch (error) {
+      console.error('❌ Network switch failed:', error);
+      
+      // If the network is not added to MetaMask, try to add it
+      if (error.code === 4902) {
+        try {
+          const networkKey = Object.keys(NETWORKS).find(key => NETWORKS[key].name === networkName);
+          const networkConfig = NETWORKS[networkKey];
+          
+          await window.ethereum.request({
+            method: 'wallet_addEthereumChain',
+            params: [{
+              chainId: `0x${networkConfig.id.toString(16)}`,
+              chainName: networkConfig.name,
+              nativeCurrency: networkConfig.nativeCurrency,
+              rpcUrls: [networkConfig.rpcUrl],
+              blockExplorerUrls: [networkConfig.explorer],
+            }],
+          });
+          
+          console.log('✅ Network added and switched successfully to:', networkName);
+          toast.success(`Added and switched to ${networkName} network`);
+          return true;
+        } catch (addError) {
+          console.error('❌ Failed to add network:', addError);
+          toast.error(`Failed to add ${networkName} network to MetaMask`);
+          return false;
+        }
+      } else if (error.code === 4001) {
+        // User rejected the request
+        toast.error('Network switch cancelled by user');
+        return false;
+      } else {
+        toast.error(`Failed to switch to ${networkName} network`);
+        return false;
+      }
+    } finally {
+      setIsSwitchingNetwork(false);
+    }
+  };
+
   // Handle form changes
   const handleInputChange = (field, value) => {
     console.log('🔄 handleInputChange called:', { field, value });
@@ -549,6 +621,12 @@ const BridgeForm = () => {
       }));
       setBridgeOperation(null);
       setSelectedBridgeInstance(null);
+      
+      // Switch to the selected network if it's different from current network
+      if (value && network && value !== network.name) {
+        console.log('🔄 Source network changed, switching to:', value);
+        switchToNetwork(value);
+      }
     } else if (field === 'sourceToken') {
       setFormData(prev => ({
         ...prev,
@@ -942,11 +1020,20 @@ const BridgeForm = () => {
             <div>
               <label className="block text-sm font-medium text-white mb-2">
                 Source Network
+                {isSwitchingNetwork && (
+                  <span className="ml-2 text-primary-400 text-sm">
+                    <div className="inline-flex items-center">
+                      <div className="w-3 h-3 border border-primary-400 border-t-transparent rounded-full animate-spin mr-1"></div>
+                      Switching...
+                    </div>
+                  </span>
+                )}
               </label>
               <select
                 value={formData.sourceNetwork}
                 onChange={(e) => handleInputChange('sourceNetwork', e.target.value)}
-                className={`input-field w-full ${errors.sourceNetwork ? 'border-error-500' : ''}`}
+                className={`input-field w-full ${errors.sourceNetwork ? 'border-error-500' : ''} ${isSwitchingNetwork ? 'opacity-50' : ''}`}
+                disabled={isSwitchingNetwork}
               >
                 <option value="">Select network</option>
                 {availableNetworks.map((net) => (
