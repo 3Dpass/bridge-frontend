@@ -106,7 +106,16 @@ function App() {
                   },
                   {
                     step: '2',
-                    title: 'Counterstake consensus',
+                    title: (
+                      <a 
+                        href="https://counterstake.org/how-it-works" 
+                        target="_blank" 
+                        rel="noopener noreferrer"
+                        className="text-primary-400 hover:text-primary-300 underline"
+                      >
+                        Counterstake consensus
+                      </a>
+                    ),
                     description: 'Nodes claim valid transfers and challenge fraudulent ones.',
                   },
                   {

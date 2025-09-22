@@ -13,6 +13,8 @@ export const NETWORKS = {
     erc20Precompile: false,
     isHybrid: false,
     isEVM: true,
+    blockTime: 12, // Average block time in seconds
+    claimBlockRatio: 2, // Average claims per block (configurable)
     nativeCurrency: {
       name: 'Ether',
       symbol: 'ETH',
@@ -137,6 +139,8 @@ export const NETWORKS = {
     isHybrid: true,
     isEVM: true,
     erc20Precompile: true,
+    blockTime: 60, // Average block time in seconds (1 minute)
+    claimBlockRatio: 0.5, // Average claims per block (configurable) - lower activity
     nativeCurrency: {
       name: 'P3D',
       symbol: 'P3D',
@@ -227,6 +231,8 @@ export const TESTNET_NETWORKS = {
     name: 'Ethereum Goerli',
     rpcUrl: 'https://goerli.infura.io/v3/YOUR_INFURA_KEY',
     explorer: 'https://goerli.etherscan.io',
+    blockTime: 12, // Average block time in seconds
+    claimBlockRatio: 1, // Average claims per block (configurable) - lower activity on testnet
   },
   BSC: {
     ...NETWORKS.BSC,
@@ -234,6 +240,7 @@ export const TESTNET_NETWORKS = {
     name: 'BSC Testnet',
     rpcUrl: 'https://data-seed-prebsc-1-s1.binance.org:8545',
     explorer: 'https://testnet.bscscan.com',
+    claimBlockRatio: 0.8, // Average claims per block (configurable) - moderate activity on testnet
   },
   THREEDPASS: {
     ...NETWORKS.THREEDPASS,
@@ -241,6 +248,8 @@ export const TESTNET_NETWORKS = {
     name: '3DPass Testnet',
     rpcUrl: 'https://test-rpc-http.3dpass.org',
     explorer: 'https://test.3dpscan.xyz',
+    blockTime: 60, // Average block time in seconds (1 minute)
+    claimBlockRatio: 0.2, // Average claims per block (configurable) - very low activity on testnet
   }
 };
 

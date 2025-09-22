@@ -1,11 +1,11 @@
 import React, { useState, useEffect, useCallback } from 'react';
+import { ethers } from 'ethers';
 import { useWeb3 } from '../contexts/Web3Context';
 import { useSettings } from '../contexts/SettingsContext';
 import { NETWORKS } from '../config/networks';
-import { 
-  getAllClaims, 
-  createCounterstakeContract 
-} from '../utils/bridge-contracts';
+import { fetchClaimsFromAllNetworks } from '../utils/fetch-claims';
+import { fetchLastTransfers } from '../utils/fetch-last-transfers';
+import { aggregateClaimsAndTransfers } from '../utils/aggregate-claims-transfers';
 import { 
   Clock, 
   CheckCircle, 
@@ -23,16 +23,110 @@ import WithdrawClaim from './WithdrawClaim';
 import Challenge from './Challenge';
 
 const ClaimList = () => {
-  const { account, provider, network, isConnected, getNetworkWithSettings } = useWeb3();
-  const { getBridgeInstancesWithSettings } = useSettings();
+  const { account, network, getNetworkWithSettings } = useWeb3();
+  const { getBridgeInstancesWithSettings, getHistorySearchDepth, getClaimSearchDepth } = useSettings();
   const [claims, setClaims] = useState([]);
+  const [aggregatedData, setAggregatedData] = useState(null);
   const [loading, setLoading] = useState(false);
-  const [filter, setFilter] = useState('all'); // 'all' or 'my'
+  const [filter, setFilter] = useState('all'); // 'all', 'my', 'suspicious', 'pending'
   const [currentBlock, setCurrentBlock] = useState(null);
   const [showNewClaim, setShowNewClaim] = useState(false);
+  const [selectedTransfer, setSelectedTransfer] = useState(null);
   const [showWithdrawModal, setShowWithdrawModal] = useState(false);
   const [showChallengeModal, setShowChallengeModal] = useState(false);
   const [selectedClaim, setSelectedClaim] = useState(null);
+
+  // Network switching functions
+  const getRequiredNetwork = useCallback((transfer) => {
+    // For transfers, we need to determine which network the claim should be created on
+    // Import transfers (NewRepatriation) create claims on the foreign network (Ethereum)
+    // Export transfers (NewExpatriation) create claims on the home network (3DPass)
+    
+    if (transfer.eventType === 'NewRepatriation') {
+      // Import transfer: claim should be created on foreign network (Ethereum)
+      return Object.values(NETWORKS).find(network => 
+        network.name === transfer.toNetwork
+      );
+    } else if (transfer.eventType === 'NewExpatriation') {
+      // Export transfer: claim should be created on home network (3DPass)
+      return Object.values(NETWORKS).find(network => 
+        network.name === transfer.fromNetwork
+      );
+    }
+    
+    return null;
+  }, []);
+
+  const checkNetwork = useCallback(async () => {
+    if (!window.ethereum) return false;
+    
+    try {
+      const chainId = await window.ethereum.request({ method: 'eth_chainId' });
+      const currentChainId = parseInt(chainId, 16);
+      return currentChainId;
+    } catch (error) {
+      console.error('Error checking network:', error);
+      return false;
+    }
+  }, []);
+
+  const switchToRequiredNetwork = useCallback(async (requiredNetwork) => {
+    if (!window.ethereum || !requiredNetwork) return false;
+
+    try {
+      const currentChainId = await checkNetwork();
+      const requiredChainId = requiredNetwork.id;
+
+      if (currentChainId === requiredChainId) {
+        return true; // Already on the correct network
+      }
+
+      console.log(`🔄 Switching from chain ${currentChainId} to ${requiredChainId} (${requiredNetwork.name})`);
+      
+      try {
+        // Try to switch to the network
+        await window.ethereum.request({
+          method: 'wallet_switchEthereumChain',
+          params: [{ chainId: `0x${requiredChainId.toString(16)}` }],
+        });
+        console.log(`✅ Successfully switched to ${requiredNetwork.name}`);
+        return true;
+      } catch (switchError) {
+        // If the network doesn't exist, try to add it
+        if (switchError.code === 4902) {
+          console.log(`🔧 Network ${requiredNetwork.name} not found, attempting to add it...`);
+          
+          try {
+            await window.ethereum.request({
+              method: 'wallet_addEthereumChain',
+              params: [{
+                chainId: `0x${requiredChainId.toString(16)}`,
+                chainName: requiredNetwork.name,
+                nativeCurrency: {
+                  name: requiredNetwork.nativeCurrency?.name || 'ETH',
+                  symbol: requiredNetwork.nativeCurrency?.symbol || 'ETH',
+                  decimals: requiredNetwork.nativeCurrency?.decimals || 18,
+                },
+                rpcUrls: [requiredNetwork.rpcUrl],
+                blockExplorerUrls: requiredNetwork.explorer ? [requiredNetwork.explorer] : undefined,
+              }],
+            });
+            console.log(`✅ Successfully added and switched to ${requiredNetwork.name}`);
+            return true;
+          } catch (addError) {
+            console.error(`❌ Failed to add network ${requiredNetwork.name}:`, addError);
+            throw addError;
+          }
+        } else {
+          console.error(`❌ Failed to switch to network ${requiredNetwork.name}:`, switchError);
+          throw switchError;
+        }
+      }
+    } catch (error) {
+      console.error('Network switching error:', error);
+      throw error;
+    }
+  }, [checkNetwork]);
 
   // All useCallback hooks must be at the top level
   const formatAmount = useCallback((amount, decimals = 18) => {
@@ -315,417 +409,93 @@ const ClaimList = () => {
     };
   }, [getTokenDecimals, getStakeTokenDecimals, getTransferTokenSymbol, getStakeTokenSymbol, formatAmount]);
 
-  // Load claims
-  const loadClaims = useCallback(async () => {
-    // Comprehensive connection check
-    if (!isConnected || !account || !provider || !network) {
-      console.log('🔍 loadClaims: Missing required connection data', {
-        isConnected,
-        hasAccount: !!account,
-        hasProvider: !!provider,
-        hasNetwork: !!network
-      });
-      return;
-    }
-
-    // Additional check to ensure MetaMask is properly connected
-    if (!window.ethereum || !window.ethereum.isMetaMask) {
-      console.log('🔍 loadClaims: MetaMask not available');
-      return;
-    }
-
-    // Check if MetaMask is unlocked and has accounts
-    try {
-      const accounts = await window.ethereum.request({ method: 'eth_accounts' });
-      if (!accounts || accounts.length === 0) {
-        console.log('🔍 loadClaims: No accounts found in MetaMask');
-        return;
-      }
-      
-      // Verify the account matches
-      if (accounts[0].toLowerCase() !== account.toLowerCase()) {
-        console.log('🔍 loadClaims: Account mismatch', {
-          expected: account,
-          actual: accounts[0]
-        });
-        return;
-      }
-    } catch (error) {
-      console.log('🔍 loadClaims: Error checking MetaMask accounts:', error);
-      return;
-    }
+  // Load claims and transfers from all networks with fraud detection
+  const loadClaimsAndTransfers = useCallback(async () => {
+    // No connection check needed - we can load all data without wallet connection
+    console.log('🔍 loadClaimsAndTransfers: Loading claims and transfers from all networks (no wallet connection required)');
 
     setLoading(true);
     try {
-      const networkKey = Object.keys(NETWORKS).find(key => NETWORKS[key].id === network.id);
-      if (!networkKey) {
-        throw new Error('Network configuration not found');
-      }
-      
-      const networkConfig = getNetworkWithSettings(networkKey);
-      if (!networkConfig || !networkConfig.contracts) {
-        throw new Error('Network configuration not found');
-      }
-
-      // Get bridges for the current network from network config and custom settings
-      const defaultBridges = networkConfig.bridges ? Object.values(networkConfig.bridges) : [];
-      
-      // Also get import bridges that are defined at the network level (not in bridges object)
-      const importBridges = Object.entries(networkConfig)
-        .filter(([key, value]) => 
-          key !== 'bridges' && 
-          key !== 'assistants' && 
-          key !== 'tokens' && 
-          key !== 'contracts' &&
-          typeof value === 'object' && 
-          value.address && 
-          (value.type === 'import' || value.type === 'import_wrapper')
-        )
-        .map(([key, value]) => value);
-      
-      const allDefaultBridges = [...defaultBridges, ...importBridges];
-      
-      const customBridges = getBridgeInstancesWithSettings();
-      const customNetworkBridges = Object.values(customBridges).filter(bridge => {
-        // For export bridges: include when current network is the home network
-        if (bridge.type === 'export') {
-          return bridge.homeNetwork === networkConfig.name;
-        }
-        // For import bridges: include when current network is the foreign network
-        if (bridge.type === 'import' || bridge.type === 'import_wrapper') {
-          return bridge.foreignNetwork === networkConfig.name;
-        }
-        // For other types, use the old logic
-        return bridge.homeNetwork === networkConfig.name || bridge.foreignNetwork === networkConfig.name;
-      });
-      
-      // Combine default bridges with custom bridges, avoiding duplicates
-      const networkBridgeInstances = [...allDefaultBridges];
-      customNetworkBridges.forEach(customBridge => {
-        const exists = networkBridgeInstances.some(bridge => bridge.address === customBridge.address);
-        if (!exists) {
-          networkBridgeInstances.push(customBridge);
-        }
+      // Fetch claims from all networks
+      console.log('🔍 Fetching claims from all networks...');
+      const allClaims = await fetchClaimsFromAllNetworks({
+        getNetworkWithSettings,
+        getBridgeInstancesWithSettings,
+        filter,
+        account,
+        claimSearchDepth: getClaimSearchDepth(),
+        getTransferTokenSymbol,
+        getTokenDecimals
       });
 
-      // Detailed logging for bridge discovery verification
-      console.log('🔍 BRIDGE DISCOVERY DEBUG:', {
-        networkKey,
-        networkName: networkConfig.name,
-        networkId: network.id,
-        defaultBridgesCount: defaultBridges.length,
-        defaultBridges: defaultBridges.map(bridge => ({
-          address: bridge.address,
-          type: bridge.type,
-          homeNetwork: bridge.homeNetwork,
-          foreignNetwork: bridge.foreignNetwork,
-          homeTokenSymbol: bridge.homeTokenSymbol,
-          foreignTokenSymbol: bridge.foreignTokenSymbol
-        })),
-        importBridgesCount: importBridges.length,
-        importBridges: importBridges.map(bridge => ({
-          address: bridge.address,
-          type: bridge.type,
-          homeNetwork: bridge.homeNetwork,
-          foreignNetwork: bridge.foreignNetwork,
-          homeTokenSymbol: bridge.homeTokenSymbol,
-          foreignTokenSymbol: bridge.foreignTokenSymbol
-        })),
-        allDefaultBridgesCount: allDefaultBridges.length,
-        customBridgesCount: Object.keys(customBridges).length,
-        customBridges: Object.values(customBridges).map(bridge => ({
-          address: bridge.address,
-          type: bridge.type,
-          homeNetwork: bridge.homeNetwork,
-          foreignNetwork: bridge.foreignNetwork,
-          homeTokenSymbol: bridge.homeTokenSymbol,
-          foreignTokenSymbol: bridge.foreignTokenSymbol
-        })),
-        customNetworkBridgesCount: customNetworkBridges.length,
-        customNetworkBridges: customNetworkBridges.map(bridge => ({
-          address: bridge.address,
-          type: bridge.type,
-          homeNetwork: bridge.homeNetwork,
-          foreignNetwork: bridge.foreignNetwork,
-          homeTokenSymbol: bridge.homeTokenSymbol,
-          foreignTokenSymbol: bridge.foreignTokenSymbol
-        })),
-        finalNetworkBridgeInstancesCount: networkBridgeInstances.length,
-        finalNetworkBridgeInstances: networkBridgeInstances.map(bridge => ({
-          address: bridge.address,
-          type: bridge.type,
-          homeNetwork: bridge.homeNetwork,
-          foreignNetwork: bridge.foreignNetwork,
-          homeTokenSymbol: bridge.homeTokenSymbol,
-          foreignTokenSymbol: bridge.foreignTokenSymbol
-        }))
+      // Fetch transfers from all networks
+      const historySearchDepth = getHistorySearchDepth();
+      console.log(`🔍 Fetching transfers from all networks for ${historySearchDepth}h history...`);
+      const allTransfers = await fetchLastTransfers({
+        getNetworkWithSettings,
+        getBridgeInstancesWithSettings,
+        timeframeHours: historySearchDepth
       });
-      
-      console.log('🔍 Bridge detection debug:', {
-        networkName: network.name,
-        networkId: network.id,
-        networkChainId: network.chainId,
-        networkKey: networkKey,
-        totalBridgeInstances: networkBridgeInstances.length,
-        bridgeInstances: networkBridgeInstances.map(bridge => ({
-          address: bridge.address,
-          homeNetwork: bridge.homeNetwork,
-          foreignNetwork: bridge.foreignNetwork,
-          type: bridge.type
-        }))
-      });
-      
-      console.log('🔍 Filtered bridge instances:', networkBridgeInstances.length);
 
-      if (networkBridgeInstances.length === 0) {
-        throw new Error('No bridge instances found for this network');
-      }
+      // Aggregate claims and transfers with fraud detection
+      console.log('🔍 Aggregating claims and transfers with fraud detection...');
+      const aggregated = aggregateClaimsAndTransfers(allClaims, allTransfers);
 
-      // Get current block for timestamp calculations
-      const block = await provider.getBlock('latest');
-      setCurrentBlock(block);
+      // Set the aggregated data
+      setAggregatedData(aggregated);
+      setClaims(allClaims);
 
-        // Fetch claims from all bridge instances
-        const allClaims = [];
-        console.log('🔍 FETCHING CLAIMS FROM BRIDGES:', {
-          totalBridges: networkBridgeInstances.length,
-          filter,
-          account: account || 'not connected'
-        });
-        
-        for (const bridgeInstance of networkBridgeInstances) {
-          console.log(`🔍 Processing bridge: ${bridgeInstance.address} (${bridgeInstance.type})`);
-          try {
-            // Additional safety check before creating contract
-            if (!provider || !bridgeInstance.address) {
-              console.log(`🔍 Skipping bridge ${bridgeInstance.address}: missing provider or address`);
-              continue;
-            }
-            
-            const contract = await createCounterstakeContract(provider, bridgeInstance.address);
-            console.log(`✅ Contract created for bridge: ${bridgeInstance.address}`);
-            
-            // Get the RPC URL from the current network settings
-            const currentNetwork = getNetworkWithSettings(network?.symbol);
-            const rpcUrl = currentNetwork?.rpcUrl || network?.rpcUrl || 'http://127.0.0.1:9978';
-            console.log(`🔍 Using RPC URL for claims: ${rpcUrl}`);
-            console.log(`🔍 Current network:`, network);
-            console.log(`🔍 Network with settings:`, currentNetwork);
-            
-            let bridgeClaims;
-            if (filter === 'my') {
-              console.log(`🔍 Fetching claims for recipient: ${account}`);
-              // For "My Claims", we need to filter by recipient address
-              // Since getClaimsForRecipient gets claims where user is recipient,
-              // we'll get all claims and filter by recipient on the frontend
-              bridgeClaims = await getAllClaims(contract, 100, rpcUrl);
-            } else {
-              console.log(`🔍 Fetching all claims`);
-              bridgeClaims = await getAllClaims(contract, 100, rpcUrl);
-            }
-            
-            console.log(`✅ Fetched ${bridgeClaims.length} claims from bridge: ${bridgeInstance.address}`);
-          console.log(`🔍 Bridge instance data:`, {
-            address: bridgeInstance.address,
-            type: bridgeInstance.type,
-            homeNetwork: bridgeInstance.homeNetwork,
-            foreignNetwork: bridgeInstance.foreignNetwork,
-            homeTokenSymbol: bridgeInstance.homeTokenSymbol,
-            foreignTokenSymbol: bridgeInstance.foreignTokenSymbol,
-            homeTokenAddress: bridgeInstance.homeTokenAddress,
-            foreignTokenAddress: bridgeInstance.foreignTokenAddress
-          });
-
-          // Add bridge information to each claim and transform field names
-          const claimsWithBridgeInfo = await Promise.all(bridgeClaims.map(async (claim, index) => {
-            // Fetch token information from bridge settings
-            let bridgeTokenSymbol = null;
-            let bridgeTokenAddress = null;
-            
-            try {
-              // Get the bridge settings to find the token address
-              const settings = await contract.settings();
-              bridgeTokenAddress = settings.tokenAddress;
-              
-              console.log(`🔍 Bridge settings for ${bridgeInstance.address}:`, {
-                tokenAddress: bridgeTokenAddress,
-                bridgeType: bridgeInstance.type,
-                homeTokenSymbol: bridgeInstance.homeTokenSymbol,
-                foreignTokenSymbol: bridgeInstance.foreignTokenSymbol
-              });
-              
-              // For import bridges, the amount should be in the home token (e.g., USDT from Ethereum)
-              // For export bridges, the amount should be in the home token (e.g., P3D from 3DPass)
-              if (bridgeInstance.type === 'import' || bridgeInstance.type === 'import_wrapper') {
-                // Import bridges: amount is in the home token (e.g., USDT from foreign network)
-                bridgeTokenSymbol = bridgeInstance.homeTokenSymbol;
-                bridgeTokenAddress = bridgeInstance.homeTokenAddress;
-              } else if (bridgeInstance.type === 'export') {
-                // Export bridges: amount is in the home token (e.g., P3D from current network)
-                bridgeTokenSymbol = bridgeInstance.homeTokenSymbol;
-                bridgeTokenAddress = bridgeInstance.homeTokenAddress;
-              } else {
-                // Fallback to bridge settings
-                if (bridgeTokenAddress) {
-                  // Use the bridge configuration to get the token symbol
-                  bridgeTokenSymbol = bridgeInstance.homeTokenSymbol || bridgeInstance.foreignTokenSymbol;
-                }
+      // Set current block from the first available network for timestamp calculations
+      if (!currentBlock && allClaims.length > 0) {
+        try {
+          const firstNetworkKey = allClaims[0].networkKey;
+          const networkConfig = getNetworkWithSettings(firstNetworkKey);
+          if (networkConfig?.rpcUrl) {
+            const networkProvider = new ethers.providers.JsonRpcProvider(networkConfig.rpcUrl);
+            const block = await networkProvider.getBlock('latest');
+            setCurrentBlock(block);
+            console.log(`🔍 Set current block from ${firstNetworkKey}:`, block.number);
               }
             } catch (error) {
-              console.log(`🔍 Could not fetch bridge settings for ${bridgeInstance.address}:`, error.message);
-              // Fallback to bridge configuration
-              bridgeTokenSymbol = bridgeInstance.homeTokenSymbol || bridgeInstance.foreignTokenSymbol;
-              bridgeTokenAddress = bridgeInstance.homeTokenAddress || bridgeInstance.foreignTokenAddress;
-            }
-            
-            const claimWithInfo = {
-              // Transform field names to match expected UI structure
-              claimNum: index + 1, // Display number for UI
-              actualClaimNum: claim.claim_num, // Actual blockchain claim number
-              
-
-              amount: claim.amount,
-              recipientAddress: claim.recipient_address,
-              currentOutcome: claim.current_outcome,
-              yesStake: claim.yes_stake,
-              noStake: claim.no_stake,
-              expiryTs: claim.expiry_ts,
-              finished: claim.finished,
-              withdrawn: claim.withdrawn,
-              senderAddress: claim.sender_address,
-              data: claim.data,
-              // Keep original fields for debugging
-              ...claim,
-              // Add bridge information
-              bridgeInstance,
-              bridgeAddress: bridgeInstance.address,
-              bridgeType: bridgeInstance.type,
-              homeNetwork: bridgeInstance.homeNetwork,
-              foreignNetwork: bridgeInstance.foreignNetwork,
-              homeTokenAddress: bridgeInstance.homeTokenAddress,
-              foreignTokenAddress: bridgeInstance.foreignTokenAddress,
-              homeTokenSymbol: bridgeInstance.homeTokenSymbol,
-              foreignTokenSymbol: bridgeInstance.foreignTokenSymbol,
-              // Add token info from bridge settings
-              bridgeTokenAddress,
-              bridgeTokenSymbol
-            };
-            
-            console.log(`🔍 Claim ${index + 1} with bridge info:`, {
-              claimNum: claimWithInfo.claimNum,
-              bridgeType: claimWithInfo.bridgeType,
-              homeTokenSymbol: claimWithInfo.homeTokenSymbol,
-              foreignTokenSymbol: claimWithInfo.foreignTokenSymbol,
-              homeTokenAddress: claimWithInfo.homeTokenAddress,
-              foreignTokenAddress: claimWithInfo.foreignTokenAddress,
-              bridgeTokenAddress: claimWithInfo.bridgeTokenAddress,
-              bridgeTokenSymbol: claimWithInfo.bridgeTokenSymbol,
-              homeNetwork: bridgeInstance.homeNetwork,
-              foreignNetwork: bridgeInstance.foreignNetwork,
-              rawAmount: claim.amount,
-              rawAmountString: claim.amount?.toString(),
-              rawAmountHex: claim.amount?.toHexString?.(),
-              amountType: typeof claim.amount,
-              amountHasToNumber: typeof claim.amount?.toNumber === 'function',
-              rawYesStake: claim.yes_stake,
-              rawNoStake: claim.no_stake,
-              yesStakeType: typeof claim.yes_stake,
-              noStakeType: typeof claim.no_stake,
-              finalTokenSymbol: getTransferTokenSymbol(claimWithInfo),
-              finalDecimals: getTokenDecimals(claimWithInfo)
-            });
-            
-            return claimWithInfo;
-          }));
-
-          allClaims.push(...claimsWithBridgeInfo);
-        } catch (error) {
-          console.error(`❌ Error loading claims from bridge ${bridgeInstance.address}:`, {
-            error: error.message,
-            code: error.code,
-            data: error.data,
-            bridgeAddress: bridgeInstance.address,
-            bridgeType: bridgeInstance.type,
-            homeNetwork: bridgeInstance.homeNetwork,
-            foreignNetwork: bridgeInstance.foreignNetwork
-          });
-          
-          // Check if it's a circuit breaker error
-          if (error.message.includes('circuit breaker') || error.message.includes('Execution prevented')) {
-            console.error(`🚨 CIRCUIT BREAKER DETECTED for bridge: ${bridgeInstance.address}`);
-            console.error(`🚨 Bridge details:`, bridgeInstance);
-          }
+          console.log(`🔍 Could not get block for timestamp calculations:`, error.message);
         }
       }
 
-      // Filter claims if "My Claims" is selected
-      let filteredClaims = allClaims;
-      if (filter === 'my') {
-        filteredClaims = allClaims.filter(claim => 
-          claim.recipientAddress && 
-          account && 
-          claim.recipientAddress.toLowerCase() === account.toLowerCase()
-        );
-        console.log(`🔍 Filtered claims for recipient ${account}:`, {
-          totalClaims: allClaims.length,
-          filteredClaims: filteredClaims.length,
-          recipientAddress: account
-        });
-      }
+      console.log(`✅ FINAL RESULT: Loaded ${allClaims.length} claims and ${allTransfers.length} transfers`);
+      console.log(`✅ Aggregation results:`, {
+        completedTransfers: aggregated.stats.completedTransfers,
+        suspiciousClaims: aggregated.stats.suspiciousClaims,
+        pendingTransfers: aggregated.stats.pendingTransfers,
+        fraudDetected: aggregated.fraudDetected
+      });
 
-      // Sort claims by claim number (most recent first)
-      filteredClaims.sort((a, b) => b.claimNum - a.claimNum);
-
-      setClaims(filteredClaims);
     } catch (error) {
-      console.error('Error loading claims:', error);
-      toast.error(`Failed to load claims: ${error.message}`);
+      console.error('Error loading claims and transfers from all networks:', error);
+      toast.error(`Failed to load data: ${error.message}`);
     } finally {
       setLoading(false);
     }
-  }, [account, provider, network, isConnected, getNetworkWithSettings, getBridgeInstancesWithSettings, filter, getTransferTokenSymbol, getTokenDecimals]);
+  }, [account, currentBlock, getNetworkWithSettings, getBridgeInstancesWithSettings, filter, getTransferTokenSymbol, getTokenDecimals, getHistorySearchDepth, getClaimSearchDepth]);
 
 
 
-  // Load claims on mount and when dependencies change
+  // Load claims and transfers on mount and when dependencies change
   useEffect(() => {
-    // Only load claims if user is explicitly connected and all required data is available
-    if (isConnected && account && provider && network && window.ethereum && window.ethereum.isMetaMask) {
-      loadClaims();
-    }
-  }, [loadClaims, isConnected, account, provider, network, filter]);
+    // Always load data - no wallet connection required
+    loadClaimsAndTransfers();
+  }, [loadClaimsAndTransfers, filter]);
 
   // Auto-refresh every 30 seconds
   useEffect(() => {
-    if (!isConnected || !account || !provider || !network || !window.ethereum || !window.ethereum.isMetaMask) return;
-
     const interval = setInterval(() => {
-      loadClaims();
+      loadClaimsAndTransfers();
     }, 30000);
 
     return () => clearInterval(interval);
-  }, [loadClaims, isConnected, account, provider, network]);
+  }, [loadClaimsAndTransfers]);
 
-  if (!isConnected || !account || !provider || !network || !window.ethereum || !window.ethereum.isMetaMask) {
-    return (
-      <div className="text-center py-12">
-        <div className="text-secondary-400 mb-4">
-          <Clock className="w-12 h-12 mx-auto mb-4" />
-          <h3 className="text-lg font-semibold text-white mb-2">Connect Wallet</h3>
-          <p className="text-secondary-400">
-            {!window.ethereum 
-              ? 'MetaMask is not installed. Please install MetaMask to view claims.'
-              : !window.ethereum.isMetaMask
-                ? 'Please use MetaMask to connect to this app.'
-                : !isConnected 
-                  ? 'Connect your wallet to view claims'
-                  : 'Wallet connection incomplete. Please reconnect your wallet.'
-            }
-          </p>
-        </div>
-      </div>
-    );
-  }
+  // No wallet connection required to view claims
+  // Wallet connection is only needed for actions like withdraw/challenge
 
   const getClaimStatus = (claim) => {
     if (!currentBlock) return 'unknown';
@@ -844,7 +614,7 @@ const ClaimList = () => {
               }`}
             >
               <Users className="w-4 h-4" />
-              All Claims
+              All {getHistorySearchDepth()}h
             </button>
             <button
               onClick={() => setFilter('my')}
@@ -857,12 +627,41 @@ const ClaimList = () => {
               <User className="w-4 h-4" />
               My Claims
             </button>
+            <button
+              onClick={() => setFilter('pending')}
+              className={`flex items-center gap-2 px-3 py-2 rounded-md text-sm font-medium transition-colors ${
+                filter === 'pending'
+                  ? 'bg-yellow-600 text-white'
+                  : 'text-secondary-400 hover:text-white hover:bg-dark-700'
+              }`}
+            >
+              <Clock className="w-4 h-4" />
+              Pending
+            </button>
+            <button
+              onClick={() => setFilter('suspicious')}
+              className={`flex items-center gap-2 px-3 py-2 rounded-md text-sm font-medium transition-colors ${
+                filter === 'suspicious'
+                  ? 'bg-red-600 text-white'
+                  : 'text-secondary-400 hover:text-white hover:bg-dark-700'
+              }`}
+            >
+              <AlertTriangle className="w-4 h-4" />
+              Suspect
+            </button>
+            
           </div>
           
           {/* New Claim Button */}
           {network?.id === 1333 && (
             <button
-              onClick={() => setShowNewClaim(true)}
+              onClick={() => {
+                if (!account) {
+                  toast.error('Please connect your wallet to create new claims');
+                  return;
+                }
+                setShowNewClaim(true);
+              }}
               className="btn-primary flex items-center gap-2"
             >
               <Plus className="w-4 h-4" />
@@ -884,26 +683,75 @@ const ClaimList = () => {
       )}
 
       {/* Empty State */}
-      {!loading && claims.length === 0 && (
+      {!loading && (!aggregatedData || (aggregatedData.completedTransfers.length === 0 && aggregatedData.suspiciousClaims.length === 0 && aggregatedData.pendingTransfers.length === 0)) && (
         <div className="text-center py-12">
           <div className="text-secondary-400 mb-4">
             <Clock className="w-12 h-12 mx-auto mb-4" />
-            <h3 className="text-lg font-semibold text-white mb-2">No Claims Found</h3>
+            <h3 className="text-lg font-semibold text-white mb-2">
+              {filter === 'suspicious' ? 'No Suspicious Claims Found' :
+               filter === 'pending' ? 'No Pending Transfers Found' :
+               'No Claims Found'}
+            </h3>
             <p className="text-secondary-400">
               {filter === 'my' 
-                ? 'You don\'t have any claims on this network' 
-                : 'No claims found on this network'
+                ? (account ? 'You don\'t have any claims across all networks' : 'Connect your wallet to see your claims')
+                : filter === 'suspicious'
+                ? 'No suspicious claims detected across all networks'
+                : filter === 'pending'
+                ? 'No pending transfers found across all networks'
+                : 'No claims found across all networks'
               }
             </p>
+            {!account && (
+              <p className="text-xs text-secondary-500 mt-2">
+                💡 You can view all claims and transfers without connecting your wallet. Connect only when you need to interact with them.
+              </p>
+            )}
           </div>
         </div>
       )}
 
       {/* Claims List */}
       <AnimatePresence>
-        {claims.map((claim, index) => {
+        {(() => {
+          // Get the appropriate data based on filter
+          let displayData = [];
+          if (aggregatedData) {
+            switch (filter) {
+              case 'all':
+                displayData = [...aggregatedData.completedTransfers, ...aggregatedData.suspiciousClaims];
+                break;
+              case 'my':
+                if (account) {
+                  displayData = [...aggregatedData.completedTransfers, ...aggregatedData.suspiciousClaims]
+                    .filter(item => item.recipientAddress && item.recipientAddress.toLowerCase() === account.toLowerCase());
+                } else {
+                  displayData = [...aggregatedData.completedTransfers, ...aggregatedData.suspiciousClaims];
+                }
+                break;
+              case 'suspicious':
+                displayData = aggregatedData.suspiciousClaims;
+                break;
+              case 'pending':
+                displayData = aggregatedData.pendingTransfers;
+                break;
+              default:
+                displayData = [...aggregatedData.completedTransfers, ...aggregatedData.suspiciousClaims];
+            }
+          } else {
+            displayData = claims; // Fallback to original claims
+          }
+
+          return displayData.map((item, index) => {
+            // Handle both claims and transfers
+            const claim = item.transfer ? item : item; // item is already a claim
+            const isTransfer = item.eventType; // Check if this is a transfer
+            const isSuspicious = item.isFraudulent;
+            const isPending = item.status === 'pending';
+            
           // Debug: Log the claim data to see what we're working with
-          console.log(`🔍 Claim ${index + 1} data:`, {
+            console.log(`🔍 Item ${index + 1} data:`, {
+              itemType: isTransfer ? 'transfer' : 'claim',
             amount: claim.amount,
             amountType: typeof claim.amount,
             yesStake: claim.yesStake,
@@ -918,32 +766,49 @@ const ClaimList = () => {
             homeNetwork: claim.homeNetwork,
             foreignNetwork: claim.foreignNetwork,
             transferTokenSymbol: getTransferTokenSymbol(claim),
-            rawClaim: claim
+              isSuspicious,
+              isPending,
+              rawItem: item
           });
           
           const status = getClaimStatus(claim);
           return (
             <motion.div
-              key={`${claim.bridgeAddress}-${claim.claimNum}`}
+              key={`${claim.bridgeAddress}-${claim.claimNum || claim.transactionHash}`}
               initial={{ opacity: 0, y: 20 }}
               animate={{ opacity: 1, y: 0 }}
               exit={{ opacity: 0, y: -20 }}
               transition={{ delay: index * 0.1 }}
-              className="card mb-4"
+              className={`card mb-4 ${
+                isSuspicious ? 'border-red-500 bg-red-900/10' : 
+                isPending ? 'border-yellow-500 bg-yellow-900/10' : 
+                'border-dark-700'
+              }`}
             >
               <div className="flex items-start justify-between">
                 {/* Claim Info */}
                 <div className="flex-1">
                   <div className="flex items-center gap-3 mb-3">
                     <span className="text-sm font-medium text-white">
-                      Claim #{claim.claimNum}
+                      {isTransfer ? `Transfer #${index + 1}` : `Claim #${claim.claimNum}`}
                     </span>
-                    {getStatusIcon(status)}
-                    <span className={`text-sm font-medium ${getStatusColor(status)}`}>
-                      {getStatusText(status)}
+                    {isSuspicious && <AlertTriangle className="w-4 h-4 text-red-500" />}
+                    {isPending && <Clock className="w-4 h-4 text-yellow-500" />}
+                    {!isTransfer && !isSuspicious && !isPending && getStatusIcon(status)}
+                    <span className={`text-sm font-medium ${
+                      isSuspicious ? 'text-red-500' : 
+                      isPending ? 'text-yellow-500' : 
+                      getStatusColor(status)
+                    }`}>
+                      {isSuspicious ? 'Suspicious' : 
+                       isPending ? 'Pending Claim' : 
+                       getStatusText(status)}
                     </span>
                     <span className="text-sm text-secondary-400">
                       {claim.bridgeType === 'export' ? 'Export' : 'Import'}
+                    </span>
+                    <span className="text-xs bg-primary-600/20 text-primary-400 px-2 py-1 rounded">
+                      {claim.networkName || claim.networkKey}
                     </span>
                   </div>
 
@@ -1050,10 +915,50 @@ const ClaimList = () => {
 
                   {/* Action Buttons */}
                   <div className="mt-3 flex gap-2">
+                    {/* Create Claim Button for Pending Transfers */}
+                    {isPending && (
+                      <button
+                        onClick={async () => {
+                          if (!account) {
+                            toast.error('Please connect your wallet to create claims');
+                            return;
+                          }
+                          
+                          try {
+                            // Determine the required network for this transfer
+                            const requiredNetwork = getRequiredNetwork(claim);
+                            if (!requiredNetwork) {
+                              toast.error('Could not determine the required network for this transfer');
+                              return;
+                            }
+                            
+                            // Switch to the required network before opening the dialog
+                            toast(`Switching to ${requiredNetwork.name} network...`);
+                            await switchToRequiredNetwork(requiredNetwork);
+                            
+                            // Set the transfer data and open the NewClaim dialog
+                            setSelectedTransfer(claim);
+                            setShowNewClaim(true);
+                          } catch (error) {
+                            console.error('Error switching network:', error);
+                            toast.error(`Failed to switch network: ${error.message}`);
+                          }
+                        }}
+                        className="btn-primary flex items-center gap-2 text-sm"
+                      >
+                        <Plus className="w-4 h-4" />
+                        Claim
+                      </button>
+                    )}
+                    
                     {/* Withdraw Button for Expired Claims with YES Outcome */}
-                    {canWithdrawClaim(claim) && (
+                    {!isTransfer && !isPending && canWithdrawClaim(claim) && (
                       <button
                         onClick={() => {
+                          if (!account) {
+                            toast.error('Please connect your wallet to withdraw claims');
+                            return;
+                          }
                           setSelectedClaim(prepareClaimForWithdraw(claim));
                           setShowWithdrawModal(true);
                         }}
@@ -1065,9 +970,13 @@ const ClaimList = () => {
                     )}
                     
                     {/* Challenge Button for Active Claims */}
-                    {canChallengeClaim(claim) && (
+                    {!isTransfer && !isPending && canChallengeClaim(claim) && (
                       <button
                         onClick={() => {
+                          if (!account) {
+                            toast.error('Please connect your wallet to challenge claims');
+                            return;
+                          }
                           console.log('🔍 Setting selected claim for challenge:', {
                             displayClaimNum: claim.claimNum,
                             actualClaimNum: claim.actualClaimNum,
@@ -1082,6 +991,13 @@ const ClaimList = () => {
                         <AlertTriangle className="w-4 h-4" />
                         Challenge
                       </button>
+                    )}
+                    
+                    {/* Show connection prompt for actions that require wallet */}
+                    {!account && (isPending || (!isTransfer && (canWithdrawClaim(claim) || canChallengeClaim(claim)))) && (
+                      <div className="text-xs text-secondary-400 bg-dark-800 px-3 py-2 rounded">
+                        Connect wallet to interact with this {isPending ? 'transfer' : 'claim'}
+                      </div>
                     )}
                   </div>
                   
@@ -1111,18 +1027,29 @@ const ClaimList = () => {
                     <span>Bridge: {formatAddress(claim.bridgeAddress)}</span>
                     <span className="mx-2">•</span>
                     <span>{claim.homeNetwork} → {claim.foreignNetwork}</span>
+                    {isTransfer && (
+                      <>
+                        <span className="mx-2">•</span>
+                        <span>Block: {claim.blockNumber}</span>
+                      </>
+                    )}
                   </div>
                 </div>
               </div>
             </motion.div>
           );
-        })}
+        });
+        })()}
       </AnimatePresence>
 
       {/* New Claim Dialog */}
       <NewClaim 
         isOpen={showNewClaim}
-        onClose={() => setShowNewClaim(false)}
+        onClose={() => {
+          setShowNewClaim(false);
+          setSelectedTransfer(null);
+        }}
+        selectedTransfer={selectedTransfer}
       />
 
       {/* Withdraw Claim Dialog */}
@@ -1134,7 +1061,7 @@ const ClaimList = () => {
             setShowWithdrawModal(false);
             setSelectedClaim(null);
             // Refresh the claims list
-            loadClaims();
+            loadClaimsAndTransfers();
           }}
           onClose={() => {
             setShowWithdrawModal(false);
@@ -1152,7 +1079,7 @@ const ClaimList = () => {
             setShowChallengeModal(false);
             setSelectedClaim(null);
             // Refresh the claims list
-            loadClaims();
+            loadClaimsAndTransfers();
           }}
           onClose={() => {
             setShowChallengeModal(false);

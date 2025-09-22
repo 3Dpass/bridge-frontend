@@ -24,7 +24,7 @@ import { motion, AnimatePresence } from 'framer-motion';
 import { ethers } from 'ethers';
 import toast from 'react-hot-toast';
 
-const NewClaim = ({ isOpen, onClose, selectedToken = null }) => {
+const NewClaim = ({ isOpen, onClose, selectedToken = null, selectedTransfer = null }) => {
   const { account, provider, network, isConnected, signer } = useWeb3();
   const { getBridgeInstancesWithSettings } = useSettings();
   
@@ -55,7 +55,20 @@ const NewClaim = ({ isOpen, onClose, selectedToken = null }) => {
   // Initialize form when component mounts or token changes
   useEffect(() => {
     if (isOpen) {
-      if (selectedToken) {
+      if (selectedTransfer) {
+        // Pre-fill form with transfer data
+        console.log('🔍 Pre-filling form with transfer data:', selectedTransfer);
+        setFormData(prev => ({
+          ...prev,
+          tokenAddress: selectedTransfer.toTokenAddress || '',
+          amount: selectedTransfer.amount || '',
+          txid: selectedTransfer.txid || selectedTransfer.transactionHash || '',
+          txts: selectedTransfer.timestamp || selectedTransfer.blockTimestamp || '',
+          senderAddress: selectedTransfer.fromAddress || selectedTransfer.senderAddress || '',
+          recipientAddress: selectedTransfer.toAddress || selectedTransfer.recipientAddress || account || '',
+          data: selectedTransfer.data || '0x'
+        }));
+      } else if (selectedToken) {
         setFormData(prev => ({
           ...prev,
           tokenAddress: selectedToken.address,
@@ -73,7 +86,7 @@ const NewClaim = ({ isOpen, onClose, selectedToken = null }) => {
       // Reset approval state when form opens or token changes
       setNeedsApproval(true);
     }
-  }, [isOpen, selectedToken, account]);
+  }, [isOpen, selectedToken, selectedTransfer, account]);
 
   // Load available tokens from bridge configurations
   const loadAvailableTokens = useCallback(async () => {
@@ -582,7 +595,9 @@ const NewClaim = ({ isOpen, onClose, selectedToken = null }) => {
           <div className="flex items-center justify-between p-4 border-b border-secondary-800">
             <div className="flex items-center gap-3">
               <ExternalLink className="w-6 h-6 text-primary-500" />
-              <h2 className="text-xl font-bold text-white">Submit New Claim</h2>
+              <h2 className="text-xl font-bold text-white">
+                {selectedTransfer ? 'Create Claim from Transfer' : 'Submit New Claim'}
+              </h2>
             </div>
             <button
               onClick={onClose}
@@ -595,6 +610,25 @@ const NewClaim = ({ isOpen, onClose, selectedToken = null }) => {
           {/* Content */}
           <div className="p-4 sm:p-6 overflow-y-auto max-h-[calc(96vh-8rem)] sm:max-h-[calc(96vh-10rem)]">
             <div className="space-y-6">
+              {/* Transfer Info Banner */}
+              {selectedTransfer && (
+                <div className="card border-blue-700 bg-blue-900/20">
+                  <div className="flex items-center gap-3 mb-2">
+                    <Info className="w-5 h-5 text-blue-500" />
+                    <h3 className="text-lg font-semibold text-white">Transfer Data Pre-filled</h3>
+                  </div>
+                  <p className="text-sm text-blue-300">
+                    The form has been automatically filled with data from the detected transfer. 
+                    Please review and adjust the details as needed before submitting your claim.
+                  </p>
+                  <div className="mt-3 text-xs text-blue-400">
+                    <p>Transfer: {selectedTransfer.fromNetwork} → {selectedTransfer.toNetwork}</p>
+                    <p>Amount: {selectedTransfer.amount} {selectedTransfer.fromTokenSymbol}</p>
+                    <p>Block: {selectedTransfer.blockNumber}</p>
+                  </div>
+                </div>
+              )}
+
               <form onSubmit={handleSubmit} className="space-y-6">
                 {/* Token Selection */}
                 <div className="card">

@@ -23,7 +23,11 @@ export const SettingsProvider = ({ children }) => {
         setSettings(JSON.parse(savedSettings));
       } else {
         // Initialize with default network config
-        const defaultSettings = {};
+        const defaultSettings = {
+          // Global settings
+          historySearchDepth: 1, // Default to 1 hour
+        claimSearchDepth: 1, // Default to 1 hour for claim search
+        };
         Object.keys(NETWORKS).forEach(networkKey => {
           const network = NETWORKS[networkKey];
           defaultSettings[networkKey] = {
@@ -41,7 +45,11 @@ export const SettingsProvider = ({ children }) => {
     } catch (error) {
       console.error('Error initializing settings:', error);
       // Fallback to defaults
-      const defaultSettings = {};
+      const defaultSettings = {
+        // Global settings
+        historySearchDepth: 1, // Default to 1 hour
+        claimSearchDepth: 1, // Default to 1 hour for claim search
+      };
       Object.keys(NETWORKS).forEach(networkKey => {
         const network = NETWORKS[networkKey];
         defaultSettings[networkKey] = {
@@ -313,7 +321,11 @@ export const SettingsProvider = ({ children }) => {
   const resetSettings = useCallback(() => {
     try {
       localStorage.removeItem('bridgeSettings');
-      const defaultSettings = {};
+      const defaultSettings = {
+        // Global settings
+        historySearchDepth: 1, // Default to 1 hour
+        claimSearchDepth: 1, // Default to 1 hour for claim search
+      };
       Object.keys(NETWORKS).forEach(networkKey => {
         const network = NETWORKS[networkKey];
         defaultSettings[networkKey] = {
@@ -728,6 +740,31 @@ export const SettingsProvider = ({ children }) => {
   }, []);
 
   // Initialize on mount
+  // History search depth utilities
+  const getHistorySearchDepth = useCallback(() => {
+    return settings.historySearchDepth || 1; // Default to 1 hour
+  }, [settings.historySearchDepth]);
+
+  const updateHistorySearchDepth = useCallback((depth) => {
+    const newSettings = {
+      ...settings,
+      historySearchDepth: depth
+    };
+    return saveSettings(newSettings);
+  }, [settings, saveSettings]);
+
+  const getClaimSearchDepth = useCallback(() => {
+    return settings.claimSearchDepth || 1; // Default to 1 hour
+  }, [settings.claimSearchDepth]);
+
+  const updateClaimSearchDepth = useCallback((depth) => {
+    const newSettings = {
+      ...settings,
+      claimSearchDepth: depth
+    };
+    return saveSettings(newSettings);
+  }, [settings, saveSettings]);
+
   useEffect(() => {
     initializeSettings();
   }, [initializeSettings]);
@@ -755,6 +792,12 @@ export const SettingsProvider = ({ children }) => {
     removeCustomAssistantContractForNetwork,
     resetSettings,
     resetNetworkSettings,
+    
+    // History search depth
+    getHistorySearchDepth,
+    updateHistorySearchDepth,
+    getClaimSearchDepth,
+    updateClaimSearchDepth,
     
     // Utilities
     getNetworkWithSettings,

@@ -36,15 +36,14 @@ const WithdrawManagementFee = ({ assistant, onClose, onSuccess }) => {
       if (assistant.type === 'import_wrapper') {
         // Import Wrapper Assistant - has both stake and image management fees
         try {
-          const [mfStake, mfImage, networkFeeComp] = await Promise.all([
-            contract.mf.stake(),
-            contract.mf.image(),
+          const [mf, networkFeeComp] = await Promise.all([
+            contract.mf(),
             contract.network_fee_compensation()
           ]);
           
           setManagementFeeInfo({
-            stakeAmount: mfStake.toString(),
-            imageAmount: mfImage.toString(),
+            stakeAmount: mf.stake.toString(),
+            imageAmount: mf.image.toString(),
             networkFeeCompensation: networkFeeComp.toString()
           });
         } catch (error) {

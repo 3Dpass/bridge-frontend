@@ -50,7 +50,11 @@ const SettingsDialog = ({ isOpen, onClose }) => {
     resetSettings,
     validateTokenConfig,
     getBridgeInstancesWithSettings,
-    getAssistantContractsWithSettings
+    getAssistantContractsWithSettings,
+    getHistorySearchDepth,
+    updateHistorySearchDepth,
+    getClaimSearchDepth,
+    updateClaimSearchDepth
   } = useSettings();
   const [copiedField, setCopiedField] = useState(null);
   const [isSaving, setIsSaving] = useState(false);
@@ -3038,6 +3042,82 @@ const SettingsDialog = ({ isOpen, onClose }) => {
               ))}
 
             </div>
+
+            {/* Global Settings */}
+            <div className="card">
+              <div className="flex items-center gap-3 mb-4">
+                <Settings className="w-5 h-5 text-primary-500" />
+                <h3 className="text-lg font-semibold text-white">Global Settings</h3>
+              </div>
+
+              {/* History Search Depth */}
+              <div className="mb-4">
+                <div className="flex items-center justify-between mb-2">
+                  <label className="text-sm font-medium text-secondary-300">
+                    History Search Depth
+                  </label>
+                  <span className="text-xs text-secondary-400">
+                    Time range for detecting transfer events
+                  </span>
+                </div>
+                
+                <div className="flex gap-2">
+                  <select
+                    value={getHistorySearchDepth()}
+                    onChange={(e) => updateHistorySearchDepth(parseFloat(e.target.value))}
+                    className="flex-1 input-field"
+                  >
+                    <option value={0.25}>15 minutes</option>
+                    <option value={0.5}>30 minutes</option>
+                    <option value={1}>1 hour</option>
+                    <option value={2}>2 hours</option>
+                    <option value={6}>6 hours</option>
+                    <option value={12}>12 hours</option>
+                    <option value={24}>1 day</option>
+                    <option value={48}>2 days</option>
+                    <option value={168}>1 week</option>
+                  </select>
+                </div>
+                
+                  <p className="text-xs text-secondary-400 mt-1">
+                    💡 This determines how far back to search for transfer events when detecting fraud and matching claims with transfers.
+                  </p>
+                </div>
+
+                {/* Claim Search Depth */}
+                <div className="mb-4">
+                  <div className="flex items-center justify-between mb-2">
+                    <label className="text-sm font-medium text-secondary-300">
+                      Claim Search Depth
+                    </label>
+                    <span className="text-xs text-secondary-400">
+                      Time range for fetching claims
+                    </span>
+                  </div>
+                  
+                  <div className="flex gap-2">
+                    <select
+                      value={getClaimSearchDepth()}
+                      onChange={(e) => updateClaimSearchDepth(parseFloat(e.target.value))}
+                      className="flex-1 input-field"
+                    >
+                      <option value={0.25}>15 minutes</option>
+                      <option value={0.5}>30 minutes</option>
+                      <option value={1}>1 hour</option>
+                      <option value={2}>2 hours</option>
+                      <option value={6}>6 hours</option>
+                      <option value={12}>12 hours</option>
+                      <option value={24}>1 day</option>
+                      <option value={48}>2 days</option>
+                      <option value={168}>1 week</option>
+                    </select>
+                  </div>
+                  
+                  <p className="text-xs text-secondary-400 mt-1">
+                    💡 This determines how far back to fetch claims. The number of claims fetched is calculated based on network activity (claims per block ratio).
+                  </p>
+                </div>
+              </div>
           </div>
 
           {/* Footer */}

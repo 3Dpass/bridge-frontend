@@ -11,7 +11,7 @@ import WithdrawSuccessFee from './WithdrawSuccessFee';
 
 const AssistantsList = () => {
   const { getAssistantContractsWithSettings, getAllNetworksWithSettings } = useSettings();
-  const { account, provider } = useWeb3();
+  const { account } = useWeb3();
   const [assistants, setAssistants] = useState([]);
   const [loading, setLoading] = useState(true);
   const [balances, setBalances] = useState({});
@@ -24,12 +24,33 @@ const AssistantsList = () => {
   const [showWithdrawManagementFeeDialog, setShowWithdrawManagementFeeDialog] = useState(false);
   const [showWithdrawSuccessFeeDialog, setShowWithdrawSuccessFeeDialog] = useState(false);
 
-  const getTokenBalance = useCallback(async (contractAddress, tokenAddress) => {
-    if (!provider || !account) return '0';
+  // Helper function to check if an address is a known precompile
+  const isKnownPrecompile = useCallback((address) => {
+    const precompileAddresses = [
+      '0x0000000000000000000000000000000000000802', // P3D precompile
+      '0x0000000000000000000000000000000000000808', // Batch precompile
+      '0xfBFBfbFA000000000000000000000000000000de', // Foreign token precompile
+    ];
+    return precompileAddresses.includes(address.toLowerCase());
+  }, []);
+
+  const getTokenBalance = useCallback(async (contractAddress, tokenAddress, networkKey) => {
+    if (!tokenAddress || tokenAddress === '0x0000000000000000000000000000000000000000') {
+      return '0';
+    }
     
     try {
-      // For native tokens, check against known native token addresses from settings
+      // Get the network-specific provider
       const networks = getAllNetworksWithSettings();
+      const networkConfig = networks[networkKey];
+      if (!networkConfig || !networkConfig.rpcUrl) {
+        console.warn(`No RPC URL found for network: ${networkKey}`);
+        return '0';
+      }
+
+      const networkProvider = new ethers.providers.JsonRpcProvider(networkConfig.rpcUrl);
+      
+      // For native tokens, check against known native token addresses from settings
       const isNativeToken = Object.values(networks).some(network => {
         if (network.tokens) {
           return Object.values(network.tokens).some(token => 
@@ -40,31 +61,53 @@ const AssistantsList = () => {
       });
 
       if (isNativeToken) {
-        const balance = await provider.getBalance(contractAddress);
+        const balance = await networkProvider.getBalance(contractAddress);
         return balance.toString();
+      }
+      
+      // Check if the contract exists by getting its code
+      const code = await networkProvider.getCode(tokenAddress);
+      if (code === '0x') {
+        console.warn(`No contract found at token address: ${tokenAddress} on ${networkKey}`, {
+          networkKey,
+          chainId: networkConfig.id,
+          isKnownPrecompile: isKnownPrecompile(tokenAddress)
+        });
+        return '0';
       }
       
       // For ERC20 tokens
       const tokenContract = new ethers.Contract(
         tokenAddress,
         ['function balanceOf(address) view returns (uint256)'],
-        provider
+        networkProvider
       );
       
       const balance = await tokenContract.balanceOf(contractAddress);
       return balance.toString();
     } catch (error) {
-      console.error('Error getting token balance:', error);
+      console.warn(`Error getting token balance for ${tokenAddress} on ${networkKey}:`, error.message);
       return '0';
     }
-  }, [provider, account, getAllNetworksWithSettings]);
+  }, [getAllNetworksWithSettings, isKnownPrecompile]);
 
-  const getTokenTotalSupply = useCallback(async (tokenAddress) => {
-    if (!provider) return '0';
+  const getTokenTotalSupply = useCallback(async (tokenAddress, networkKey) => {
+    if (!tokenAddress || tokenAddress === '0x0000000000000000000000000000000000000000') {
+      return '0';
+    }
     
     try {
-      // For native tokens, we can't get total supply
+      // Get the network-specific provider
       const networks = getAllNetworksWithSettings();
+      const networkConfig = networks[networkKey];
+      if (!networkConfig || !networkConfig.rpcUrl) {
+        console.warn(`No RPC URL found for network: ${networkKey}`);
+        return '0';
+      }
+
+      const networkProvider = new ethers.providers.JsonRpcProvider(networkConfig.rpcUrl);
+      
+      // For native tokens, we can't get total supply
       const isNativeToken = Object.values(networks).some(network => {
         if (network.tokens) {
           return Object.values(network.tokens).some(token => 
@@ -78,27 +121,49 @@ const AssistantsList = () => {
         return '0';
       }
       
-      // For ERC20 tokens
+      // Check if the contract exists by calling a simple method first
       const tokenContract = new ethers.Contract(
         tokenAddress,
         ['function totalSupply() view returns (uint256)'],
-        provider
+        networkProvider
       );
+      
+      // Try to get the code at the address to see if it's a contract
+      const code = await networkProvider.getCode(tokenAddress);
+      if (code === '0x') {
+        console.warn(`No contract found at address: ${tokenAddress} on ${networkKey}`, {
+          networkKey,
+          chainId: networkConfig.id,
+          isKnownPrecompile: isKnownPrecompile(tokenAddress)
+        });
+        return '0';
+      }
       
       const totalSupply = await tokenContract.totalSupply();
       return totalSupply.toString();
     } catch (error) {
-      console.error('Error getting token total supply:', error);
+      console.warn(`Error getting token total supply for ${tokenAddress} on ${networkKey}:`, error.message);
       return '0';
     }
-  }, [provider, getAllNetworksWithSettings]);
+  }, [getAllNetworksWithSettings, isKnownPrecompile]);
 
-  const getForeignTokenBalance = useCallback(async (assistant, contractAddress, tokenAddress) => {
-    if (!provider || !account) return '0';
+  const getForeignTokenBalance = useCallback(async (assistant, contractAddress, tokenAddress, networkKey) => {
+    if (!tokenAddress || tokenAddress === '0x0000000000000000000000000000000000000000') {
+      return '0';
+    }
     
     try {
-      // For native tokens, check against known native token addresses from settings
+      // Get the network-specific provider
       const networks = getAllNetworksWithSettings();
+      const networkConfig = networks[networkKey];
+      if (!networkConfig || !networkConfig.rpcUrl) {
+        console.warn(`No RPC URL found for network: ${networkKey}`);
+        return '0';
+      }
+
+      const networkProvider = new ethers.providers.JsonRpcProvider(networkConfig.rpcUrl);
+      
+      // For native tokens, check against known native token addresses from settings
       const isNativeToken = Object.values(networks).some(network => {
         if (network.tokens) {
           return Object.values(network.tokens).some(token => 
@@ -109,8 +174,19 @@ const AssistantsList = () => {
       });
 
       if (isNativeToken) {
-        const balance = await provider.getBalance(contractAddress);
+        const balance = await networkProvider.getBalance(contractAddress);
         return balance.toString();
+      }
+      
+      // Check if the contract exists by getting its code
+      const code = await networkProvider.getCode(tokenAddress);
+      if (code === '0x') {
+        console.warn(`No contract found at foreign token address: ${tokenAddress} on ${networkKey}`, {
+          networkKey,
+          chainId: networkConfig.id,
+          isKnownPrecompile: isKnownPrecompile(tokenAddress)
+        });
+        return '0';
       }
       
       // For Import Wrapper assistants, use IPrecompileERC20 interface
@@ -121,7 +197,7 @@ const AssistantsList = () => {
             'function balanceOf(address) view returns (uint256)',
             'function decimals() view returns (uint8)'
           ],
-          provider
+          networkProvider
         );
         
         const balance = await tokenContract.balanceOf(contractAddress);
@@ -136,7 +212,7 @@ const AssistantsList = () => {
             'function balanceOf(address) view returns (uint256)',
             'function decimals() view returns (uint8)'
           ],
-          provider
+          networkProvider
         );
         
         const balance = await tokenContract.balanceOf(contractAddress);
@@ -145,10 +221,10 @@ const AssistantsList = () => {
       
       return '0';
     } catch (error) {
-      console.error('Error getting foreign token balance:', error);
+      console.warn(`Error getting foreign token balance for ${tokenAddress} on ${networkKey}:`, error.message);
       return '0';
     }
-  }, [provider, account, getAllNetworksWithSettings]);
+  }, [getAllNetworksWithSettings, isKnownPrecompile]);
 
   const getStakeTokenAddress = useCallback((assistant) => {
     // Try to find the stake token address from the bridge configuration
@@ -223,27 +299,66 @@ const AssistantsList = () => {
   }, [getAllNetworksWithSettings]);
 
   const loadBalances = useCallback(async () => {
-    if (!account || !provider) return;
+    console.log('🔍 Loading balances for all networks...');
 
     const newBalances = {};
     const newShareTokenSupplies = {};
     const newForeignTokenBalances = {};
     
+    const networks = getAllNetworksWithSettings();
+
     for (const assistant of assistants) {
       try {
+        console.log(`🔍 Processing assistant: ${assistant.key}`, {
+          type: assistant.type,
+          network: assistant.network,
+          bridgeAddress: assistant.bridgeAddress,
+          assistantAddress: assistant.address
+        });
+
+        // Validate assistant has required addresses
+        if (!assistant.bridgeAddress || !assistant.address) {
+          console.warn(`Assistant ${assistant.key} missing required addresses:`, {
+            bridgeAddress: assistant.bridgeAddress,
+            address: assistant.address
+          });
+          continue;
+        }
+
+        // Determine which network this assistant belongs to
+        const assistantNetworkKey = Object.keys(networks).find(networkKey => {
+          const network = networks[networkKey];
+          return network.assistants && network.assistants[assistant.key];
+        });
+
+        if (!assistantNetworkKey) {
+          console.warn(`Could not determine network for assistant ${assistant.key}`);
+          continue;
+        }
+
+        console.log(`🔍 Assistant ${assistant.key} belongs to network: ${assistantNetworkKey}`);
+
         // Get stake token balance
-        const stakeTokenBalance = await getTokenBalance(
-          assistant.bridgeAddress, 
-          assistant.stakeTokenAddress || getStakeTokenAddress(assistant)
-        );
+        const stakeTokenAddress = assistant.stakeTokenAddress || getStakeTokenAddress(assistant);
+        if (stakeTokenAddress) {
+          const stakeTokenBalance = await getTokenBalance(
+            assistant.bridgeAddress, 
+            stakeTokenAddress,
+            assistantNetworkKey
+          );
+          
+          newBalances[assistant.key] = {
+            stakeTokenBalance
+          };
+        } else {
+          console.warn(`No stake token address found for assistant ${assistant.key}`);
+          newBalances[assistant.key] = {
+            stakeTokenBalance: '0'
+          };
+        }
         
         // Get share token total supply instead of balance
-        const shareTokenTotalSupply = await getTokenTotalSupply(assistant.address);
-
-        newBalances[assistant.key] = {
-          stakeTokenBalance
-        };
-
+        const shareTokenTotalSupply = await getTokenTotalSupply(assistant.address, assistantNetworkKey);
         newShareTokenSupplies[assistant.key] = {
           shareTokenTotalSupply
         };
@@ -255,10 +370,16 @@ const AssistantsList = () => {
             const foreignTokenBalance = await getForeignTokenBalance(
               assistant,
               assistant.address, // Assistant contract holds the foreign tokens
-              foreignTokenAddress
+              foreignTokenAddress,
+              assistantNetworkKey
             );
             newForeignTokenBalances[assistant.key] = {
               foreignTokenBalance
+            };
+          } else {
+            console.warn(`No foreign token address found for assistant ${assistant.key}`);
+            newForeignTokenBalances[assistant.key] = {
+              foreignTokenBalance: '0'
             };
           }
         }
@@ -281,17 +402,17 @@ const AssistantsList = () => {
     setBalances(newBalances);
     setShareTokenSupplies(newShareTokenSupplies);
     setForeignTokenBalances(newForeignTokenBalances);
-  }, [assistants, account, provider, getTokenBalance, getTokenTotalSupply, getStakeTokenAddress, getForeignTokenAddress, getForeignTokenBalance]);
+  }, [assistants, getTokenBalance, getTokenTotalSupply, getStakeTokenAddress, getForeignTokenAddress, getForeignTokenBalance, getAllNetworksWithSettings]);
 
   useEffect(() => {
     loadAssistants();
   }, [loadAssistants]);
 
   useEffect(() => {
-    if (assistants.length > 0 && account && provider) {
+    if (assistants.length > 0) {
       loadBalances();
     }
-  }, [assistants, account, provider, loadBalances]);
+  }, [assistants, loadBalances]);
 
   const formatBalance = (balance, decimals = 18) => {
     try {

@@ -36,15 +36,14 @@ const WithdrawSuccessFee = ({ assistant, onClose, onSuccess }) => {
       if (assistant.type === 'import_wrapper') {
         // Import Wrapper Assistant - has both stake and image profits
         try {
-          const [profitStake, profitImage, successFeeRate] = await Promise.all([
-            contract.profit.stake(),
-            contract.profit.image(),
+          const [profit, successFeeRate] = await Promise.all([
+            contract.profit(),
             contract.success_fee10000()
           ]);
           
           setSuccessFeeInfo({
-            stakeProfit: profitStake.toString(),
-            imageProfit: profitImage.toString(),
+            stakeProfit: profit.stake.toString(),
+            imageProfit: profit.image.toString(),
             successFeeRate: (successFeeRate / 100).toString() // Convert from basis points to percentage
           });
         } catch (error) {
