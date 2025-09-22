@@ -661,7 +661,18 @@ const Deposit = ({ assistant, onClose, onSuccess }) => {
       const stakeTokenAddress = getStakeTokenAddress(assistant);
       const imageTokenAddress = getImageTokenAddress(assistant);
       
+      console.log('🔐 Batch approval token addresses:', {
+        stakeTokenAddress,
+        imageTokenAddress,
+        assistantAddress: assistant.address,
+        assistantType: assistant.type
+      });
+      
       if (!stakeTokenAddress || !imageTokenAddress) {
+        console.error('❌ Missing token addresses:', {
+          stakeTokenAddress,
+          imageTokenAddress
+        });
         throw new Error('Missing token addresses');
       }
 
@@ -681,6 +692,13 @@ const Deposit = ({ assistant, onClose, onSuccess }) => {
       // Prepare batch call data for both tokens
       const stakeApproveData = stakeTokenContract.interface.encodeFunctionData('approve', [assistant.address, maxApprovalAmount]);
       const imageApproveData = imageTokenContract.interface.encodeFunctionData('approve', [assistant.address, maxImageApprovalAmount]);
+      
+      console.log('🔐 Batch call data prepared:', {
+        stakeApproveData: stakeApproveData.slice(0, 10) + '...',
+        imageApproveData: imageApproveData.slice(0, 10) + '...',
+        maxApprovalAmount: maxApprovalAmount.toString(),
+        maxImageApprovalAmount: maxImageApprovalAmount.toString()
+      });
       
       // Batch parameters
       const to = [stakeTokenAddress, imageTokenAddress];
@@ -706,16 +724,42 @@ const Deposit = ({ assistant, onClose, onSuccess }) => {
       
       // Verify the approval worked by checking allowances again
       console.log('🔍 Verifying approval after transaction...');
-      const needsApproval = await checkBatchApprovalNeeded();
-      console.log('🔍 Approval check after transaction:', needsApproval);
       
-      if (needsApproval) {
-        console.log('⚠️ Approval check still shows approval needed after transaction');
-        toast.error('Approval transaction completed but allowances not updated. Please try again.');
-      } else {
-        console.log('✅ Approval verification successful');
+      // Wait a moment for the blockchain to update
+      await new Promise(resolve => setTimeout(resolve, 2000));
+      
+      // Check allowances directly instead of using checkBatchApprovalNeeded to avoid state issues
+      const stakeAllowance = await stakeTokenContract.allowance(account, assistant.address);
+      const imageAllowance = await imageTokenContract.allowance(account, assistant.address);
+      
+      console.log('🔍 Post-transaction allowances:', {
+        stakeAllowance: stakeAllowance.toString(),
+        imageAllowance: imageAllowance.toString(),
+        maxApprovalAmount: maxApprovalAmount.toString(),
+        maxImageApprovalAmount: maxImageApprovalAmount.toString()
+      });
+      
+      const stakeApproved = stakeAllowance.gte(maxApprovalAmount);
+      const imageApproved = imageAllowance.gte(maxImageApprovalAmount);
+      
+      console.log('🔍 Approval verification results:', {
+        stakeApproved,
+        imageApproved,
+        bothApproved: stakeApproved && imageApproved
+      });
+      
+      if (stakeApproved && imageApproved) {
+        console.log('✅ Both tokens approved successfully!');
         toast.success('Both tokens approved successfully!');
         setStep('approved');
+      } else {
+        console.log('⚠️ Approval verification failed:', {
+          stakeApproved,
+          imageApproved,
+          stakeAllowance: stakeAllowance.toString(),
+          imageAllowance: imageAllowance.toString()
+        });
+        toast.error('Approval transaction completed but verification failed. Please try again.');
       }
       
     } catch (error) {
@@ -1281,7 +1325,12 @@ const Deposit = ({ assistant, onClose, onSuccess }) => {
                     <span>Checking Approval Status...</span>
                   </div>
                 ) : (
-                  <span>Approve {stakeTokenSymbol}</span>
+                  <span>
+                    {assistant.type === 'import_wrapper' 
+                      ? `Approve ${stakeTokenSymbol} and ${imageTokenSymbol}`
+                      : `Approve ${stakeTokenSymbol}`
+                    }
+                  </span>
                 )}
               </button>
             </div>

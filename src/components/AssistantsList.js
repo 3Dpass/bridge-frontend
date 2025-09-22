@@ -6,6 +6,8 @@ import { ethers } from 'ethers';
 import toast from 'react-hot-toast';
 import Deposit from './Deposit';
 import Withdraw from './Withdraw';
+import WithdrawManagementFee from './WithdrawManagementFee';
+import WithdrawSuccessFee from './WithdrawSuccessFee';
 
 const AssistantsList = () => {
   const { getAssistantContractsWithSettings, getAllNetworksWithSettings } = useSettings();
@@ -19,6 +21,8 @@ const AssistantsList = () => {
   const [selectedAssistant, setSelectedAssistant] = useState(null);
   const [showDepositDialog, setShowDepositDialog] = useState(false);
   const [showWithdrawDialog, setShowWithdrawDialog] = useState(false);
+  const [showWithdrawManagementFeeDialog, setShowWithdrawManagementFeeDialog] = useState(false);
+  const [showWithdrawSuccessFeeDialog, setShowWithdrawSuccessFeeDialog] = useState(false);
 
   const getTokenBalance = useCallback(async (contractAddress, tokenAddress) => {
     if (!provider || !account) return '0';
@@ -482,9 +486,69 @@ const AssistantsList = () => {
     setShowWithdrawDialog(true);
   }, [getRequiredNetwork, checkNetwork, switchToRequiredNetwork]);
 
+  const handleWithdrawManagementFee = useCallback(async (assistant) => {
+    console.log('🔘 Withdraw Management Fee button clicked for assistant:', assistant.address);
+    
+    // Check if we need to switch networks first
+    const requiredNetwork = getRequiredNetwork(assistant);
+    if (!requiredNetwork) {
+      toast.error('Could not determine required network for this assistant');
+      return;
+    }
+    
+    const currentChainId = await checkNetwork();
+    if (currentChainId !== requiredNetwork.chainId) {
+      console.log('🚨 NETWORK SWITCHING WILL BE TRIGGERED NOW!');
+      console.log('🔄 Wrong network detected, switching automatically...');
+      toast(`Switching to ${requiredNetwork.name} network...`);
+      const switchSuccess = await switchToRequiredNetwork(requiredNetwork);
+      console.log('🔍 Network switch result:', switchSuccess);
+      if (!switchSuccess) {
+        toast.error('Failed to switch to the required network');
+        return;
+      }
+      // Wait a moment for the network to settle
+      await new Promise(resolve => setTimeout(resolve, 1000));
+    }
+    
+    setSelectedAssistant(assistant);
+    setShowWithdrawManagementFeeDialog(true);
+  }, [getRequiredNetwork, checkNetwork, switchToRequiredNetwork]);
+
+  const handleWithdrawSuccessFee = useCallback(async (assistant) => {
+    console.log('🔘 Withdraw Success Fee button clicked for assistant:', assistant.address);
+    
+    // Check if we need to switch networks first
+    const requiredNetwork = getRequiredNetwork(assistant);
+    if (!requiredNetwork) {
+      toast.error('Could not determine required network for this assistant');
+      return;
+    }
+    
+    const currentChainId = await checkNetwork();
+    if (currentChainId !== requiredNetwork.chainId) {
+      console.log('🚨 NETWORK SWITCHING WILL BE TRIGGERED NOW!');
+      console.log('🔄 Wrong network detected, switching automatically...');
+      toast(`Switching to ${requiredNetwork.name} network...`);
+      const switchSuccess = await switchToRequiredNetwork(requiredNetwork);
+      console.log('🔍 Network switch result:', switchSuccess);
+      if (!switchSuccess) {
+        toast.error('Failed to switch to the required network');
+        return;
+      }
+      // Wait a moment for the network to settle
+      await new Promise(resolve => setTimeout(resolve, 1000));
+    }
+    
+    setSelectedAssistant(assistant);
+    setShowWithdrawSuccessFeeDialog(true);
+  }, [getRequiredNetwork, checkNetwork, switchToRequiredNetwork]);
+
   const handleCloseDialogs = useCallback(() => {
     setShowDepositDialog(false);
     setShowWithdrawDialog(false);
+    setShowWithdrawManagementFeeDialog(false);
+    setShowWithdrawSuccessFeeDialog(false);
     setSelectedAssistant(null);
   }, []);
 
@@ -712,6 +776,27 @@ const AssistantsList = () => {
                   Withdraw
                 </button>
               </div>
+              
+              {/* Manager Buttons - Only show if user is the manager */}
+              {assistant.managerAddress && account && assistant.managerAddress.toLowerCase() === account.toLowerCase() && (
+                <div className="mt-3 pt-3 border-t border-dark-600">
+                  <div className="text-xs text-secondary-500 mb-2">Manager Actions</div>
+                  <div className="flex gap-2">
+                    <button
+                      onClick={() => handleWithdrawManagementFee(assistant)}
+                      className="flex-1 bg-yellow-600 hover:bg-yellow-700 text-white py-2 px-3 rounded-md text-xs font-medium transition-colors"
+                    >
+                      Withdraw Management Fee
+                    </button>
+                    <button
+                      onClick={() => handleWithdrawSuccessFee(assistant)}
+                      className="flex-1 bg-green-600 hover:bg-green-700 text-white py-2 px-3 rounded-md text-xs font-medium transition-colors"
+                    >
+                      Withdraw Success Fee
+                    </button>
+                  </div>
+                </div>
+              )}
             </div>
           </motion.div>
         ))}
@@ -736,6 +821,28 @@ const AssistantsList = () => {
           onSuccess={() => {
             handleCloseDialogs();
             loadBalances(); // Refresh balances after successful withdraw
+          }}
+        />
+      )}
+
+      {showWithdrawManagementFeeDialog && selectedAssistant && (
+        <WithdrawManagementFee
+          assistant={selectedAssistant}
+          onClose={handleCloseDialogs}
+          onSuccess={() => {
+            handleCloseDialogs();
+            loadBalances(); // Refresh balances after successful fee withdrawal
+          }}
+        />
+      )}
+
+      {showWithdrawSuccessFeeDialog && selectedAssistant && (
+        <WithdrawSuccessFee
+          assistant={selectedAssistant}
+          onClose={handleCloseDialogs}
+          onSuccess={() => {
+            handleCloseDialogs();
+            loadBalances(); // Refresh balances after successful fee withdrawal
           }}
         />
       )}
