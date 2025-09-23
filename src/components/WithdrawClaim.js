@@ -16,13 +16,14 @@ const WithdrawClaim = ({ claim, onWithdrawSuccess, onClose }) => {
     setError(null);
 
     try {
-      console.log('🔍 Starting withdraw process for claim:', claim.claimNum);
+      console.log('🔍 Starting withdraw process for claim:', claim.actualClaimNum || claim.claimNum);
       console.log('🔍 Signer address:', await signer.getAddress());
       console.log('🔍 Provider network:', (await signer.provider.getNetwork()).name);
       console.log('🔍 Provider URL:', signer.provider.connection?.url || 'Unknown');
       console.log('🔍 Current block number:', await signer.provider.getBlockNumber());
       console.log('🔍 Claim object:', {
         claimNum: claim.claimNum,
+        actualClaimNum: claim.actualClaimNum,
         bridgeAddress: claim.bridgeAddress,
         withdrawn: claim.withdrawn,
         finished: claim.finished,
@@ -60,7 +61,7 @@ const WithdrawClaim = ({ claim, onWithdrawSuccess, onClose }) => {
       console.log('🔍 Contract created for bridge:', claim.bridgeAddress);
       console.log('🔍 Contract methods:', Object.keys(contract.functions || {}));
       console.log('🔍 Withdraw function exists:', typeof contract.withdraw);
-      console.log('🔍 Withdrawing claim number:', claim.claimNum);
+      console.log('🔍 Withdrawing claim number:', claim.actualClaimNum || claim.claimNum);
       
       // Debug available withdraw functions
       console.log('🔍 Available withdraw functions:');
@@ -92,9 +93,10 @@ const WithdrawClaim = ({ claim, onWithdrawSuccess, onClose }) => {
       console.log('🔍 withdraw(uint256) exists:', typeof contract['withdraw(uint256)']);
 
       // Call the withdraw function using the correct syntax for overloaded functions
-      // Ensure claim number is properly formatted as BigNumber
-      const claimNum = ethers.BigNumber.from(claim.claimNum);
-      console.log('🔍 Original claim number:', claim.claimNum);
+      // Use actualClaimNum (real blockchain claim number) instead of claimNum (display number)
+      const claimNum = ethers.BigNumber.from(claim.actualClaimNum || claim.claimNum);
+      console.log('🔍 Original claim number (display):', claim.claimNum);
+      console.log('🔍 Actual claim number (blockchain):', claim.actualClaimNum);
       console.log('🔍 Claim number as BigNumber:', claimNum.toString());
       console.log('🔍 Claim number type:', typeof claimNum);
       console.log('🔍 Claim number hex:', claimNum.toHexString());
@@ -352,7 +354,7 @@ const WithdrawClaim = ({ claim, onWithdrawSuccess, onClose }) => {
       toast.success(
         <div>
           <h3 className="text-success-400 font-medium">Withdrawal Successful</h3>
-          <p className="text-success-300 text-sm mt-1">Successfully withdrew claim #{claim.claimNum}!</p>
+          <p className="text-success-300 text-sm mt-1">Successfully withdrew claim #{claim.actualClaimNum || claim.claimNum}!</p>
         </div>,
         {
           duration: 6000,
@@ -368,7 +370,7 @@ const WithdrawClaim = ({ claim, onWithdrawSuccess, onClose }) => {
       
       // Call the success callback to refresh the claims list
       if (onWithdrawSuccess) {
-        onWithdrawSuccess(claim.claimNum);
+        onWithdrawSuccess(claim.actualClaimNum || claim.claimNum);
       }
 
     } catch (err) {
@@ -497,7 +499,7 @@ const WithdrawClaim = ({ claim, onWithdrawSuccess, onClose }) => {
             <div className="space-y-2 text-sm">
               <div className="flex justify-between">
                 <span className="text-gray-400">Claim #:</span>
-                <span className="text-white font-mono">{claim.claimNum}</span>
+                <span className="text-white font-mono">{claim.actualClaimNum || claim.claimNum}</span>
               </div>
               <div className="flex justify-between">
                 <span className="text-gray-400">Amount:</span>

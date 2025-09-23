@@ -74,9 +74,30 @@ const NewClaim = ({ isOpen, onClose, selectedToken = null, selectedTransfer = nu
         };
         
         const txtsValue = calculateTxts();
+        // Determine the correct token address based on the network we're on
+        let tokenAddress = '';
+        if (network?.id === 1333) {
+          // On 3DPass: use foreignTokenAddress (token on 3DPass side)
+          tokenAddress = selectedTransfer.foreignTokenAddress || selectedTransfer.toTokenAddress || '';
+        } else if (network?.id === 1) {
+          // On Ethereum: use homeTokenAddress (token on Ethereum side)
+          tokenAddress = selectedTransfer.homeTokenAddress || selectedTransfer.fromTokenAddress || '';
+        } else {
+          // Fallback: try both
+          tokenAddress = selectedTransfer.foreignTokenAddress || selectedTransfer.homeTokenAddress || selectedTransfer.toTokenAddress || '';
+        }
+        
+        console.log('🔍 Setting token address for network:', {
+          networkId: network?.id,
+          networkName: network?.name,
+          foreignTokenAddress: selectedTransfer.foreignTokenAddress,
+          homeTokenAddress: selectedTransfer.homeTokenAddress,
+          selectedTokenAddress: tokenAddress
+        });
+        
         setFormData(prev => ({
           ...prev,
-          tokenAddress: (selectedTransfer.foreignTokenAddress || selectedTransfer.homeTokenAddress || selectedTransfer.toTokenAddress || '').toLowerCase(),
+          tokenAddress: tokenAddress.toLowerCase(),
           amount: selectedTransfer.amount ? 
             (typeof selectedTransfer.amount === 'string' ? selectedTransfer.amount : 
              ethers.utils.formatUnits(selectedTransfer.amount, 6)) : '',
@@ -104,7 +125,7 @@ const NewClaim = ({ isOpen, onClose, selectedToken = null, selectedTransfer = nu
       // Reset approval state when form opens or token changes
       setNeedsApproval(true);
     }
-  }, [isOpen, selectedToken, selectedTransfer, account, provider, getNetworkWithSettings]);
+  }, [isOpen, selectedToken, selectedTransfer, account, provider, getNetworkWithSettings, network?.id, network?.name]);
 
   // Load available tokens from bridge configurations
   const loadAvailableTokens = useCallback(async () => {
@@ -114,17 +135,91 @@ const NewClaim = ({ isOpen, onClose, selectedToken = null, selectedTransfer = nu
       const tokens = [];
       const allBridges = getBridgeInstancesWithSettings();
       
+      console.log('🔍 All bridges from settings:', Object.keys(allBridges));
+      console.log('🔍 Bridge details:', Object.values(allBridges).map(b => ({
+        type: b.type,
+        homeNetwork: b.homeNetwork,
+        foreignNetwork: b.foreignNetwork,
+        homeTokenAddress: b.homeTokenAddress,
+        foreignTokenAddress: b.foreignTokenAddress
+      })));
+      
       // Get unique token addresses from all bridges
       const tokenAddresses = new Set();
       
       Object.values(allBridges).forEach(bridge => {
+        console.log('🔍 Processing bridge:', {
+          type: bridge.type,
+          homeNetwork: bridge.homeNetwork,
+          foreignNetwork: bridge.foreignNetwork,
+          homeTokenAddress: bridge.homeTokenAddress,
+          foreignTokenAddress: bridge.foreignTokenAddress,
+          currentNetwork: network?.name,
+          currentNetworkId: network?.id
+        });
+        
         // For export bridges: foreignTokenAddress is the token on 3DPass side (where we are)
         if (bridge.type === 'export' && bridge.foreignTokenAddress) {
           tokenAddresses.add(bridge.foreignTokenAddress.toLowerCase());
+          console.log('✅ Added export bridge token:', bridge.foreignTokenAddress);
         }
-        // For import wrapper bridges: foreignTokenAddress is the token on 3DPass side (where we are)
-        else if (bridge.type === 'import_wrapper' && bridge.foreignTokenAddress) {
-          tokenAddresses.add(bridge.foreignTokenAddress.toLowerCase());
+        // For import wrapper bridges: 
+        // - On 3DPass: foreignTokenAddress is the token on 3DPass side (where we are)
+        // - On Ethereum: homeTokenAddress is the token on Ethereum side (where we are for repatriation claims)
+        else if (bridge.type === 'import_wrapper') {
+          console.log('🔍 Found import_wrapper bridge, checking token addresses:', {
+            bridgeType: bridge.type,
+            homeTokenAddress: bridge.homeTokenAddress,
+            foreignTokenAddress: bridge.foreignTokenAddress,
+            hasHomeToken: !!bridge.homeTokenAddress,
+            hasForeignToken: !!bridge.foreignTokenAddress,
+            currentNetwork: network?.name,
+            currentNetworkId: network?.id
+          });
+          
+          if (network?.id === 1333) {
+            // On 3DPass: use foreignTokenAddress (token on 3DPass side)
+            if (bridge.foreignTokenAddress) {
+              tokenAddresses.add(bridge.foreignTokenAddress.toLowerCase());
+              console.log('✅ Added import_wrapper bridge foreign token (3DPass):', bridge.foreignTokenAddress);
+            } else {
+              console.log('❌ Import_wrapper bridge has no foreignTokenAddress');
+            }
+          } else if (network?.id === 1) {
+            // On Ethereum: use homeTokenAddress (token on Ethereum side for repatriation claims)
+            if (bridge.homeTokenAddress) {
+              tokenAddresses.add(bridge.homeTokenAddress.toLowerCase());
+              console.log('✅ Added import_wrapper bridge home token (Ethereum):', bridge.homeTokenAddress);
+            } else {
+              console.log('❌ Import_wrapper bridge has no homeTokenAddress');
+            }
+          }
+        }
+        // For import bridges: homeTokenAddress is the token on Ethereum side (where we are for repatriation claims)
+        else if (bridge.type === 'import') {
+          console.log('🔍 Found import bridge, checking homeTokenAddress:', {
+            bridgeType: bridge.type,
+            homeTokenAddress: bridge.homeTokenAddress,
+            hasHomeToken: !!bridge.homeTokenAddress,
+            currentNetwork: network?.name,
+            currentNetworkId: network?.id
+          });
+          if (bridge.homeTokenAddress) {
+            tokenAddresses.add(bridge.homeTokenAddress.toLowerCase());
+            console.log('✅ Added import bridge token:', bridge.homeTokenAddress);
+          } else {
+            console.log('❌ Import bridge has no homeTokenAddress');
+          }
+        } else {
+          console.log('❌ Bridge not processed:', {
+            type: bridge.type,
+            hasForeignToken: !!bridge.foreignTokenAddress,
+            hasHomeToken: !!bridge.homeTokenAddress,
+            foreignToken: bridge.foreignTokenAddress,
+            homeToken: bridge.homeTokenAddress,
+            currentNetwork: network?.name,
+            currentNetworkId: network?.id
+          });
         }
       });
 
@@ -133,46 +228,111 @@ const NewClaim = ({ isOpen, onClose, selectedToken = null, selectedTransfer = nu
       // Load metadata for each unique token address
       for (const address of tokenAddresses) {
         try {
-          const metadata = await get3DPassTokenMetadata(provider, address);
-          tokens.push(metadata);
+          // For 3DPass network, use 3DPass token metadata
+          if (network?.id === 1333) {
+            const metadata = await get3DPassTokenMetadata(provider, address);
+            tokens.push(metadata);
+          } else {
+            // For other networks (like Ethereum), use standard ERC20 metadata
+            const tokenContract = new ethers.Contract(address, [
+              'function symbol() view returns (string)',
+              'function name() view returns (string)',
+              'function decimals() view returns (uint8)'
+            ], provider);
+            
+            const [symbol, name, decimals] = await Promise.all([
+              tokenContract.symbol(),
+              tokenContract.name(),
+              tokenContract.decimals()
+            ]);
+            
+            tokens.push({
+              address,
+              symbol,
+              name,
+              decimals
+            });
+          }
         } catch (error) {
           console.warn(`Failed to load metadata for ${address}:`, error);
         }
       }
 
       console.log('🔍 Loaded tokens from bridges:', tokens.map(t => ({ symbol: t.symbol, address: t.address })));
+      console.log('🔍 Token addresses found:', Array.from(tokenAddresses));
       setAvailableTokens(tokens);
     } catch (error) {
       console.error('Error loading available tokens:', error);
       toast.error('Failed to load available tokens');
     }
-  }, [provider, getBridgeInstancesWithSettings]);
+  }, [provider, getBridgeInstancesWithSettings, network?.id, network?.name]);
 
   // Load token metadata
   const loadTokenMetadata = useCallback(async () => {
     if (!formData.tokenAddress || !provider) return;
 
     try {
-      const metadata = await get3DPassTokenMetadata(provider, formData.tokenAddress);
+      let metadata;
+      
+      // For 3DPass network, use 3DPass token metadata
+      if (network?.id === 1333) {
+        metadata = await get3DPassTokenMetadata(provider, formData.tokenAddress);
+      } else {
+        // For other networks (like Ethereum), use standard ERC20 metadata
+        const tokenContract = new ethers.Contract(formData.tokenAddress, [
+          'function symbol() view returns (string)',
+          'function name() view returns (string)',
+          'function decimals() view returns (uint8)'
+        ], provider);
+        
+        const [symbol, name, decimals] = await Promise.all([
+          tokenContract.symbol(),
+          tokenContract.name(),
+          tokenContract.decimals()
+        ]);
+        
+        metadata = {
+          address: formData.tokenAddress,
+          symbol,
+          name,
+          decimals
+        };
+      }
+      
       setTokenMetadata(metadata);
     } catch (error) {
       console.error('Error loading token metadata:', error);
       setTokenMetadata(null);
     }
-  }, [formData.tokenAddress, provider]);
+  }, [formData.tokenAddress, provider, network?.id]);
 
   // Load token balance
   const loadTokenBalance = useCallback(async () => {
     if (!formData.tokenAddress || !provider || !account) return;
 
     try {
-      const balance = await get3DPassTokenBalance(provider, formData.tokenAddress, account);
+      let balance;
+      
+      // For 3DPass network, use 3DPass token balance
+      if (network?.id === 1333) {
+        balance = await get3DPassTokenBalance(provider, formData.tokenAddress, account);
+      } else {
+        // For other networks (like Ethereum), use standard ERC20 balance
+        const tokenContract = new ethers.Contract(formData.tokenAddress, [
+          'function balanceOf(address) view returns (uint256)'
+        ], provider);
+        
+        const balanceWei = await tokenContract.balanceOf(account);
+        const decimals = tokenMetadata?.decimals || 18;
+        balance = ethers.utils.formatUnits(balanceWei, decimals);
+      }
+      
       setTokenBalance(balance);
     } catch (error) {
       console.error('Error loading token balance:', error);
       setTokenBalance('0');
     }
-  }, [formData.tokenAddress, provider, account]);
+  }, [formData.tokenAddress, provider, account, network?.id, tokenMetadata?.decimals]);
 
   // Load stake token balance (P3D)
   const loadStakeTokenBalance = useCallback(async () => {
@@ -182,7 +342,26 @@ const NewClaim = ({ isOpen, onClose, selectedToken = null, selectedTransfer = nu
     try {
       const stakeTokenAddress = selectedBridge.stakeTokenAddress;
       if (stakeTokenAddress) {
-        const balance = await get3DPassTokenBalance(provider, stakeTokenAddress, account);
+        let balance;
+        
+        // For 3DPass network, use 3DPass token balance
+        if (network?.id === 1333) {
+          balance = await get3DPassTokenBalance(provider, stakeTokenAddress, account);
+        } else {
+          // For other networks (like Ethereum), use standard ERC20 balance
+          const tokenContract = new ethers.Contract(stakeTokenAddress, [
+            'function balanceOf(address) view returns (uint256)',
+            'function decimals() view returns (uint8)'
+          ], provider);
+          
+          const [balanceWei, decimals] = await Promise.all([
+            tokenContract.balanceOf(account),
+            tokenContract.decimals()
+          ]);
+          
+          balance = ethers.utils.formatUnits(balanceWei, decimals); // Use correct decimals for stake token
+        }
+        
         setStakeTokenBalance(balance);
       }
     } catch (error) {
@@ -191,92 +370,112 @@ const NewClaim = ({ isOpen, onClose, selectedToken = null, selectedTransfer = nu
     } finally {
       setIsLoadingStakeBalance(false);
     }
-  }, [selectedBridge, provider, account]);
+  }, [selectedBridge, provider, account, network?.id]);
 
   // Determine the correct bridge based on token
   const determineBridge = useCallback(() => {
     if (!formData.tokenAddress) return;
 
-    const tokenSymbol = getTokenSymbolFromPrecompile(formData.tokenAddress);
-    if (!tokenSymbol) return;
-
     const allBridges = getBridgeInstancesWithSettings();
-    console.log('🔍 determineBridge called with:', { tokenAddress: formData.tokenAddress, tokenSymbol });
+    console.log('🔍 determineBridge called with:', { 
+      tokenAddress: formData.tokenAddress, 
+      currentNetwork: network?.name,
+      currentNetworkId: network?.id
+    });
     console.log('📋 All available bridges:', allBridges);
-    console.log('📋 Bridge keys:', Object.keys(allBridges));
-    console.log('📋 Bridge values:', Object.values(allBridges).map(bridge => ({
-      key: Object.keys(allBridges).find(key => allBridges[key] === bridge),
-      type: bridge.type,
-      homeTokenAddress: bridge.homeTokenAddress,
-      foreignTokenAddress: bridge.foreignTokenAddress,
-      homeTokenSymbol: bridge.homeTokenSymbol,
-      foreignTokenSymbol: bridge.foreignTokenSymbol
-    })));
 
-    // Check if this is a wrapped token (import case)
-    if (tokenSymbol.startsWith('w') && tokenSymbol !== 'wP3D') {
-      console.log('🔍 Looking for import wrapper bridge for wrapped token:', tokenSymbol);
-      
-      // Look for import wrapper bridge for this token
-      // For import wrapper bridges, the token address should match foreignTokenAddress (3DPass side)
-      const importBridge = Object.values(allBridges).find(bridge => {
-        const matches = bridge.type === 'import_wrapper' && 
-          bridge.foreignTokenAddress?.toLowerCase() === formData.tokenAddress.toLowerCase();
+    // For 3DPass network (export and import_wrapper bridges)
+    if (network?.id === 1333) {
+      const tokenSymbol = getTokenSymbolFromPrecompile(formData.tokenAddress);
+      if (!tokenSymbol) return;
+
+      // Check if this is a wrapped token (import_wrapper case)
+      if (tokenSymbol.startsWith('w') && tokenSymbol !== 'wP3D') {
+        console.log('🔍 Looking for import wrapper bridge for wrapped token:', tokenSymbol);
         
-        console.log('🔍 Checking import bridge:', {
-          bridgeType: bridge.type,
-          bridgeForeignTokenAddress: bridge.foreignTokenAddress,
-          bridgeHomeTokenAddress: bridge.homeTokenAddress,
-          bridgeHomeTokenSymbol: bridge.homeTokenSymbol,
-          bridgeForeignTokenSymbol: bridge.foreignTokenSymbol,
-          formDataTokenAddress: formData.tokenAddress,
-          matches
+        // Look for import wrapper bridge for this token
+        // For import wrapper bridges, the token address should match foreignTokenAddress (3DPass side)
+        const importBridge = Object.values(allBridges).find(bridge => {
+          const matches = bridge.type === 'import_wrapper' && 
+            bridge.foreignTokenAddress?.toLowerCase() === formData.tokenAddress.toLowerCase();
+          
+          console.log('🔍 Checking import wrapper bridge:', {
+            bridgeType: bridge.type,
+            bridgeForeignTokenAddress: bridge.foreignTokenAddress,
+            bridgeHomeTokenAddress: bridge.homeTokenAddress,
+            formDataTokenAddress: formData.tokenAddress,
+            matches
+          });
+          
+          return matches;
         });
         
-        return matches;
-      });
-      
-      if (importBridge) {
-        console.log('✅ Found import wrapper bridge:', importBridge);
-        setSelectedBridge(importBridge);
-        return;
-      } else {
-        console.log('❌ No import wrapper bridge found for token address:', formData.tokenAddress);
-        // Let's also check what import wrapper bridges exist
-        const importWrapperBridges = Object.values(allBridges).filter(bridge => bridge.type === 'import_wrapper');
-        console.log('📋 Available import wrapper bridges:', importWrapperBridges);
+        if (importBridge) {
+          console.log('✅ Found import wrapper bridge:', importBridge);
+          setSelectedBridge(importBridge);
+          return;
+        }
       }
-    }
 
-    // Check if this is a native 3DPass token (export case)
-    if (['P3D', 'FIRE', 'WATER'].includes(tokenSymbol)) {
-      // Look for export bridge for this token
-      // For export bridges, the token address should match homeTokenAddress (3DPass side)
-      const exportBridge = Object.values(allBridges).find(bridge => {
-        const matches = bridge.type === 'export' && 
-          bridge.homeTokenAddress?.toLowerCase() === formData.tokenAddress.toLowerCase();
-        
-        console.log('🔍 Checking export bridge:', {
-          bridgeType: bridge.type,
-          bridgeHomeTokenAddress: bridge.homeTokenAddress,
-          bridgeForeignTokenAddress: bridge.foreignTokenAddress,
-          formDataTokenAddress: formData.tokenAddress,
-          matches
+      // Check if this is a native 3DPass token (export case)
+      if (['P3D', 'FIRE', 'WATER'].includes(tokenSymbol)) {
+        // Look for export bridge for this token
+        // For export bridges, the token address should match homeTokenAddress (3DPass side)
+        const exportBridge = Object.values(allBridges).find(bridge => {
+          const matches = bridge.type === 'export' && 
+            bridge.homeTokenAddress?.toLowerCase() === formData.tokenAddress.toLowerCase();
+          
+          console.log('🔍 Checking export bridge:', {
+            bridgeType: bridge.type,
+            bridgeHomeTokenAddress: bridge.homeTokenAddress,
+            bridgeForeignTokenAddress: bridge.foreignTokenAddress,
+            formDataTokenAddress: formData.tokenAddress,
+            matches
+          });
+          
+          return matches;
         });
         
-        return matches;
-      });
-      
-      if (exportBridge) {
-        console.log('✅ Found export bridge:', exportBridge);
-        setSelectedBridge(exportBridge);
-        return;
+        if (exportBridge) {
+          console.log('✅ Found export bridge:', exportBridge);
+          setSelectedBridge(exportBridge);
+          return;
+        }
       }
-    }
+    } 
+           // For Ethereum network (export bridges for repatriation claims)
+           else if (network?.id === 1) {
+             console.log('🔍 Looking for export bridge for repatriation claim on Ethereum');
+             
+             // Look for export bridge for this token
+             // For export bridges, the token address should match homeTokenAddress (Ethereum side)
+             const exportBridge = Object.values(allBridges).find(bridge => {
+               const matches = bridge.type === 'export' && 
+                 bridge.homeTokenAddress?.toLowerCase() === formData.tokenAddress.toLowerCase();
+               
+               console.log('🔍 Checking export bridge:', {
+                 bridgeType: bridge.type,
+                 bridgeHomeTokenAddress: bridge.homeTokenAddress,
+                 bridgeForeignTokenAddress: bridge.foreignTokenAddress,
+                 bridgeHomeNetwork: bridge.homeNetwork,
+                 bridgeForeignNetwork: bridge.foreignNetwork,
+                 formDataTokenAddress: formData.tokenAddress,
+                 matches
+               });
+               
+               return matches;
+             });
+             
+             if (exportBridge) {
+               console.log('✅ Found export bridge for repatriation:', exportBridge);
+               setSelectedBridge(exportBridge);
+               return;
+             }
+           }
 
-    console.log('❌ No bridge found for token:', tokenSymbol);
+    console.log('❌ No bridge found for token:', formData.tokenAddress, 'on network:', network?.name);
     setSelectedBridge(null);
-  }, [formData.tokenAddress, getBridgeInstancesWithSettings]);
+  }, [formData.tokenAddress, getBridgeInstancesWithSettings, network?.id, network?.name]);
 
   // Load required stake with a specific amount
   const loadRequiredStakeWithAmount = useCallback(async (amount) => {
@@ -291,12 +490,25 @@ const NewClaim = ({ isOpen, onClose, selectedToken = null, selectedTransfer = nu
 
       const amountWei = ethers.utils.parseUnits(amount, tokenMetadata?.decimals || 18);
       const stake = await bridgeContract.getRequiredStake(amountWei);
-      setRequiredStake(ethers.utils.formatEther(stake));
+      
+      // Get stake token decimals for correct formatting
+      let stakeTokenDecimals;
+      if (network?.id === 1333) {
+        stakeTokenDecimals = 18; // P3D has 18 decimals
+      } else {
+        // For other networks (like Ethereum), get stake token decimals
+        const stakeTokenContract = new ethers.Contract(selectedBridge.stakeTokenAddress, [
+          'function decimals() view returns (uint8)'
+        ], provider);
+        stakeTokenDecimals = await stakeTokenContract.decimals();
+      }
+      
+      setRequiredStake(ethers.utils.formatUnits(stake, stakeTokenDecimals));
     } catch (error) {
       console.error('Error loading required stake:', error);
       setRequiredStake('0');
     }
-  }, [selectedBridge, provider, tokenMetadata]);
+  }, [selectedBridge, provider, tokenMetadata, network?.id]);
 
 
   // Check allowance
@@ -304,29 +516,58 @@ const NewClaim = ({ isOpen, onClose, selectedToken = null, selectedTransfer = nu
     if (!selectedBridge || !formData.amount || !provider || !account) return;
 
     try {
-      // Check P3D token allowance for staking, not the claim token allowance
-      const stakeWei = ethers.utils.parseEther(requiredStake);
+      let currentAllowance;
+      let stakeTokenDecimals;
+      
+      // For 3DPass network, use 3DPass token allowance
+      if (network?.id === 1333) {
+        currentAllowance = await get3DPassTokenAllowance(
+          provider,
+          selectedBridge.stakeTokenAddress, // P3D token address
+          account,
+          selectedBridge.address
+        );
+        stakeTokenDecimals = 18; // P3D has 18 decimals
+      } else {
+        // For other networks (like Ethereum), use standard ERC20 allowance
+        const tokenContract = new ethers.Contract(selectedBridge.stakeTokenAddress, [
+          'function allowance(address owner, address spender) view returns (uint256)',
+          'function decimals() view returns (uint8)'
+        ], provider);
+        
+        const [allowanceWei, decimals] = await Promise.all([
+          tokenContract.allowance(account, selectedBridge.address),
+          tokenContract.decimals()
+        ]);
+        
+        currentAllowance = ethers.utils.formatUnits(allowanceWei, decimals);
+        stakeTokenDecimals = decimals;
+      }
 
-      const currentAllowance = await get3DPassTokenAllowance(
-        provider,
-        selectedBridge.stakeTokenAddress, // P3D token address
-        account,
-        selectedBridge.address
-      );
-
-      const allowanceWei = ethers.utils.parseEther(currentAllowance);
+      // Parse the required stake with correct decimals
+      const stakeWei = ethers.utils.parseUnits(requiredStake, stakeTokenDecimals);
+      const allowanceWei = ethers.utils.parseUnits(currentAllowance, stakeTokenDecimals);
+      
+      console.log('🔍 Allowance check results:', {
+        currentAllowance,
+        requiredStake,
+        allowanceWei: allowanceWei.toString(),
+        stakeWei: stakeWei.toString(),
+        needsApproval: allowanceWei.lt(stakeWei)
+      });
+      
       setAllowance(currentAllowance);
       setNeedsApproval(allowanceWei.lt(stakeWei)); // Allow if allowance >= required stake
     } catch (error) {
-      console.error('Error checking P3D allowance:', error);
+      console.error('Error checking stake token allowance:', error);
       setAllowance('0');
       setNeedsApproval(true);
     }
-  }, [selectedBridge, formData.amount, provider, account, requiredStake]);
+  }, [selectedBridge, formData.amount, provider, account, requiredStake, network?.id]);
 
   // Load available tokens
   useEffect(() => {
-    if (isOpen && network?.id === 1333) {
+    if (isOpen && (network?.id === 1333 || network?.id === 1)) {
       loadAvailableTokens();
     }
   }, [isOpen, network, loadAvailableTokens]);
@@ -334,11 +575,16 @@ const NewClaim = ({ isOpen, onClose, selectedToken = null, selectedTransfer = nu
   // Load token metadata and balance when token address changes
   useEffect(() => {
     if (formData.tokenAddress && provider && account) {
+      console.log('🔍 Token address changed, loading metadata and determining bridge:', {
+        tokenAddress: formData.tokenAddress,
+        availableTokensCount: availableTokens.length,
+        availableTokens: availableTokens.map(t => ({ symbol: t.symbol, address: t.address }))
+      });
       loadTokenMetadata();
       loadTokenBalance();
       determineBridge();
     }
-  }, [formData.tokenAddress, provider, account, loadTokenMetadata, loadTokenBalance, determineBridge]);
+  }, [formData.tokenAddress, provider, account, loadTokenMetadata, loadTokenBalance, determineBridge, availableTokens]);
 
   // Load required stake when bridge is determined (even without amount)
   useEffect(() => {
@@ -386,6 +632,8 @@ const NewClaim = ({ isOpen, onClose, selectedToken = null, selectedTransfer = nu
         loadTokenMetadata();
       } else {
         console.log('❌ No matching token found in availableTokens for address:', formData.tokenAddress);
+        console.log('🔍 Available token addresses:', availableTokens.map(t => t.address.toLowerCase()));
+        console.log('🔍 Looking for:', formData.tokenAddress.toLowerCase());
       }
     }
   }, [selectedTransfer, availableTokens, formData.tokenAddress, loadTokenMetadata]);
@@ -404,21 +652,42 @@ const NewClaim = ({ isOpen, onClose, selectedToken = null, selectedTransfer = nu
 
     setSubmitting(true);
     try {
-      // Approve the P3D stake token, not the claim token
-      await approve3DPassToken(
-        signer,
-        selectedBridge.stakeTokenAddress, // P3D token address for staking
-        selectedBridge.address,           // Bridge contract address
-        requiredStake                     // P3D stake amount
-      );
+      // Approve the stake token, not the claim token
+      if (network?.id === 1333) {
+        // For 3DPass network, use 3DPass token approval
+        await approve3DPassToken(
+          signer,
+          selectedBridge.stakeTokenAddress, // P3D token address for staking
+          selectedBridge.address,           // Bridge contract address
+          requiredStake                     // P3D stake amount
+        );
+      } else {
+        // For other networks (like Ethereum), use standard ERC20 approval
+        const tokenContract = new ethers.Contract(selectedBridge.stakeTokenAddress, [
+          'function approve(address spender, uint256 amount) returns (bool)',
+          'function decimals() view returns (uint8)'
+        ], signer);
+        
+        const decimals = await tokenContract.decimals();
+        const stakeWei = ethers.utils.parseUnits(requiredStake, decimals);
+        const approvalTx = await tokenContract.approve(selectedBridge.address, stakeWei);
+        console.log('🔍 Approval transaction sent:', approvalTx.hash);
+        
+        // Wait for the transaction to be mined
+        await approvalTx.wait();
+        console.log('✅ Approval transaction confirmed');
+      }
 
-      toast.success('P3D approval successful!');
+      toast.success('Stake token approval successful!');
+      
+      // Check allowance immediately after transaction is confirmed
+      console.log('🔍 Checking allowance after approval...');
       await checkAllowance();
     } catch (error) {
-      console.error('Error approving P3D token:', error);
+      console.error('Error approving stake token:', error);
       
       // Handle different types of errors gracefully
-      let errorMessage = 'P3D approval failed';
+      let errorMessage = 'Stake token approval failed';
       
       if (error.code === 4001 || error.message?.includes('User denied transaction') || error.message?.includes('user rejected transaction')) {
         errorMessage = 'Transaction cancelled';
@@ -431,7 +700,7 @@ const NewClaim = ({ isOpen, onClose, selectedToken = null, selectedTransfer = nu
       } else if (error.message?.includes('network')) {
         errorMessage = 'Network error. Please check your connection and try again.';
       } else {
-        errorMessage = `P3D approval failed: ${error.message}`;
+        errorMessage = `Stake token approval failed: ${error.message}`;
       }
       
       toast.error(errorMessage);
@@ -605,7 +874,7 @@ const NewClaim = ({ isOpen, onClose, selectedToken = null, selectedTransfer = nu
        // Check if form is valid (for button state)
   const isFormValid = () => {
     if (!isConnected) return false;
-    if (network?.id !== 1333) return false;
+    if (network?.id !== 1333 && network?.id !== 1) return false; // Support both 3DPass and Ethereum
     if (!formData.tokenAddress) return false;
     if (!formData.amount || parseFloat(formData.amount) <= 0) return false;
     if (!formData.txid) return false;
@@ -619,7 +888,7 @@ const NewClaim = ({ isOpen, onClose, selectedToken = null, selectedTransfer = nu
     // Skip balance check if still loading to prevent false negatives
     if (!isLoadingStakeBalance) {
       const stakeAmount = parseFloat(requiredStake);
-      const stakeBalance = parseFloat(stakeTokenBalance); // P3D balance for staking
+      const stakeBalance = parseFloat(stakeTokenBalance); // Stake token balance for staking
       if (stakeAmount > stakeBalance) return false;
     }
     
@@ -712,7 +981,7 @@ const NewClaim = ({ isOpen, onClose, selectedToken = null, selectedTransfer = nu
                           <div className="flex items-center justify-between">
                             <div>
                               <p className="text-sm text-secondary-400">Stake Token Balance</p>
-                              <p className="text-sm text-white">{selectedBridge.stakeTokenSymbol || 'P3D'}</p>
+                              <p className="text-sm text-white">{selectedBridge.stakeTokenSymbol || 'stake'}</p>
                             </div>
                             <div className="text-right">
                               <p className={`font-medium ${
@@ -766,7 +1035,7 @@ const NewClaim = ({ isOpen, onClose, selectedToken = null, selectedTransfer = nu
                     <div>
                       <p className="text-secondary-400">Required Stake</p>
                       <p className="font-medium text-white">
-                        {requiredStake} P3D
+                        {requiredStake} {selectedBridge?.stakeTokenSymbol || 'stake'}
                         {formData.amount && (
                           <span className="text-xs text-secondary-400 ml-1">
                             (for {formData.amount} {tokenMetadata?.symbol})
@@ -894,20 +1163,20 @@ const NewClaim = ({ isOpen, onClose, selectedToken = null, selectedTransfer = nu
                 <div className="card">
                   <div className="flex items-center gap-3 mb-4">
                     <AlertCircle className="w-5 h-5 text-warning-500" />
-                    <h3 className="text-lg font-semibold text-white">P3D Approval Required</h3>
+                    <h3 className="text-lg font-semibold text-white">{selectedBridge?.stakeTokenSymbol || 'Stake Token'} Approval Required</h3>
                   </div>
                   
                   <p className="text-sm text-secondary-400 mb-4">
-                    The bridge needs permission to spend your P3D tokens for staking. 
-                    Current P3D allowance: {allowance} P3D
+                    The bridge needs permission to spend your {selectedBridge?.stakeTokenSymbol || 'stake'} tokens for staking. 
+                    Current {selectedBridge?.stakeTokenSymbol || 'stake'} allowance: {allowance} {selectedBridge?.stakeTokenSymbol || 'stake'}
                   </p>
                   
                   <div className="bg-warning-900/20 border border-warning-700 rounded-lg p-3 mb-4">
                     <p className="text-sm text-warning-200">
-                      <strong>Required:</strong> {requiredStake} P3D for staking
+                      <strong>Required:</strong> {requiredStake} {selectedBridge?.stakeTokenSymbol || 'stake'} for staking
                     </p>
                     <p className="text-sm text-warning-200">
-                      <strong>Your Balance:</strong> {stakeTokenBalance} P3D
+                      <strong>Your Balance:</strong> {stakeTokenBalance} {selectedBridge?.stakeTokenSymbol || 'stake'}
                     </p>
                   </div>
                   
@@ -922,7 +1191,7 @@ const NewClaim = ({ isOpen, onClose, selectedToken = null, selectedTransfer = nu
                     ) : (
                       <CheckCircle className="w-4 h-4" />
                     )}
-                    Approve P3D for Bridge
+                    Approve {selectedBridge?.stakeTokenSymbol || 'Stake Token'} for Bridge
                   </button>
                 </div>
               )}
@@ -932,22 +1201,22 @@ const NewClaim = ({ isOpen, onClose, selectedToken = null, selectedTransfer = nu
                 <div className="card">
                   <div className="flex items-center gap-3 mb-4">
                     <CheckCircle className="w-5 h-5 text-success-500" />
-                    <h3 className="text-lg font-semibold text-white">P3D Approval Complete</h3>
+                    <h3 className="text-lg font-semibold text-white">{selectedBridge?.stakeTokenSymbol || 'Stake Token'} Approval Complete</h3>
                   </div>
                   
                   <p className="text-success-300 text-sm mb-4">
-                    Bridge contract is now approved to spend your P3D tokens for staking.
+                    Bridge contract is now approved to spend your {selectedBridge?.stakeTokenSymbol || 'stake'} tokens for staking.
                   </p>
                   
                   <div className="bg-success-900/20 border border-success-700 rounded-lg p-3">
                     <div className="space-y-2">
                       <div className="flex justify-between">
                         <span className="text-success-300 text-sm">Current allowance:</span>
-                        <span className="text-success-400 font-medium text-sm">{allowance} P3D</span>
+                        <span className="text-success-400 font-medium text-sm">{allowance} {selectedBridge?.stakeTokenSymbol || 'stake'}</span>
                       </div>
                       <div className="flex justify-between">
                         <span className="text-success-300 text-sm">Required for staking:</span>
-                        <span className="text-success-400 font-medium text-sm">{requiredStake} P3D</span>
+                        <span className="text-success-400 font-medium text-sm">{requiredStake} {selectedBridge?.stakeTokenSymbol || 'stake'}</span>
                       </div>
                     </div>
                   </div>

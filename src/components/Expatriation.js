@@ -1,7 +1,8 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { ethers } from 'ethers';
-import { AlertCircle, CheckCircle, ArrowRight, Loader } from 'lucide-react';
+import { AlertCircle, CheckCircle, ArrowRight, Loader, RefreshCw } from 'lucide-react';
 import { motion } from 'framer-motion';
+import toast from 'react-hot-toast';
 
 const Expatriation = ({ 
   bridgeInstance, 
@@ -13,12 +14,90 @@ const Expatriation = ({
 }) => {
   const [step, setStep] = useState('approve'); // 'approve', 'approved', 'transfer', 'success'
   const [isLoading, setIsLoading] = useState(false);
-  const [error, setError] = useState('');
   const [approvalTxHash, setApprovalTxHash] = useState('');
   const [transferTxHash, setTransferTxHash] = useState('');
   const [currentAllowance, setCurrentAllowance] = useState('0');
   const [requiredAmount, setRequiredAmount] = useState('0');
   const [isCheckingApproval, setIsCheckingApproval] = useState(true);
+
+  // Helper function to parse and categorize errors
+  const parseError = (error) => {
+    const errorMessage = error.message || error.toString();
+    
+    // User rejection/cancellation
+    if (errorMessage.includes('user rejected') || 
+        errorMessage.includes('ACTION_REJECTED') ||
+        errorMessage.includes('User denied') ||
+        errorMessage.includes('cancelled') ||
+        error.code === 'ACTION_REJECTED') {
+      return {
+        type: 'user_rejection',
+        title: 'Transaction Cancelled',
+        message: 'You cancelled the transaction. No changes were made.',
+        canRetry: true,
+        isUserError: true
+      };
+    }
+    
+    // Insufficient funds
+    if (errorMessage.includes('insufficient funds') || 
+        errorMessage.includes('insufficient balance')) {
+      return {
+        type: 'insufficient_funds',
+        title: 'Insufficient Funds',
+        message: 'You don\'t have enough tokens or ETH to complete this transaction.',
+        canRetry: false,
+        isUserError: true
+      };
+    }
+    
+    // Gas estimation failed
+    if (errorMessage.includes('gas required exceeds allowance') ||
+        errorMessage.includes('gas estimation failed')) {
+      return {
+        type: 'gas_error',
+        title: 'Gas Estimation Failed',
+        message: 'The transaction requires more gas than available. Try increasing gas limit.',
+        canRetry: true,
+        isUserError: false
+      };
+    }
+    
+    // Network issues
+    if (errorMessage.includes('network') || 
+        errorMessage.includes('timeout') ||
+        errorMessage.includes('connection')) {
+      return {
+        type: 'network_error',
+        title: 'Network Error',
+        message: 'There was a network issue. Please check your connection and try again.',
+        canRetry: true,
+        isUserError: false
+      };
+    }
+    
+    // Contract/transaction errors
+    if (errorMessage.includes('execution reverted') ||
+        errorMessage.includes('revert')) {
+      return {
+        type: 'contract_error',
+        title: 'Transaction Failed',
+        message: 'The transaction was rejected by the smart contract. Please check your inputs.',
+        canRetry: true,
+        isUserError: false
+      };
+    }
+    
+    // Default error
+    return {
+      type: 'unknown',
+      title: 'Operation Failed',
+      message: errorMessage,
+      canRetry: true,
+      isUserError: false
+    };
+  };
+
 
   // Create token contract for approval
   const createTokenContract = useCallback((tokenAddress) => {
@@ -48,6 +127,7 @@ const Expatriation = ({
   const checkApprovalNeeded = useCallback(async () => {
     try {
       setIsCheckingApproval(true);
+      
       const exportContract = createExportContract();
       // Ensure the selected token matches the bridge's configured token
       let settings;
@@ -58,7 +138,23 @@ const Expatriation = ({
       }
       const bridgeTokenAddress = settings?.tokenAddress || sourceToken.address;
       if (settings && bridgeTokenAddress.toLowerCase() !== sourceToken.address.toLowerCase()) {
-        setError('Selected token does not match the bridge configuration. Please reselect the correct token/network.');
+        // Show toast notification for configuration error
+        toast.error(
+          <div>
+            <h3 className="text-error-400 font-medium">Token Mismatch</h3>
+            <p className="text-error-300 text-sm mt-1">Selected token does not match the bridge configuration. Please reselect the correct token/network.</p>
+          </div>,
+          {
+            duration: 6000,
+            style: {
+              background: '#7f1d1d',
+              border: '1px solid #dc2626',
+              color: '#fff',
+              padding: '16px',
+              borderRadius: '8px',
+            },
+          }
+        );
         return true;
       }
 
@@ -82,7 +178,25 @@ const Expatriation = ({
       return needsApproval;
     } catch (error) {
       console.error('Error checking approval:', error);
-      setError('Failed to check approval status: ' + error.message);
+      const errorInfo = parseError(error);
+      
+      // Show toast notification
+      toast.error(
+        <div>
+          <h3 className="text-error-400 font-medium">{errorInfo.title}</h3>
+          <p className="text-error-300 text-sm mt-1">{errorInfo.message}</p>
+        </div>,
+        {
+          duration: 6000,
+          style: {
+            background: '#7f1d1d',
+            border: '1px solid #dc2626',
+            color: '#fff',
+            padding: '16px',
+            borderRadius: '8px',
+          },
+        }
+      );
       return true; // Assume approval is needed if check fails
     } finally {
       setIsCheckingApproval(false);
@@ -92,7 +206,6 @@ const Expatriation = ({
   // Handle approval
   const handleApprove = async () => {
     setIsLoading(true);
-    setError('');
     
     try {
       console.log('🔍 Starting approval process...');
@@ -154,7 +267,33 @@ const Expatriation = ({
       
     } catch (error) {
       console.error('❌ Approval failed:', error);
-      setError(error.message || 'Approval failed');
+      const errorInfo = parseError(error);
+      
+      // Show toast notification
+      toast.error(
+        <div>
+          <h3 className="text-error-400 font-medium">{errorInfo.title}</h3>
+          <p className="text-error-300 text-sm mt-1">{errorInfo.message}</p>
+          {errorInfo.type === 'user_rejection' && (
+            <p className="text-error-200 text-xs mt-2">💡 You can try again by clicking the approve button.</p>
+          )}
+        </div>,
+        {
+          duration: 6000,
+          style: {
+            background: '#7f1d1d',
+            border: '1px solid #dc2626',
+            color: '#fff',
+            padding: '16px',
+            borderRadius: '8px',
+          },
+        }
+      );
+      
+      // Call error callback if provided
+      if (onError) {
+        onError(errorInfo.message);
+      }
     } finally {
       setIsLoading(false);
     }
@@ -163,7 +302,6 @@ const Expatriation = ({
   // Handle transfer
   const handleTransfer = async () => {
     setIsLoading(true);
-    setError('');
     
     try {
       console.log('🌉 Starting transfer process...');
@@ -263,7 +401,23 @@ const Expatriation = ({
             allowance: ethers.utils.formatUnits(allowanceBN, actualDecimals),
             required: ethers.utils.formatUnits(amount, actualDecimals)
           });
-          setError('Insufficient allowance for transfer. Please approve again.');
+          // Show toast notification
+          toast.error(
+            <div>
+              <h3 className="text-error-400 font-medium">Insufficient Allowance</h3>
+              <p className="text-error-300 text-sm mt-1">Insufficient allowance for transfer. Please approve again.</p>
+            </div>,
+            {
+              duration: 6000,
+              style: {
+                background: '#7f1d1d',
+                border: '1px solid #dc2626',
+                color: '#fff',
+                padding: '16px',
+                borderRadius: '8px',
+              },
+            }
+          );
           setStep('approve');
           setIsLoading(false);
           return;
@@ -293,7 +447,39 @@ const Expatriation = ({
       
     } catch (error) {
       console.error('❌ Transfer failed:', error);
-      setError(error.message || 'Transfer failed');
+      const errorInfo = parseError(error);
+      
+      // Show toast notification
+      toast.error(
+        <div>
+          <h3 className="text-error-400 font-medium">{errorInfo.title}</h3>
+          <p className="text-error-300 text-sm mt-1">{errorInfo.message}</p>
+          {errorInfo.type === 'user_rejection' && (
+            <p className="text-error-200 text-xs mt-2">💡 You can try again by clicking the transfer button.</p>
+          )}
+          {errorInfo.type === 'insufficient_funds' && (
+            <p className="text-error-200 text-xs mt-2">💡 Check your wallet balance and make sure you have enough tokens and ETH for gas fees.</p>
+          )}
+          {errorInfo.type === 'gas_error' && (
+            <p className="text-error-200 text-xs mt-2">💡 Try increasing the gas limit in your wallet settings.</p>
+          )}
+        </div>,
+        {
+          duration: 6000,
+          style: {
+            background: '#7f1d1d',
+            border: '1px solid #dc2626',
+            color: '#fff',
+            padding: '16px',
+            borderRadius: '8px',
+          },
+        }
+      );
+      
+      // Call error callback if provided
+      if (onError) {
+        onError(errorInfo.message);
+      }
     } finally {
       setIsLoading(false);
     }
@@ -309,7 +495,25 @@ const Expatriation = ({
         }
       } catch (error) {
         console.error('Error in approval check:', error);
-        setError('Failed to check approval status');
+        const errorInfo = parseError(error);
+        
+        // Show toast notification
+        toast.error(
+          <div>
+            <h3 className="text-error-400 font-medium">{errorInfo.title}</h3>
+            <p className="text-error-300 text-sm mt-1">{errorInfo.message}</p>
+          </div>,
+          {
+            duration: 6000,
+            style: {
+              background: '#7f1d1d',
+              border: '1px solid #dc2626',
+              color: '#fff',
+              padding: '16px',
+              borderRadius: '8px',
+            },
+          }
+        );
       }
     };
     
@@ -383,7 +587,6 @@ const Expatriation = ({
               
               <button
                 onClick={async () => {
-                  setError('');
                   await checkApprovalNeeded();
                 }}
                 disabled={isCheckingApproval}
@@ -395,7 +598,10 @@ const Expatriation = ({
                     <span>Checking...</span>
                   </div>
                 ) : (
-                  <span>Refresh Approval Status</span>
+                  <div className="flex items-center justify-center space-x-2">
+                    <RefreshCw className="w-4 h-4" />
+                    <span>Refresh Approval Status</span>
+                  </div>
                 )}
               </button>
             </div>
@@ -486,29 +692,6 @@ const Expatriation = ({
         return null;
     }
   };
-
-  if (error) {
-    return (
-      <div className="bg-error-900/50 border border-error-700 rounded-lg p-4">
-        <div className="flex items-start space-x-3">
-          <AlertCircle className="w-5 h-5 text-error-400 mt-0.5 flex-shrink-0" />
-          <div>
-            <h3 className="text-error-400 font-medium">Operation Failed</h3>
-            <p className="text-error-300 text-sm mt-1">{error}</p>
-            <button
-              onClick={() => {
-                setError('');
-                setStep('approve');
-              }}
-              className="text-error-400 text-sm mt-2 hover:text-error-300 underline"
-            >
-              Try Again
-            </button>
-          </div>
-        </div>
-      </div>
-    );
-  }
 
   return (
     <div className="space-y-4">

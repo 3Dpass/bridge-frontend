@@ -3,6 +3,7 @@ import { ethers } from 'ethers';
 import { AlertCircle, CheckCircle, ArrowRight, Loader } from 'lucide-react';
 import { motion } from 'framer-motion';
 import { IMPORT_WRAPPER_ABI } from '../contracts/abi';
+import toast from 'react-hot-toast';
 
 const Repatriation = ({ 
   bridgeInstance, 
@@ -14,8 +15,86 @@ const Repatriation = ({
 }) => {
   const [step, setStep] = useState('confirm'); // 'confirm', 'transfer', 'success'
   const [isLoading, setIsLoading] = useState(false);
-  const [error, setError] = useState('');
   const [transferTxHash, setTransferTxHash] = useState('');
+
+  // Helper function to parse and categorize errors
+  const parseError = (error) => {
+    const errorMessage = error.message || error.toString();
+    
+    // User rejection/cancellation
+    if (errorMessage.includes('user rejected') || 
+        errorMessage.includes('ACTION_REJECTED') ||
+        errorMessage.includes('User denied') ||
+        errorMessage.includes('cancelled') ||
+        error.code === 'ACTION_REJECTED') {
+      return {
+        type: 'user_rejection',
+        title: 'Transaction Cancelled',
+        message: 'You cancelled the transaction. No changes were made.',
+        canRetry: true,
+        isUserError: true
+      };
+    }
+    
+    // Insufficient funds
+    if (errorMessage.includes('insufficient funds') || 
+        errorMessage.includes('insufficient balance')) {
+      return {
+        type: 'insufficient_funds',
+        title: 'Insufficient Funds',
+        message: 'You don\'t have enough tokens or ETH to complete this transaction.',
+        canRetry: false,
+        isUserError: true
+      };
+    }
+    
+    // Gas estimation failed
+    if (errorMessage.includes('gas required exceeds allowance') ||
+        errorMessage.includes('gas estimation failed')) {
+      return {
+        type: 'gas_error',
+        title: 'Gas Estimation Failed',
+        message: 'The transaction requires more gas than available. Try increasing gas limit.',
+        canRetry: true,
+        isUserError: false
+      };
+    }
+    
+    // Network issues
+    if (errorMessage.includes('network') || 
+        errorMessage.includes('timeout') ||
+        errorMessage.includes('connection')) {
+      return {
+        type: 'network_error',
+        title: 'Network Error',
+        message: 'There was a network issue. Please check your connection and try again.',
+        canRetry: true,
+        isUserError: false
+      };
+    }
+    
+    // Contract/transaction errors
+    if (errorMessage.includes('execution reverted') ||
+        errorMessage.includes('revert')) {
+      return {
+        type: 'contract_error',
+        title: 'Transaction Failed',
+        message: 'The transaction was rejected by the smart contract. Please check your inputs.',
+        canRetry: true,
+        isUserError: false
+      };
+    }
+    
+    // Default error
+    return {
+      type: 'unknown',
+      title: 'Operation Failed',
+      message: errorMessage,
+      canRetry: true,
+      isUserError: false
+    };
+  };
+
 
   // Create import wrapper contract for repatriation
   const createImportWrapperContract = useCallback(async () => {
@@ -29,7 +108,6 @@ const Repatriation = ({
   // Handle repatriation transfer
   const handleRepatriation = async () => {
     setIsLoading(true);
-    setError('');
     
     try {
       console.log('🔄 Starting repatriation process...');
@@ -109,11 +187,38 @@ const Repatriation = ({
       
     } catch (error) {
       console.error('❌ Repatriation failed:', error);
-      setError(error.message || 'Repatriation failed');
+      const errorInfo = parseError(error);
       setStep('confirm');
       
+      // Show toast notification
+      toast.error(
+        <div>
+          <h3 className="text-error-400 font-medium">{errorInfo.title}</h3>
+          <p className="text-error-300 text-sm mt-1">{errorInfo.message}</p>
+          {errorInfo.type === 'user_rejection' && (
+            <p className="text-error-200 text-xs mt-2">💡 You can try again by clicking the repatriation button.</p>
+          )}
+          {errorInfo.type === 'insufficient_funds' && (
+            <p className="text-error-200 text-xs mt-2">💡 Check your wallet balance and make sure you have enough tokens and ETH for gas fees.</p>
+          )}
+          {errorInfo.type === 'gas_error' && (
+            <p className="text-error-200 text-xs mt-2">💡 Try increasing the gas limit in your wallet settings.</p>
+          )}
+        </div>,
+        {
+          duration: 6000,
+          style: {
+            background: '#7f1d1d',
+            border: '1px solid #dc2626',
+            color: '#fff',
+            padding: '16px',
+            borderRadius: '8px',
+          },
+        }
+      );
+      
       if (onError) {
-        onError(error.message || 'Repatriation failed');
+        onError(errorInfo.message);
       }
     } finally {
       setIsLoading(false);
@@ -259,16 +364,6 @@ const Repatriation = ({
       animate={{ opacity: 1, y: 0 }}
       className="space-y-6"
     >
-      {/* Error Message */}
-      {error && (
-        <div className="bg-error-900/50 border border-error-700 rounded-lg p-4 flex items-start space-x-3">
-          <AlertCircle className="w-5 h-5 text-error-400 mt-0.5 flex-shrink-0" />
-          <div>
-            <h3 className="text-error-400 font-medium">Repatriation Failed</h3>
-            <p className="text-error-300 text-sm mt-1">{error}</p>
-          </div>
-        </div>
-      )}
 
       {/* Step Content */}
       {renderStepContent()}

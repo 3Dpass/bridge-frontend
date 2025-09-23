@@ -98,17 +98,27 @@ export const aggregateClaimsAndTransfers = (claims, transfers) => {
 
   // Process each claim
   for (const claim of claims) {
-    console.log(`🔍 Processing claim:`, {
+    console.log(`🔍 ===== PROCESSING CLAIM =====`);
+    console.log(`🔍 Claim Details:`, {
       claimNum: claim.claimNum,
       actualClaimNum: claim.actualClaimNum,
       senderAddress: claim.senderAddress,
       recipientAddress: claim.recipientAddress,
       amount: claim.amount?.toString(),
+      amountHex: claim.amount?.toHexString?.(),
       data: claim.data,
+      dataHex: claim.data?.toHexString?.(),
       bridgeType: claim.bridgeType,
       networkName: claim.networkName,
       homeNetwork: claim.homeNetwork,
-      foreignNetwork: claim.foreignNetwork
+      foreignNetwork: claim.foreignNetwork,
+      bridgeAddress: claim.bridgeAddress,
+      currentOutcome: claim.currentOutcome,
+      yesStake: claim.yesStake?.toString(),
+      noStake: claim.noStake?.toString(),
+      expiryTs: claim.expiryTs?.toString(),
+      finished: claim.finished,
+      withdrawn: claim.withdrawn
     });
 
     let matchingTransfer = null;
@@ -158,21 +168,38 @@ export const aggregateClaimsAndTransfers = (claims, transfers) => {
       // Check address match (claim recipient should match transfer sender)
       const addressMatch = addressesMatch(claim.recipientAddress, transfer.senderAddress);
 
-      console.log(`🔍 Checking transfer match:`, {
+      console.log(`🔍 ===== CHECKING TRANSFER MATCH =====`);
+      console.log(`🔍 Transfer Details:`, {
+        eventType: transfer.eventType,
+        senderAddress: transfer.senderAddress,
+        recipientAddress: transfer.recipientAddress,
+        amount: transfer.amount?.toString(),
+        amountHex: transfer.amount?.toHexString?.(),
+        data: transfer.data,
+        dataHex: transfer.data?.toHexString?.(),
+        fromNetwork: transfer.fromNetwork,
+        toNetwork: transfer.toNetwork,
+        bridgeAddress: transfer.bridgeAddress,
+        bridgeType: transfer.bridgeType,
+        transactionHash: transfer.transactionHash,
+        blockNumber: transfer.blockNumber,
+        timestamp: transfer.timestamp
+      });
+      
+      console.log(`🔍 Match Analysis:`, {
         claimType: claim.bridgeType,
         transferEventType: transfer.eventType,
-        transferSender: transfer.senderAddress,
-        transferAmount: transfer.amount?.toString(),
-        transferData: transfer.data,
-        transferFromNetwork: transfer.fromNetwork,
-        transferToNetwork: transfer.toNetwork,
-        claimHomeNetwork: claim.homeNetwork,
-        claimForeignNetwork: claim.foreignNetwork,
         isCorrectFlow,
         flowDescription,
         dataMatch,
         amountMatch,
-        addressMatch
+        addressMatch,
+        claimAmount: claim.amount?.toString(),
+        transferAmount: transfer.amount?.toString(),
+        claimData: claim.data?.toString(),
+        transferData: transfer.data?.toString(),
+        claimRecipient: claim.recipientAddress,
+        transferSender: transfer.senderAddress
       });
 
       // Determine if this is a match
@@ -197,6 +224,23 @@ export const aggregateClaimsAndTransfers = (claims, transfers) => {
     }
 
     if (matchingTransfer) {
+      console.log(`🔍 ===== MATCH FOUND =====`);
+      console.log(`🔍 Match Reason: ${matchReason}`);
+      console.log(`🔍 Claim ${claim.actualClaimNum || claim.claimNum} matched with Transfer:`, {
+        claimActualClaimNum: claim.actualClaimNum,
+        claimDisplayNum: claim.claimNum,
+        transferEventType: matchingTransfer.eventType,
+        transferTxHash: matchingTransfer.transactionHash,
+        transferBlockNumber: matchingTransfer.blockNumber,
+        claimAmount: claim.amount?.toString(),
+        transferAmount: matchingTransfer.amount?.toString(),
+        claimData: claim.data?.toString(),
+        transferData: matchingTransfer.data?.toString(),
+        claimRecipient: claim.recipientAddress,
+        transferSender: matchingTransfer.senderAddress,
+        matchReason: matchReason
+      });
+      
       // Mark transfer as matched
       matchingTransfer.matched = true;
       matchingTransfer.matchedClaim = claim;
@@ -234,15 +278,27 @@ export const aggregateClaimsAndTransfers = (claims, transfers) => {
       result.stats.suspiciousClaims++;
       result.fraudDetected = true;
 
-      console.log(`⚠️ Suspicious claim detected (no matching transfer):`, {
+      console.log(`🔍 ===== NO MATCH FOUND - SUSPICIOUS CLAIM =====`);
+      console.log(`🔍 Suspicious Claim Details:`, {
         claimNum: claim.claimNum,
         actualClaimNum: claim.actualClaimNum,
         senderAddress: claim.senderAddress,
         recipientAddress: claim.recipientAddress,
         amount: claim.amount?.toString(),
+        amountHex: claim.amount?.toHexString?.(),
         data: claim.data,
+        dataHex: claim.data?.toHexString?.(),
         bridgeType: claim.bridgeType,
-        networkName: claim.networkName
+        networkName: claim.networkName,
+        homeNetwork: claim.homeNetwork,
+        foreignNetwork: claim.foreignNetwork,
+        bridgeAddress: claim.bridgeAddress,
+        currentOutcome: claim.currentOutcome,
+        yesStake: claim.yesStake?.toString(),
+        noStake: claim.noStake?.toString(),
+        expiryTs: claim.expiryTs?.toString(),
+        finished: claim.finished,
+        withdrawn: claim.withdrawn
       });
     }
   }
@@ -271,14 +327,23 @@ export const aggregateClaimsAndTransfers = (claims, transfers) => {
       result.pendingTransfers.push(pendingTransfer);
       result.stats.pendingTransfers++;
 
-      console.log(`📋 Pending transfer (no matching claim):`, {
+      console.log(`🔍 ===== PENDING TRANSFER (NO MATCHING CLAIM) =====`);
+      console.log(`🔍 Pending Transfer Details:`, {
         eventType: transfer.eventType,
         senderAddress: transfer.senderAddress,
+        recipientAddress: transfer.recipientAddress,
         amount: transfer.amount?.toString(),
+        amountHex: transfer.amount?.toHexString?.(),
         data: transfer.data,
-        blockNumber: transfer.blockNumber,
-        transactionHash: transfer.transactionHash,
+        dataHex: transfer.data?.toHexString?.(),
+        fromNetwork: transfer.fromNetwork,
+        toNetwork: transfer.toNetwork,
+        bridgeAddress: transfer.bridgeAddress,
         bridgeType: transfer.bridgeType,
+        transactionHash: transfer.transactionHash,
+        blockNumber: transfer.blockNumber,
+        timestamp: transfer.timestamp,
+        networkKey: transfer.networkKey,
         networkName: transfer.networkName
       });
     }
@@ -289,6 +354,7 @@ export const aggregateClaimsAndTransfers = (claims, transfers) => {
   result.suspiciousClaims.sort((a, b) => b.blockNumber - a.blockNumber);
   result.pendingTransfers.sort((a, b) => b.blockNumber - a.blockNumber);
 
+  console.log(`🔍 ===== AGGREGATION SUMMARY =====`);
   console.log(`✅ Aggregation complete:`, {
     completedTransfers: result.stats.completedTransfers,
     suspiciousClaims: result.stats.suspiciousClaims,
@@ -301,6 +367,36 @@ export const aggregateClaimsAndTransfers = (claims, transfers) => {
     correctFlow2: 'Export (NewExpatriation) Ethereum → Import (Claim) 3DPass',
     matchingLogic: 'Data field must match between transfer and claim for legitimacy'
   });
+  
+  console.log(`🔍 ===== DETAILED RESULTS =====`);
+  console.log(`🔍 Completed Transfers (${result.completedTransfers.length}):`, 
+    result.completedTransfers.map(ct => ({
+      claimNum: ct.actualClaimNum || ct.claimNum,
+      amount: ct.amount?.toString(),
+      data: ct.data?.toString(),
+      matchReason: ct.matchReason,
+      transferTxHash: ct.transfer?.transactionHash
+    }))
+  );
+  
+  console.log(`🔍 Suspicious Claims (${result.suspiciousClaims.length}):`, 
+    result.suspiciousClaims.map(sc => ({
+      claimNum: sc.actualClaimNum || sc.claimNum,
+      amount: sc.amount?.toString(),
+      data: sc.data?.toString(),
+      reason: sc.reason
+    }))
+  );
+  
+  console.log(`🔍 Pending Transfers (${result.pendingTransfers.length}):`, 
+    result.pendingTransfers.map(pt => ({
+      eventType: pt.eventType,
+      amount: pt.amount?.toString(),
+      data: pt.data?.toString(),
+      txHash: pt.transactionHash,
+      reason: pt.reason
+    }))
+  );
 
   return result;
 };

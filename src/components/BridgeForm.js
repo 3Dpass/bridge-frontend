@@ -4,7 +4,7 @@ import { useSettings } from '../contexts/SettingsContext';
 import { NETWORKS } from '../config/networks';
 import { getTokenBalance, isValidAddress, isValidAmount } from '../utils/web3';
 import { transferToForeignChain, createBridgeContract } from '../utils/bridge-contracts';
-import { AlertCircle, ArrowDown, ArrowRightLeft, Eye, EyeOff } from 'lucide-react';
+import { ArrowDown, ArrowRightLeft, Eye, EyeOff } from 'lucide-react';
 import { motion } from 'framer-motion';
 import Expatriation from './Expatriation';
 import Repatriation from './Repatriation';
@@ -778,7 +778,7 @@ const BridgeForm = () => {
   // Handle expatriation error
   const handleExpatriationError = (error) => {
     console.error('❌ Expatriation failed:', error);
-    setErrors({ general: error });
+    // Error is already handled by toast notification in Expatriation component
     setShowExpatriationFlow(false);
   };
 
@@ -826,7 +826,7 @@ const BridgeForm = () => {
   // Handle repatriation error
   const handleRepatriationError = (error) => {
     console.error('❌ Repatriation failed:', error);
-    setErrors({ general: error });
+    // Error is already handled by toast notification in Repatriation component
     setShowRepatriationFlow(false);
   };
 
@@ -835,7 +835,22 @@ const BridgeForm = () => {
     e.preventDefault();
     
     if (!isConnected) {
-      setErrors({ general: 'Please connect your wallet first' });
+      toast.error(
+        <div>
+          <h3 className="text-error-400 font-medium">Wallet Not Connected</h3>
+          <p className="text-error-300 text-sm mt-1">Please connect your wallet first</p>
+        </div>,
+        {
+          duration: 6000,
+          style: {
+            background: '#7f1d1d',
+            border: '1px solid #dc2626',
+            color: '#fff',
+            padding: '16px',
+            borderRadius: '8px',
+          },
+        }
+      );
       return;
     }
     
@@ -929,7 +944,22 @@ const BridgeForm = () => {
       
     } catch (error) {
       console.error('Transfer failed:', error);
-      setErrors({ general: error.message });
+      toast.error(
+        <div>
+          <h3 className="text-error-400 font-medium">Transfer Failed</h3>
+          <p className="text-error-300 text-sm mt-1">{error.message}</p>
+        </div>,
+        {
+          duration: 6000,
+          style: {
+            background: '#7f1d1d',
+            border: '1px solid #dc2626',
+            color: '#fff',
+            padding: '16px',
+            borderRadius: '8px',
+          },
+        }
+      );
     } finally {
       setIsLoading(false);
     }
@@ -1002,16 +1032,6 @@ const BridgeForm = () => {
         </div>
 
         <form onSubmit={handleSubmit} className="space-y-6">
-          {/* Error Message */}
-          {errors.general && (
-            <div className="bg-error-900/50 border border-error-700 rounded-lg p-4 flex items-start space-x-3">
-              <AlertCircle className="w-5 h-5 text-error-400 mt-0.5 flex-shrink-0" />
-              <div>
-                <h3 className="text-error-400 font-medium">Transfer Failed</h3>
-                <p className="text-error-300 text-sm mt-1">{errors.general}</p>
-              </div>
-            </div>
-          )}
 
 
 

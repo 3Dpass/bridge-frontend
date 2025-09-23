@@ -162,7 +162,7 @@ const ClaimList = () => {
   }, []);
 
   const handleChallenge = useCallback(async (claim) => {
-    console.log('🔘 Challenge button clicked for claim:', claim.claimNum);
+    console.log('🔘 Challenge button clicked for claim:', claim.actualClaimNum || claim.claimNum);
     
     // Check if we need to switch networks first
     const requiredNetwork = getRequiredNetworkForClaim(claim);
@@ -504,7 +504,7 @@ const ClaimList = () => {
   }, [getTokenDecimals, getStakeTokenDecimals, getTransferTokenSymbol, getStakeTokenSymbol, formatAmount]);
 
   const handleWithdraw = useCallback(async (claim) => {
-    console.log('🔘 Withdraw button clicked for claim:', claim.claimNum);
+    console.log('🔘 Withdraw button clicked for claim:', claim.actualClaimNum || claim.claimNum);
     
     // Check if we need to switch networks first
     const requiredNetwork = getRequiredNetworkForClaim(claim);
@@ -932,6 +932,8 @@ const ClaimList = () => {
           // Debug: Log the claim data to see what we're working with
             console.log(`🔍 Item ${index + 1} data:`, {
               itemType: isTransfer ? 'transfer' : 'claim',
+            claimNum: claim.claimNum,
+            actualClaimNum: claim.actualClaimNum,
             amount: claim.amount,
             amountType: typeof claim.amount,
             yesStake: claim.yesStake,
@@ -954,7 +956,7 @@ const ClaimList = () => {
           const status = getClaimStatus(claim);
           return (
             <motion.div
-              key={`${claim.bridgeAddress}-${claim.claimNum || claim.transactionHash}`}
+              key={`${claim.bridgeAddress}-${claim.actualClaimNum || claim.claimNum || claim.transactionHash}`}
               initial={{ opacity: 0, y: 20 }}
               animate={{ opacity: 1, y: 0 }}
               exit={{ opacity: 0, y: -20 }}
@@ -970,7 +972,7 @@ const ClaimList = () => {
                 <div className="flex-1">
                   <div className="flex items-center gap-3 mb-3">
                     <span className="text-sm font-medium text-white">
-                      {isPending ? `Transfer #${index + 1}` : (isTransfer ? `Transfer #${index + 1}` : `Claim #${claim.claimNum}`)}
+                      {isPending ? `Transfer #${index + 1}` : (isTransfer ? `Transfer #${index + 1}` : `Claim #${claim.actualClaimNum || claim.claimNum}`)}
                     </span>
                     {isSuspicious && <AlertTriangle className="w-4 h-4 text-red-500" />}
                     {isPending && <Clock className="w-4 h-4 text-yellow-500" />}
