@@ -55,75 +55,91 @@ const NewClaim = ({ isOpen, onClose, selectedToken = null, selectedTransfer = nu
   // Initialize form when component mounts or token changes
   useEffect(() => {
     if (isOpen) {
-      if (selectedTransfer) {
-        // Pre-fill form with transfer data
-        console.log('🔍 Pre-filling form with transfer data:', selectedTransfer);
-        
-        // Use the timestamp that was already fetched when the expatriation was discovered
-        const calculateTxts = () => {
-          const txtsValue = selectedTransfer.timestamp || selectedTransfer.blockTimestamp;
+      // Add a small delay to ensure network switch has completed
+      const timer = setTimeout(() => {
+        if (selectedTransfer) {
+          // Pre-fill form with transfer data
+          console.log('🔍 Pre-filling form with transfer data:', selectedTransfer);
           
-          console.log('🔍 Available timestamp data:', {
-            transferTimestamp: selectedTransfer.timestamp,
-            blockTimestamp: selectedTransfer.blockTimestamp,
-            blockNumber: selectedTransfer.blockNumber
+          // Use the timestamp that was already fetched when the expatriation was discovered
+          const calculateTxts = () => {
+            const txtsValue = selectedTransfer.timestamp || selectedTransfer.blockTimestamp;
+            
+            console.log('🔍 Available timestamp data:', {
+              transferTimestamp: selectedTransfer.timestamp,
+              blockTimestamp: selectedTransfer.blockTimestamp,
+              blockNumber: selectedTransfer.blockNumber
+            });
+            
+            console.log(`🔍 Using timestamp: ${txtsValue} (${new Date(txtsValue * 1000).toISOString()})`);
+            return txtsValue;
+          };
+          
+          const txtsValue = calculateTxts();
+          // Determine the correct token address based on the transfer type
+          let tokenAddress = '';
+          
+          // For repatriation claims, we always want the homeTokenAddress (token on Ethereum side)
+          // regardless of current network detection, because repatriation claims are created on Ethereum
+          if (selectedTransfer.eventType === 'NewRepatriation') {
+            // Repatriation: use homeTokenAddress (USDT on Ethereum)
+            tokenAddress = selectedTransfer.homeTokenAddress || selectedTransfer.fromTokenAddress || '';
+            console.log('🔍 Repatriation detected - using homeTokenAddress:', tokenAddress);
+          } else if (network?.id === 1333) {
+            // On 3DPass: use foreignTokenAddress (token on 3DPass side)
+            tokenAddress = selectedTransfer.foreignTokenAddress || selectedTransfer.toTokenAddress || '';
+          } else if (network?.id === 1) {
+            // On Ethereum: for repatriation claims, use homeTokenAddress (token on Ethereum side)
+            // This is the token that will be claimed (USDT on Ethereum)
+            tokenAddress = selectedTransfer.homeTokenAddress || selectedTransfer.fromTokenAddress || '';
+          } else {
+            // Fallback: try both
+            tokenAddress = selectedTransfer.foreignTokenAddress || selectedTransfer.homeTokenAddress || selectedTransfer.toTokenAddress || '';
+          }
+          
+          console.log('🔍 Setting token address for network:', {
+            networkId: network?.id,
+            networkName: network?.name,
+            foreignTokenAddress: selectedTransfer.foreignTokenAddress,
+            homeTokenAddress: selectedTransfer.homeTokenAddress,
+            fromTokenAddress: selectedTransfer.fromTokenAddress,
+            toTokenAddress: selectedTransfer.toTokenAddress,
+            selectedTokenAddress: tokenAddress,
+            fullTransfer: selectedTransfer
           });
           
-          console.log(`🔍 Using timestamp: ${txtsValue} (${new Date(txtsValue * 1000).toISOString()})`);
-          return txtsValue;
-        };
-        
-        const txtsValue = calculateTxts();
-        // Determine the correct token address based on the network we're on
-        let tokenAddress = '';
-        if (network?.id === 1333) {
-          // On 3DPass: use foreignTokenAddress (token on 3DPass side)
-          tokenAddress = selectedTransfer.foreignTokenAddress || selectedTransfer.toTokenAddress || '';
-        } else if (network?.id === 1) {
-          // On Ethereum: use homeTokenAddress (token on Ethereum side)
-          tokenAddress = selectedTransfer.homeTokenAddress || selectedTransfer.fromTokenAddress || '';
-        } else {
-          // Fallback: try both
-          tokenAddress = selectedTransfer.foreignTokenAddress || selectedTransfer.homeTokenAddress || selectedTransfer.toTokenAddress || '';
+          setFormData(prev => ({
+            ...prev,
+            tokenAddress: tokenAddress.toLowerCase(),
+            amount: selectedTransfer.amount ? 
+              (typeof selectedTransfer.amount === 'string' ? selectedTransfer.amount : 
+               ethers.utils.formatUnits(selectedTransfer.amount, 6)) : '',
+            txid: selectedTransfer.txid || selectedTransfer.transactionHash || '',
+            txts: txtsValue,
+            senderAddress: selectedTransfer.fromAddress || selectedTransfer.senderAddress || '',
+            recipientAddress: selectedTransfer.toAddress || selectedTransfer.recipientAddress || account || '',
+            data: selectedTransfer.data || '0x'
+          }));
+        } else if (selectedToken) {
+          setFormData(prev => ({
+            ...prev,
+            tokenAddress: selectedToken.address,
+            recipientAddress: account || '',
+            senderAddress: account || ''
+          }));
+        } else if (account) {
+          // If no selected token but account is available, still set the addresses
+          setFormData(prev => ({
+            ...prev,
+            recipientAddress: account,
+            senderAddress: account
+          }));
         }
-        
-        console.log('🔍 Setting token address for network:', {
-          networkId: network?.id,
-          networkName: network?.name,
-          foreignTokenAddress: selectedTransfer.foreignTokenAddress,
-          homeTokenAddress: selectedTransfer.homeTokenAddress,
-          selectedTokenAddress: tokenAddress
-        });
-        
-        setFormData(prev => ({
-          ...prev,
-          tokenAddress: tokenAddress.toLowerCase(),
-          amount: selectedTransfer.amount ? 
-            (typeof selectedTransfer.amount === 'string' ? selectedTransfer.amount : 
-             ethers.utils.formatUnits(selectedTransfer.amount, 6)) : '',
-          txid: selectedTransfer.txid || selectedTransfer.transactionHash || '',
-          txts: txtsValue,
-          senderAddress: selectedTransfer.fromAddress || selectedTransfer.senderAddress || '',
-          recipientAddress: selectedTransfer.toAddress || selectedTransfer.recipientAddress || account || '',
-          data: selectedTransfer.data || '0x'
-        }));
-      } else if (selectedToken) {
-        setFormData(prev => ({
-          ...prev,
-          tokenAddress: selectedToken.address,
-          recipientAddress: account || '',
-          senderAddress: account || ''
-        }));
-      } else if (account) {
-        // If no selected token but account is available, still set the addresses
-        setFormData(prev => ({
-          ...prev,
-          recipientAddress: account,
-          senderAddress: account
-        }));
-      }
-      // Reset approval state when form opens or token changes
-      setNeedsApproval(true);
+        // Reset approval state when form opens or token changes
+        setNeedsApproval(true);
+      }, 1000); // Wait 1 second for network switch to complete
+      
+      return () => clearTimeout(timer);
     }
   }, [isOpen, selectedToken, selectedTransfer, account, provider, getNetworkWithSettings, network?.id, network?.name]);
 
@@ -158,10 +174,23 @@ const NewClaim = ({ isOpen, onClose, selectedToken = null, selectedTransfer = nu
           currentNetworkId: network?.id
         });
         
-        // For export bridges: foreignTokenAddress is the token on 3DPass side (where we are)
-        if (bridge.type === 'export' && bridge.foreignTokenAddress) {
-          tokenAddresses.add(bridge.foreignTokenAddress.toLowerCase());
-          console.log('✅ Added export bridge token:', bridge.foreignTokenAddress);
+        // For export bridges: 
+        // - On 3DPass: foreignTokenAddress is the token on 3DPass side (where we are)
+        // - On Ethereum: homeTokenAddress is the token on Ethereum side (where we are for repatriation claims)
+        if (bridge.type === 'export') {
+          if (network?.id === 1333) {
+            // On 3DPass: load foreignTokenAddress (token on 3DPass side)
+            if (bridge.foreignTokenAddress) {
+              tokenAddresses.add(bridge.foreignTokenAddress.toLowerCase());
+              console.log('✅ Added export bridge foreign token (3DPass):', bridge.foreignTokenAddress);
+            }
+          } else {
+            // On Ethereum: load homeTokenAddress (token on Ethereum side)
+            if (bridge.homeTokenAddress) {
+              tokenAddresses.add(bridge.homeTokenAddress.toLowerCase());
+              console.log('✅ Added export bridge home token (Ethereum):', bridge.homeTokenAddress);
+            }
+          }
         }
         // For import wrapper bridges: 
         // - On 3DPass: foreignTokenAddress is the token on 3DPass side (where we are)
@@ -260,12 +289,14 @@ const NewClaim = ({ isOpen, onClose, selectedToken = null, selectedTransfer = nu
 
       console.log('🔍 Loaded tokens from bridges:', tokens.map(t => ({ symbol: t.symbol, address: t.address })));
       console.log('🔍 Token addresses found:', Array.from(tokenAddresses));
+      console.log('🔍 Current formData.tokenAddress:', formData.tokenAddress);
+      console.log('🔍 Available tokens for dropdown:', tokens);
       setAvailableTokens(tokens);
     } catch (error) {
       console.error('Error loading available tokens:', error);
       toast.error('Failed to load available tokens');
     }
-  }, [provider, getBridgeInstancesWithSettings, network?.id, network?.name]);
+  }, [provider, getBridgeInstancesWithSettings, network?.id, network?.name, formData.tokenAddress]);
 
   // Load token metadata
   const loadTokenMetadata = useCallback(async () => {
@@ -380,9 +411,45 @@ const NewClaim = ({ isOpen, onClose, selectedToken = null, selectedTransfer = nu
     console.log('🔍 determineBridge called with:', { 
       tokenAddress: formData.tokenAddress, 
       currentNetwork: network?.name,
-      currentNetworkId: network?.id
+      currentNetworkId: network?.id,
+      selectedTransfer: selectedTransfer
     });
-    console.log('📋 All available bridges:', allBridges);
+    console.log('📋 All available bridges:', Object.values(allBridges).map(b => ({
+      type: b.type,
+      homeNetwork: b.homeNetwork,
+      foreignNetwork: b.foreignNetwork,
+      homeTokenAddress: b.homeTokenAddress,
+      foreignTokenAddress: b.foreignTokenAddress
+    })));
+
+    // For repatriation claims, prioritize export bridges regardless of current network
+    if (selectedTransfer && selectedTransfer.eventType === 'NewRepatriation') {
+      console.log('🔍 Repatriation detected - looking for export bridge first');
+      
+      // Look for export bridge for this token (for repatriation claims)
+      const exportBridge = Object.values(allBridges).find(bridge => {
+        const matches = bridge.type === 'export' && 
+          bridge.homeTokenAddress?.toLowerCase() === formData.tokenAddress.toLowerCase();
+        
+        console.log('🔍 Checking export bridge for repatriation:', {
+          bridgeType: bridge.type,
+          bridgeHomeTokenAddress: bridge.homeTokenAddress,
+          bridgeForeignTokenAddress: bridge.foreignTokenAddress,
+          bridgeHomeNetwork: bridge.homeNetwork,
+          bridgeForeignNetwork: bridge.foreignNetwork,
+          formDataTokenAddress: formData.tokenAddress,
+          matches
+        });
+        
+        return matches;
+      });
+      
+      if (exportBridge) {
+        console.log('✅ Found export bridge for repatriation:', exportBridge);
+        setSelectedBridge(exportBridge);
+        return;
+      }
+    }
 
     // For 3DPass network (export and import_wrapper bridges)
     if (network?.id === 1333) {
@@ -448,12 +515,13 @@ const NewClaim = ({ isOpen, onClose, selectedToken = null, selectedTransfer = nu
              console.log('🔍 Looking for export bridge for repatriation claim on Ethereum');
              
              // Look for export bridge for this token
-             // For export bridges, the token address should match homeTokenAddress (Ethereum side)
+             // For repatriation claims on Ethereum, we need an export bridge
+             // The token address should match homeTokenAddress (Ethereum side)
              const exportBridge = Object.values(allBridges).find(bridge => {
                const matches = bridge.type === 'export' && 
                  bridge.homeTokenAddress?.toLowerCase() === formData.tokenAddress.toLowerCase();
                
-               console.log('🔍 Checking export bridge:', {
+               console.log('🔍 Checking export bridge for repatriation:', {
                  bridgeType: bridge.type,
                  bridgeHomeTokenAddress: bridge.homeTokenAddress,
                  bridgeForeignTokenAddress: bridge.foreignTokenAddress,
@@ -475,35 +543,75 @@ const NewClaim = ({ isOpen, onClose, selectedToken = null, selectedTransfer = nu
 
     console.log('❌ No bridge found for token:', formData.tokenAddress, 'on network:', network?.name);
     setSelectedBridge(null);
-  }, [formData.tokenAddress, getBridgeInstancesWithSettings, network?.id, network?.name]);
+  }, [formData.tokenAddress, getBridgeInstancesWithSettings, network?.id, network?.name, selectedTransfer]);
 
   // Load required stake with a specific amount
   const loadRequiredStakeWithAmount = useCallback(async (amount) => {
     if (!selectedBridge || !provider) return;
 
     try {
+      console.log('🔍 Loading required stake with amount:', amount);
+      console.log('🔍 Selected bridge:', selectedBridge);
+      console.log('🔍 Token metadata:', tokenMetadata);
+      
       const bridgeContract = new ethers.Contract(
         selectedBridge.address,
         COUNTERSTAKE_ABI,
         provider
       );
 
-      const amountWei = ethers.utils.parseUnits(amount, tokenMetadata?.decimals || 18);
-      const stake = await bridgeContract.getRequiredStake(amountWei);
+      // Use the correct decimals for the amount - should be the token being claimed (USDT = 6 decimals)
+      const amountDecimals = tokenMetadata?.decimals || 18;
+      const amountWei = ethers.utils.parseUnits(amount, amountDecimals);
+      console.log('🔍 Amount parsing details:', {
+        amount: amount,
+        amountDecimals: amountDecimals,
+        amountWei: amountWei.toString(),
+        tokenMetadata: tokenMetadata
+      });
       
-      // Get stake token decimals for correct formatting
+      const stake = await bridgeContract.getRequiredStake(amountWei);
+      console.log('🔍 Raw stake from contract:', stake.toString());
+      
+      // Get stake token decimals from configuration
       let stakeTokenDecimals;
       if (network?.id === 1333) {
-        stakeTokenDecimals = 18; // P3D has 18 decimals
+        stakeTokenDecimals = 18; // P3D has 18 decimals (from config)
       } else {
-        // For other networks (like Ethereum), get stake token decimals
-        const stakeTokenContract = new ethers.Contract(selectedBridge.stakeTokenAddress, [
-          'function decimals() view returns (uint8)'
-        ], provider);
-        stakeTokenDecimals = await stakeTokenContract.decimals();
+        stakeTokenDecimals = 6; // USDT has 6 decimals (from config)
       }
       
-      setRequiredStake(ethers.utils.formatUnits(stake, stakeTokenDecimals));
+      console.log('🔍 Using stake token decimals from config:', stakeTokenDecimals);
+      
+      // The contract is inconsistent - sometimes returns 18 decimals, sometimes stake token decimals
+      // We need to detect which format and handle both cases
+      let formattedStake;
+      
+      // If the stake value is very large (18 decimals), convert from 18 to stake token decimals
+      if (stake.gte(ethers.BigNumber.from(10).pow(15))) {
+        // Contract returned stake in 18 decimals
+        const stakeIn18Decimals = ethers.utils.formatUnits(stake, 18);
+        const stakeInStakeTokenDecimals = ethers.utils.parseUnits(stakeIn18Decimals, stakeTokenDecimals);
+        formattedStake = ethers.utils.formatUnits(stakeInStakeTokenDecimals, stakeTokenDecimals);
+        console.log('🔍 Contract returned 18 decimals, converted to', stakeTokenDecimals, 'decimals');
+      } else {
+        // Contract returned stake in stake token decimals
+        formattedStake = ethers.utils.formatUnits(stake, stakeTokenDecimals);
+        console.log('🔍 Contract returned', stakeTokenDecimals, 'decimals');
+      }
+      
+      console.log('🔍 Simple stake formatting:', {
+        rawStake: stake.toString(),
+        stakeTokenDecimals: stakeTokenDecimals,
+        formattedStake: formattedStake
+      });
+      console.log('🔍 Final stake details:', {
+        stakeTokenAddress: selectedBridge.stakeTokenAddress,
+        stakeTokenSymbol: selectedBridge.stakeTokenSymbol,
+        finalFormattedStake: formattedStake
+      });
+      
+      setRequiredStake(formattedStake);
     } catch (error) {
       console.error('Error loading required stake:', error);
       setRequiredStake('0');
@@ -553,11 +661,14 @@ const NewClaim = ({ isOpen, onClose, selectedToken = null, selectedTransfer = nu
         requiredStake,
         allowanceWei: allowanceWei.toString(),
         stakeWei: stakeWei.toString(),
-        needsApproval: allowanceWei.lt(stakeWei)
+        needsApproval: allowanceWei.lt(stakeWei),
+        allowanceComparison: `${allowanceWei.toString()} >= ${stakeWei.toString()} = ${allowanceWei.gte(stakeWei)}`
       });
       
       setAllowance(currentAllowance);
-      setNeedsApproval(allowanceWei.lt(stakeWei)); // Allow if allowance >= required stake
+      const needsApprovalResult = allowanceWei.lt(stakeWei);
+      console.log('🔍 Setting needsApproval to:', needsApprovalResult);
+      setNeedsApproval(needsApprovalResult); // Allow if allowance >= required stake
     } catch (error) {
       console.error('Error checking stake token allowance:', error);
       setAllowance('0');
@@ -777,6 +888,19 @@ const NewClaim = ({ isOpen, onClose, selectedToken = null, selectedTransfer = nu
         formData.recipientAddress,
         formData.data
       ]);
+      
+      console.log('🔍 Parameter details:', {
+        txid: formData.txid,
+        txts: txts.toString(),
+        amountWei: amountWei.toString(),
+        rewardWei: rewardWei.toString(),
+        stakeWei: stakeWei.toString(),
+        senderAddress: formData.senderAddress,
+        recipientAddress: formData.recipientAddress,
+        data: formData.data,
+        bridgeAddress: selectedBridge.address,
+        stakeTokenAddress: selectedBridge.stakeTokenAddress
+      });
 
       // Check if a claim already exists for this transfer
       try {
@@ -816,18 +940,111 @@ const NewClaim = ({ isOpen, onClose, selectedToken = null, selectedTransfer = nu
         console.log('🔍 Error checking existing claims:', checkError.message);
       }
 
+      // Pre-flight checks before gas estimation
+      console.log('🔍 Pre-flight checks before claim transaction:');
+      
+      // Recalculate stake to ensure we have the correct value
+      const amountWeiForStake = ethers.utils.parseUnits(formData.amount, tokenMetadata?.decimals || 18);
+      const stake = await bridgeContract.getRequiredStake(amountWeiForStake);
+      
+      // Get stake token decimals from configuration
+      let stakeTokenDecimals;
+      if (network?.id === 1333) {
+        stakeTokenDecimals = 18; // P3D has 18 decimals (from config)
+      } else {
+        stakeTokenDecimals = 6; // USDT has 6 decimals (from config)
+      }
+      
+      // The contract is inconsistent - sometimes returns 18 decimals, sometimes stake token decimals
+      let formattedStake;
+      if (stake.gte(ethers.BigNumber.from(10).pow(15))) {
+        // Contract returned stake in 18 decimals
+        const stakeIn18Decimals = ethers.utils.formatUnits(stake, 18);
+        const stakeInStakeTokenDecimals = ethers.utils.parseUnits(stakeIn18Decimals, stakeTokenDecimals);
+        formattedStake = ethers.utils.formatUnits(stakeInStakeTokenDecimals, stakeTokenDecimals);
+      } else {
+        // Contract returned stake in stake token decimals
+        formattedStake = ethers.utils.formatUnits(stake, stakeTokenDecimals);
+      }
+      
+      const stakeWeiForCheck = ethers.utils.parseUnits(formattedStake, stakeTokenDecimals);
+      
+      // Check USDT balance
+      const usdtContract = new ethers.Contract(selectedBridge.stakeTokenAddress, [
+        'function balanceOf(address owner) view returns (uint256)',
+        'function allowance(address owner, address spender) view returns (uint256)',
+        'function decimals() view returns (uint8)'
+      ], provider);
+      
+      const [balance, allowance, decimals] = await Promise.all([
+        usdtContract.balanceOf(account),
+        usdtContract.allowance(account, selectedBridge.address),
+        usdtContract.decimals()
+      ]);
+      
+      const balanceFormatted = ethers.utils.formatUnits(balance, decimals);
+      const allowanceFormatted = ethers.utils.formatUnits(allowance, decimals);
+      const stakeFormatted = ethers.utils.formatUnits(stakeWeiForCheck, decimals);
+      
+      console.log('🔍 Pre-flight stake calculation:', {
+        rawStake: stake.toString(),
+        stakeTokenDecimals: stakeTokenDecimals,
+        formattedStake: formattedStake,
+        stakeWeiForCheck: stakeWeiForCheck.toString(),
+        stakeFormatted: stakeFormatted
+      });
+      
+      console.log('🔍 USDT Balance:', balanceFormatted);
+      console.log('🔍 USDT Allowance:', allowanceFormatted);
+      console.log('🔍 Required Stake:', stakeFormatted);
+      console.log('🔍 Balance sufficient:', balance.gte(stakeWeiForCheck));
+      console.log('🔍 Allowance sufficient:', allowance.gte(stakeWeiForCheck));
+      
+      if (balance.lt(stakeWeiForCheck)) {
+        throw new Error(`Insufficient USDT balance. Required: ${stakeFormatted}, Available: ${balanceFormatted}`);
+      }
+      
+      if (allowance.lt(stakeWeiForCheck)) {
+        throw new Error(`Insufficient USDT allowance. Required: ${stakeFormatted}, Allowed: ${allowanceFormatted}`);
+      }
+
+      // Estimate gas for the transaction
+      let gasLimit;
+      try {
+        const gasEstimate = await bridgeContract.estimateGas.claim(
+          formData.txid,
+          txts,
+          amountWei,
+          rewardWei,
+          stakeWei,
+          formData.senderAddress,
+          formData.recipientAddress,
+          formData.data
+        );
+        gasLimit = gasEstimate.mul(120).div(100); // Add 20% buffer
+        console.log('🔍 Gas estimate:', gasEstimate.toString(), 'Gas limit with buffer:', gasLimit.toString());
+      } catch (gasError) {
+        console.warn('Gas estimation failed, using default gas limit:', gasError);
+        console.warn('Gas estimation error details:', {
+          message: gasError.message,
+          code: gasError.code,
+          data: gasError.data
+        });
+        gasLimit = ethers.BigNumber.from('500000'); // Fallback to default
+      }
+
       const claimTx = await bridgeContract.claim(
         formData.txid,
         txts,
         amountWei,
         rewardWei,
-        stakeWei,
+        stakeWeiForCheck,
         formData.senderAddress,
         formData.recipientAddress,
         formData.data,
         { 
-          value: 0, // No ETH value needed, P3D is transferred via transferFrom
-          gasLimit: 500000 // Higher gas limit for claim transaction
+          value: 0, // No ETH value needed, USDT is transferred via transferFrom
+          gasLimit: gasLimit
         }
       );
 
@@ -854,7 +1071,7 @@ const NewClaim = ({ isOpen, onClose, selectedToken = null, selectedTransfer = nu
       if (error.code === 4001 || error.message?.includes('User denied transaction') || error.message?.includes('user rejected transaction')) {
         errorMessage = 'Transaction cancelled by user';
       } else if (error.code === -32603 || error.message?.includes('insufficient funds')) {
-        errorMessage = 'Insufficient funds for transaction';
+        errorMessage = 'Insufficient ETH for gas fees. Please add ETH to your wallet.';
       } else if (error.message?.includes('gas')) {
         errorMessage = 'Transaction failed due to gas issues. Please try again.';
       } else if (error.message?.includes('execution reverted') || error.message?.includes('revert')) {
@@ -953,11 +1170,20 @@ const NewClaim = ({ isOpen, onClose, selectedToken = null, selectedTransfer = nu
                       disabled={!!selectedToken}
                     >
                       <option value="">Select a token</option>
-                      {availableTokens.map((token) => (
-                        <option key={token.address} value={token.address}>
-                          {token.symbol} - {token.name}
-                        </option>
-                      ))}
+                      {availableTokens.map((token) => {
+                        const isSelected = token.address.toLowerCase() === formData.tokenAddress?.toLowerCase();
+                        console.log('🔍 Token option:', {
+                          tokenAddress: token.address,
+                          formDataTokenAddress: formData.tokenAddress,
+                          isSelected,
+                          symbol: token.symbol
+                        });
+                        return (
+                          <option key={token.address} value={token.address}>
+                            {token.symbol} - {token.name}
+                          </option>
+                        );
+                      })}
                     </select>
                   </div>
 

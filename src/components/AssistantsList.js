@@ -8,6 +8,7 @@ import Deposit from './Deposit';
 import Withdraw from './Withdraw';
 import WithdrawManagementFee from './WithdrawManagementFee';
 import WithdrawSuccessFee from './WithdrawSuccessFee';
+import AssignNewManager from './AssignNewManager';
 
 const AssistantsList = () => {
   const { getAssistantContractsWithSettings, getAllNetworksWithSettings } = useSettings();
@@ -23,6 +24,7 @@ const AssistantsList = () => {
   const [showWithdrawDialog, setShowWithdrawDialog] = useState(false);
   const [showWithdrawManagementFeeDialog, setShowWithdrawManagementFeeDialog] = useState(false);
   const [showWithdrawSuccessFeeDialog, setShowWithdrawSuccessFeeDialog] = useState(false);
+  const [showAssignNewManagerDialog, setShowAssignNewManagerDialog] = useState(false);
 
   // Helper function to check if an address is a known precompile
   const isKnownPrecompile = useCallback((address) => {
@@ -665,11 +667,41 @@ const AssistantsList = () => {
     setShowWithdrawSuccessFeeDialog(true);
   }, [getRequiredNetwork, checkNetwork, switchToRequiredNetwork]);
 
+  const handleAssignNewManager = useCallback(async (assistant) => {
+    console.log('🔘 Assign New Manager button clicked for assistant:', assistant.address);
+    
+    // Check if we need to switch networks first
+    const requiredNetwork = getRequiredNetwork(assistant);
+    if (!requiredNetwork) {
+      toast.error('Could not determine required network for this assistant');
+      return;
+    }
+    
+    const currentChainId = await checkNetwork();
+    if (currentChainId !== requiredNetwork.chainId) {
+      console.log('🚨 NETWORK SWITCHING WILL BE TRIGGERED NOW!');
+      console.log('🔄 Wrong network detected, switching automatically...');
+      toast(`Switching to ${requiredNetwork.name} network...`);
+      const switchSuccess = await switchToRequiredNetwork(requiredNetwork);
+      console.log('🔍 Network switch result:', switchSuccess);
+      if (!switchSuccess) {
+        toast.error('Failed to switch to the required network');
+        return;
+      }
+      // Wait a moment for the network to settle
+      await new Promise(resolve => setTimeout(resolve, 1000));
+    }
+    
+    setSelectedAssistant(assistant);
+    setShowAssignNewManagerDialog(true);
+  }, [getRequiredNetwork, checkNetwork, switchToRequiredNetwork]);
+
   const handleCloseDialogs = useCallback(() => {
     setShowDepositDialog(false);
     setShowWithdrawDialog(false);
     setShowWithdrawManagementFeeDialog(false);
     setShowWithdrawSuccessFeeDialog(false);
+    setShowAssignNewManagerDialog(false);
     setSelectedAssistant(null);
   }, []);
 
@@ -902,18 +934,26 @@ const AssistantsList = () => {
               {assistant.managerAddress && account && assistant.managerAddress.toLowerCase() === account.toLowerCase() && (
                 <div className="mt-3 pt-3 border-t border-dark-600">
                   <div className="text-xs text-secondary-500 mb-2">Manager Actions</div>
-                  <div className="flex gap-2">
+                  <div className="grid grid-cols-1 gap-2">
+                    <div className="flex gap-2">
+                      <button
+                        onClick={() => handleWithdrawManagementFee(assistant)}
+                        className="flex-1 bg-yellow-600 hover:bg-yellow-700 text-white py-2 px-3 rounded-md text-xs font-medium transition-colors"
+                      >
+                        Withdraw Management Fee
+                      </button>
+                      <button
+                        onClick={() => handleWithdrawSuccessFee(assistant)}
+                        className="flex-1 bg-green-600 hover:bg-green-700 text-white py-2 px-3 rounded-md text-xs font-medium transition-colors"
+                      >
+                        Withdraw Success Fee
+                      </button>
+                    </div>
                     <button
-                      onClick={() => handleWithdrawManagementFee(assistant)}
-                      className="flex-1 bg-yellow-600 hover:bg-yellow-700 text-white py-2 px-3 rounded-md text-xs font-medium transition-colors"
+                      onClick={() => handleAssignNewManager(assistant)}
+                      className="w-full bg-secondary-600 hover:bg-secondary-700 text-white py-2 px-3 rounded-md text-xs font-medium transition-colors"
                     >
-                      Withdraw Management Fee
-                    </button>
-                    <button
-                      onClick={() => handleWithdrawSuccessFee(assistant)}
-                      className="flex-1 bg-green-600 hover:bg-green-700 text-white py-2 px-3 rounded-md text-xs font-medium transition-colors"
-                    >
-                      Withdraw Success Fee
+                      Assign New Manager
                     </button>
                   </div>
                 </div>
@@ -964,6 +1004,17 @@ const AssistantsList = () => {
           onSuccess={() => {
             handleCloseDialogs();
             loadBalances(); // Refresh balances after successful fee withdrawal
+          }}
+        />
+      )}
+
+      {showAssignNewManagerDialog && selectedAssistant && (
+        <AssignNewManager
+          assistant={selectedAssistant}
+          onClose={handleCloseDialogs}
+          onSuccess={() => {
+            handleCloseDialogs();
+            loadAssistants(); // Refresh assistants list after successful manager assignment
           }}
         />
       )}

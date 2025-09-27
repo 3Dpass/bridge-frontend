@@ -47,8 +47,15 @@ const ClaimList = () => {
     console.log('🔍 getRequiredNetwork called with transfer:', {
       eventType: transfer.eventType,
       fromNetwork: transfer.fromNetwork,
-      toNetwork: transfer.toNetwork
+      toNetwork: transfer.toNetwork,
+      fullTransfer: transfer
     });
+    
+    console.log('🔍 Available networks:', Object.values(NETWORKS).map(n => ({
+      name: n.name,
+      id: n.id,
+      symbol: n.symbol
+    })));
     
     if (transfer.eventType === 'NewRepatriation') {
       // Import transfer: claim should be created on foreign network (Ethereum)
@@ -118,23 +125,44 @@ const ClaimList = () => {
 
   const switchToRequiredNetwork = useCallback(async (requiredNetwork) => {
     try {
-      console.log('🔄 Switching to network:', requiredNetwork.name, 'Chain ID:', requiredNetwork.chainId);
+      console.log('🔄 switchToRequiredNetwork called with:', requiredNetwork);
+      console.log('🔄 Switching to network:', requiredNetwork.name, 'Chain ID:', requiredNetwork.chainId || requiredNetwork.id);
       
-      const chainIdHex = `0x${requiredNetwork.chainId.toString(16)}`;
+      // Check if wallet is available
+      if (!window.ethereum) {
+        console.error('❌ No wallet detected');
+        return false;
+      }
+      
+      // Use chainId if available, otherwise use id
+      const chainId = requiredNetwork.chainId || requiredNetwork.id;
+      if (!chainId) {
+        console.error('❌ No chain ID found in network configuration');
+        return false;
+      }
+      
+      const chainIdHex = `0x${chainId.toString(16)}`;
+      console.log('🔄 Chain ID hex:', chainIdHex);
       
       try {
-        await window.ethereum.request({
+        console.log('🔄 Attempting to switch to existing network...');
+        const result = await window.ethereum.request({
           method: 'wallet_switchEthereumChain',
           params: [{ chainId: chainIdHex }],
         });
+        console.log('🔄 Switch request result:', result);
         console.log('✅ Network switched successfully');
         return true;
       } catch (switchError) {
+        console.log('⚠️ Network switch failed:', switchError);
+        console.log('⚠️ Error code:', switchError.code);
+        console.log('⚠️ Error message:', switchError.message);
         console.log('⚠️ Network not added, attempting to add it...');
         
         if (switchError.code === 4902) {
           try {
-            await window.ethereum.request({
+            console.log('🔄 Adding new network...');
+            const addResult = await window.ethereum.request({
               method: 'wallet_addEthereumChain',
               params: [{
                 chainId: chainIdHex,
@@ -144,10 +172,13 @@ const ClaimList = () => {
                 blockExplorerUrls: [requiredNetwork.explorer],
               }],
             });
+            console.log('🔄 Add network result:', addResult);
             console.log('✅ Network added and switched successfully');
             return true;
           } catch (addError) {
             console.error('❌ Failed to add network:', addError);
+            console.error('❌ Add error code:', addError.code);
+            console.error('❌ Add error message:', addError.message);
             return false;
           }
         } else {
@@ -1131,14 +1162,23 @@ const ClaimList = () => {
                           try {
                             // Determine the required network for this transfer
                             const requiredNetwork = getRequiredNetwork(claim);
+                            console.log('🔍 Required network result:', requiredNetwork);
+                            
                             if (!requiredNetwork) {
                               toast.error('Could not determine the required network for this transfer');
                               return;
                             }
                             
                             // Switch to the required network before opening the dialog
+                            console.log('🔄 Starting network switch to:', requiredNetwork.name);
                             toast(`Switching to ${requiredNetwork.name} network...`);
-                            await switchToRequiredNetwork(requiredNetwork);
+                            const switchResult = await switchToRequiredNetwork(requiredNetwork);
+                            console.log('🔄 Network switch result:', switchResult);
+                            
+                            if (!switchResult) {
+                              toast.error('Failed to switch to the required network');
+                              return;
+                            }
                             
                             // Set the transfer data and open the NewClaim dialog
                             setSelectedTransfer(claim);
