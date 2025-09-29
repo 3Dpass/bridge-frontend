@@ -1,3 +1,5 @@
+import { ethers } from 'ethers';
+
 /**
  * Aggregate claims and transfers with fraud detection
  * 
@@ -17,8 +19,25 @@
  * @returns {Object} Aggregated data with fraud detection
  */
 export const aggregateClaimsAndTransfers = (claims, transfers) => {
+  console.log('🔍 ===== AGGREGATION FUNCTION CALLED =====');
   console.log('🔍 aggregateClaimsAndTransfers: Starting aggregation');
   console.log(`🔍 Claims count: ${claims.length}, Transfers count: ${transfers.length}`);
+  
+  // Debug: Log the first transfer details
+  if (transfers.length > 0) {
+    console.log('🔍 First transfer being processed:', {
+      eventType: transfers[0].eventType,
+      senderAddress: transfers[0].senderAddress,
+      recipientAddress: transfers[0].recipientAddress,
+      amount: transfers[0].amount?.toString(),
+      data: transfers[0].data,
+      bridgeAddress: transfers[0].bridgeAddress,
+      bridgeType: transfers[0].bridgeType,
+      networkKey: transfers[0].networkKey,
+      fromNetwork: transfers[0].fromNetwork,
+      toNetwork: transfers[0].toNetwork
+    });
+  }
 
   const result = {
     // Original data
@@ -53,13 +72,46 @@ export const aggregateClaimsAndTransfers = (claims, transfers) => {
     return amount.toString();
   };
 
+  // Helper function to check if amounts match using BigNumber comparison
+  const amountsMatchBigNumber = (claimAmount, transferAmount) => {
+    if (!claimAmount || !transferAmount) return false;
+    
+    try {
+      // Convert both to BigNumber for proper comparison
+      const claimBN = ethers.BigNumber.from(claimAmount.toString());
+      const transferBN = ethers.BigNumber.from(transferAmount.toString());
+      
+      return claimBN.eq(transferBN);
+    } catch (error) {
+      console.warn('Error comparing amounts as BigNumbers:', error);
+      // Fallback to string comparison
+      return normalizeAmount(claimAmount) === normalizeAmount(transferAmount);
+    }
+  };
+
   // Helper function to check if data matches
   const dataMatches = (claimData, transferData) => {
     const normalizedClaimData = normalizeData(claimData);
     const normalizedTransferData = normalizeData(transferData);
     
+    console.log(`🔍 Data matching check:`, {
+      claimDataRaw: claimData,
+      transferDataRaw: transferData,
+      normalizedClaimData,
+      normalizedTransferData,
+      exactMatch: normalizedClaimData === normalizedTransferData
+    });
+    
+    // Don't match if both data fields are empty or default values
+    if ((!normalizedClaimData || normalizedClaimData === '' || normalizedClaimData === '0x') && 
+        (!normalizedTransferData || normalizedTransferData === '' || normalizedTransferData === '0x')) {
+      console.log(`🔍 Both data fields are empty/default - not matching`);
+      return false;
+    }
+    
     // Check for exact match
     if (normalizedClaimData === normalizedTransferData) {
+      console.log(`🔍 Data exact match found!`);
       return true;
     }
     
@@ -68,6 +120,12 @@ export const aggregateClaimsAndTransfers = (claims, transfers) => {
       // Remove common prefixes/suffixes that might differ
       const cleanClaimData = normalizedClaimData.replace(/^0x/, '').replace(/^0+/, '');
       const cleanTransferData = normalizedTransferData.replace(/^0x/, '').replace(/^0+/, '');
+      
+      console.log(`🔍 Clean data comparison:`, {
+        cleanClaimData,
+        cleanTransferData,
+        cleanMatch: cleanClaimData === cleanTransferData
+      });
       
       if (cleanClaimData === cleanTransferData) {
         return true;
@@ -82,13 +140,6 @@ export const aggregateClaimsAndTransfers = (claims, transfers) => {
     return false;
   };
 
-  // Helper function to check if amounts match
-  const amountsMatch = (claimAmount, transferAmount) => {
-    const normalizedClaimAmount = normalizeAmount(claimAmount);
-    const normalizedTransferAmount = normalizeAmount(transferAmount);
-    
-    return normalizedClaimAmount === normalizedTransferAmount;
-  };
 
   // Helper function to check if addresses match
   const addressesMatch = (claimRecipient, transferRecipient) => {
@@ -120,6 +171,16 @@ export const aggregateClaimsAndTransfers = (claims, transfers) => {
       finished: claim.finished,
       withdrawn: claim.withdrawn
     });
+
+    console.log(`🔍 Available transfers for matching:`, transfers.map(t => ({
+      eventType: t.eventType,
+      fromNetwork: t.fromNetwork,
+      toNetwork: t.toNetwork,
+      senderAddress: t.senderAddress,
+      amount: t.amount?.toString(),
+      data: t.data,
+      matched: t.matched
+    })));
 
     let matchingTransfer = null;
     let matchReason = '';
@@ -157,13 +218,27 @@ export const aggregateClaimsAndTransfers = (claims, transfers) => {
         flowDescription = `Import claim (${claim.foreignNetwork}) should match NewExpatriation from ${claim.homeNetwork} to ${claim.foreignNetwork}`;
       }
 
-      if (!isCorrectFlow) continue;
+      console.log(`🔍 Flow check for transfer ${transfer.transactionHash}:`, {
+        claimBridgeType: claim.bridgeType,
+        transferEventType: transfer.eventType,
+        transferFromNetwork: transfer.fromNetwork,
+        transferToNetwork: transfer.toNetwork,
+        claimForeignNetwork: claim.foreignNetwork,
+        claimHomeNetwork: claim.homeNetwork,
+        isCorrectFlow,
+        flowDescription
+      });
+
+      if (!isCorrectFlow) {
+        console.log(`🔍 Skipping transfer ${transfer.transactionHash} - incorrect flow`);
+        continue;
+      }
 
       // Check data match (this is the most important criteria)
       const dataMatch = dataMatches(claim.data, transfer.data);
       
-      // Check amount match
-      const amountMatch = amountsMatch(claim.amount, transfer.amount);
+      // Check amount match using BigNumber comparison
+      const amountMatch = amountsMatchBigNumber(claim.amount, transfer.amount);
       
       // Check address match (claim recipient should match transfer sender)
       const addressMatch = addressesMatch(claim.recipientAddress, transfer.senderAddress);
@@ -199,7 +274,17 @@ export const aggregateClaimsAndTransfers = (claims, transfers) => {
         claimData: claim.data?.toString(),
         transferData: transfer.data?.toString(),
         claimRecipient: claim.recipientAddress,
-        transferSender: transfer.senderAddress
+        transferSender: transfer.senderAddress,
+        // Raw data for debugging
+        claimDataRaw: claim.data,
+        transferDataRaw: transfer.data,
+        claimDataType: typeof claim.data,
+        transferDataType: typeof transfer.data,
+        claimDataLength: claim.data?.length,
+        transferDataLength: transfer.data?.length,
+        // BigNumber comparison details
+        claimAmountBN: claim.amount ? ethers.BigNumber.from(claim.amount.toString()).toString() : 'null',
+        transferAmountBN: transfer.amount ? ethers.BigNumber.from(transfer.amount.toString()).toString() : 'null'
       });
 
       // Determine if this is a match
@@ -304,7 +389,16 @@ export const aggregateClaimsAndTransfers = (claims, transfers) => {
   }
 
   // Find transfers without matching claims (pending transfers)
+  console.log('🔍 Processing transfers for pending status...');
   for (const transfer of transfers) {
+    console.log(`🔍 Checking transfer ${transfer.transactionHash}:`, {
+      eventType: transfer.eventType,
+      matched: transfer.matched,
+      senderAddress: transfer.senderAddress,
+      amount: transfer.amount?.toString(),
+      data: transfer.data
+    });
+    
     if (!transfer.matched) {
       const pendingTransfer = {
         ...transfer,
@@ -369,15 +463,28 @@ export const aggregateClaimsAndTransfers = (claims, transfers) => {
   });
   
   console.log(`🔍 ===== DETAILED RESULTS =====`);
-  console.log(`🔍 Completed Transfers (${result.completedTransfers.length}):`, 
-    result.completedTransfers.map(ct => ({
+  console.log(`🔍 Completed Transfers (${result.completedTransfers.length}):`);
+  result.completedTransfers.forEach((ct, index) => {
+    console.log(`🔍 Completed Transfer #${index + 1}:`, {
       claimNum: ct.actualClaimNum || ct.claimNum,
       amount: ct.amount?.toString(),
       data: ct.data?.toString(),
       matchReason: ct.matchReason,
-      transferTxHash: ct.transfer?.transactionHash
-    }))
-  );
+      transferTxHash: ct.transfer?.transactionHash,
+      transferEventType: ct.transfer?.eventType,
+      transferSender: ct.transfer?.senderAddress,
+      transferRecipient: ct.transfer?.recipientAddress,
+      claimRecipient: ct.recipientAddress,
+      claimSender: ct.senderAddress,
+      // Additional debugging
+      claimBridgeType: ct.bridgeType,
+      claimNetwork: ct.networkName,
+      transferBridgeType: ct.transfer?.bridgeType,
+      transferNetwork: ct.transfer?.networkKey,
+      transferFromNetwork: ct.transfer?.fromNetwork,
+      transferToNetwork: ct.transfer?.toNetwork
+    });
+  });
   
   console.log(`🔍 Suspicious Claims (${result.suspiciousClaims.length}):`, 
     result.suspiciousClaims.map(sc => ({
@@ -397,6 +504,13 @@ export const aggregateClaimsAndTransfers = (claims, transfers) => {
       reason: pt.reason
     }))
   );
+
+  console.log('🔍 ===== AGGREGATION FUNCTION COMPLETED =====');
+  console.log('🔍 Returning result:', {
+    completedTransfers: result.completedTransfers.length,
+    pendingTransfers: result.pendingTransfers.length,
+    suspiciousClaims: result.suspiciousClaims.length
+  });
 
   return result;
 };

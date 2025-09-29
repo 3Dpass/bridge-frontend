@@ -6,6 +6,7 @@ import { NETWORKS } from '../config/networks';
 import { fetchClaimsFromAllNetworks } from '../utils/fetch-claims';
 import { fetchLastTransfers } from '../utils/fetch-last-transfers';
 import { aggregateClaimsAndTransfers } from '../utils/aggregate-claims-transfers';
+import { getCacheStats, clearAllCachedEvents } from '../utils/event-cache';
 import { 
   Clock, 
   CheckCircle, 
@@ -37,6 +38,7 @@ const ClaimList = () => {
   const [showWithdrawModal, setShowWithdrawModal] = useState(false);
   const [showChallengeModal, setShowChallengeModal] = useState(false);
   const [selectedClaim, setSelectedClaim] = useState(null);
+  const [cacheStats, setCacheStats] = useState(null);
 
   // Network switching functions
   const getRequiredNetwork = useCallback((transfer) => {
@@ -563,6 +565,13 @@ const ClaimList = () => {
     setShowWithdrawModal(true);
   }, [getRequiredNetworkForClaim, checkNetwork, switchToRequiredNetwork, prepareClaimForWithdraw]);
 
+  // Update cache statistics
+  const updateCacheStats = useCallback(() => {
+    const stats = getCacheStats();
+    setCacheStats(stats);
+    console.log('📊 Cache statistics:', stats);
+  }, []);
+
   // Load claims and transfers from all networks with fraud detection
   const loadClaimsAndTransfers = useCallback(async () => {
     // No connection check needed - we can load all data without wallet connection
@@ -596,9 +605,69 @@ const ClaimList = () => {
         timeframeHours: historySearchDepth
       });
 
+      console.log(`🔍 Raw transfers fetched:`, {
+        totalTransfers: allTransfers.length,
+        transfers: allTransfers.map(t => ({
+          eventType: t.eventType,
+          senderAddress: t.senderAddress,
+          recipientAddress: t.recipientAddress,
+          amount: t.amount?.toString(),
+          transactionHash: t.transactionHash,
+          blockNumber: t.blockNumber,
+          bridgeAddress: t.bridgeAddress,
+          networkKey: t.networkKey,
+          bridgeType: t.bridgeType,
+          direction: t.direction,
+          fromNetwork: t.fromNetwork,
+          toNetwork: t.toNetwork
+        }))
+      });
+
+      // Log the full transfer object for the first transfer
+      if (allTransfers.length > 0) {
+        console.log(`🔍 Full first transfer object:`, allTransfers[0]);
+      }
+
       // Aggregate claims and transfers with fraud detection
       console.log('🔍 Aggregating claims and transfers with fraud detection...');
-      const aggregated = aggregateClaimsAndTransfers(allClaims, allTransfers);
+      console.log('🔍 About to call aggregateClaimsAndTransfers with:', {
+        claimsCount: allClaims.length,
+        transfersCount: allTransfers.length,
+        firstTransfer: allTransfers[0] ? {
+          eventType: allTransfers[0].eventType,
+          transactionHash: allTransfers[0].transactionHash,
+          senderAddress: allTransfers[0].senderAddress
+        } : null
+      });
+      
+      let aggregated;
+      try {
+        aggregated = aggregateClaimsAndTransfers(allClaims, allTransfers);
+        console.log('🔍 Aggregation completed successfully');
+      } catch (error) {
+        console.error('🔍 Error in aggregation:', error);
+        // Create a fallback aggregated object
+        aggregated = {
+          completedTransfers: [],
+          suspiciousClaims: [],
+          pendingTransfers: allTransfers.map(t => ({ ...t, status: 'pending' })),
+          fraudDetected: false,
+          stats: {
+            totalClaims: allClaims.length,
+            totalTransfers: allTransfers.length,
+            completedTransfers: 0,
+            suspiciousClaims: 0,
+            pendingTransfers: allTransfers.length
+          }
+        };
+      }
+      
+      console.log('🔍 Aggregation completed, result:', {
+        hasResult: !!aggregated,
+        completedTransfers: aggregated?.completedTransfers?.length || 0,
+        pendingTransfers: aggregated?.pendingTransfers?.length || 0,
+        suspiciousClaims: aggregated?.suspiciousClaims?.length || 0
+      });
 
       console.log('🔍 Aggregated data:', {
         completedTransfers: aggregated.completedTransfers.length,
@@ -607,22 +676,106 @@ const ClaimList = () => {
         fraudDetected: aggregated.fraudDetected
       });
       
+      // Debug: Show details of all aggregated data
+      console.log('🔍 Aggregated data breakdown:', {
+        completedTransfers: aggregated.completedTransfers.length,
+        suspiciousClaims: aggregated.suspiciousClaims.length,
+        pendingTransfers: aggregated.pendingTransfers.length,
+        fraudDetected: aggregated.fraudDetected
+      });
+
       // Debug: Show details of pending transfers
       if (aggregated.pendingTransfers.length > 0) {
         console.log('🔍 Pending transfers details:', aggregated.pendingTransfers.map(t => ({
           eventType: t.eventType,
           senderAddress: t.senderAddress,
+          recipientAddress: t.recipientAddress,
           amount: t.amount?.toString(),
           transactionHash: t.transactionHash,
           blockNumber: t.blockNumber,
-          status: t.status
+          status: t.status,
+          bridgeAddress: t.bridgeAddress,
+          networkKey: t.networkKey
         })));
       } else {
         console.log('🔍 No pending transfers found');
       }
 
-      // Set the aggregated data
-      setAggregatedData(aggregated);
+      // Debug: Show details of completed transfers
+      if (aggregated.completedTransfers.length > 0) {
+        console.log('🔍 Completed transfers details:', aggregated.completedTransfers.map(t => ({
+          eventType: t.eventType,
+          senderAddress: t.senderAddress,
+          recipientAddress: t.recipientAddress,
+          amount: t.amount?.toString(),
+          transactionHash: t.transactionHash,
+          blockNumber: t.blockNumber,
+          status: t.status,
+          bridgeAddress: t.bridgeAddress,
+          networkKey: t.networkKey
+        })));
+      } else {
+        console.log('🔍 No completed transfers found');
+      }
+
+      // Apply time window filtering based on History Search Depth to the aggregated result
+      try {
+        const cutoffTs = Math.floor(Date.now() / 1000) - Math.floor(historySearchDepth * 3600);
+        const withinWindow = (ts) => typeof ts === 'number' && ts >= cutoffTs;
+
+        const filteredCompleted = (aggregated.completedTransfers || []).filter((ct) => {
+          // Prefer transfer timestamp when available
+          if (ct.transfer?.timestamp) return withinWindow(ct.transfer.timestamp);
+          // Fallbacks: blockTimestamp on claim if present
+          if (ct.blockTimestamp) return withinWindow(ct.blockTimestamp);
+          // As a last resort, use expiryTs if available (approximation)
+          if (ct.expiryTs) {
+            const exp = typeof ct.expiryTs.toNumber === 'function' ? ct.expiryTs.toNumber() : ct.expiryTs;
+            return withinWindow(exp);
+          }
+          return false;
+        });
+
+        const filteredPending = (aggregated.pendingTransfers || []).filter((pt) => withinWindow(pt.timestamp));
+
+        const filteredSuspicious = (aggregated.suspiciousClaims || []).filter((sc) => {
+          // If we have a timestamp-like field, use it
+          if (sc.blockTimestamp) return withinWindow(sc.blockTimestamp);
+          // No timestamp: approximate using expiryTs if present; otherwise exclude
+          if (sc.expiryTs) {
+            const exp = typeof sc.expiryTs.toNumber === 'function' ? sc.expiryTs.toNumber() : sc.expiryTs;
+            return withinWindow(exp);
+          }
+          return false;
+        });
+
+        const filteredAggregated = {
+          ...aggregated,
+          completedTransfers: filteredCompleted,
+          pendingTransfers: filteredPending,
+          suspiciousClaims: filteredSuspicious,
+          stats: {
+            ...aggregated.stats,
+            completedTransfers: filteredCompleted.length,
+            pendingTransfers: filteredPending.length,
+            suspiciousClaims: filteredSuspicious.length,
+          },
+        };
+
+        console.log('🔍 Time-filtered aggregation:', {
+          cutoffTs,
+          historySearchDepth,
+          completedTransfers: filteredAggregated.completedTransfers.length,
+          pendingTransfers: filteredAggregated.pendingTransfers.length,
+          suspiciousClaims: filteredAggregated.suspiciousClaims.length,
+        });
+
+        // Set the aggregated data
+        setAggregatedData(filteredAggregated);
+      } catch (filterErr) {
+        console.warn('⚠️ Failed to apply time filtering to aggregated data, using unfiltered results:', filterErr);
+        setAggregatedData(aggregated);
+      }
       setClaims(allClaims);
 
       // Set current block from the first available network for timestamp calculations
@@ -649,6 +802,9 @@ const ClaimList = () => {
         fraudDetected: aggregated.fraudDetected
       });
 
+      // Update cache statistics
+      updateCacheStats();
+
     } catch (error) {
       console.error('Error loading claims and transfers from all networks:', error);
       toast.error(`Failed to load data: ${error.message}`);
@@ -659,7 +815,7 @@ const ClaimList = () => {
         setIsInitialLoad(false);
       }
     }
-  }, [account, currentBlock, getNetworkWithSettings, getBridgeInstancesWithSettings, filter, getTransferTokenSymbol, getTokenDecimals, getHistorySearchDepth, getClaimSearchDepth, isInitialLoad]);
+  }, [account, currentBlock, getNetworkWithSettings, getBridgeInstancesWithSettings, filter, getTransferTokenSymbol, getTokenDecimals, getHistorySearchDepth, getClaimSearchDepth, isInitialLoad, updateCacheStats]);
 
 
 
@@ -747,6 +903,7 @@ const ClaimList = () => {
   };
 
   const formatAddress = (address) => {
+    if (!address) return 'N/A';
     return `${address.slice(0, 6)}...${address.slice(-4)}`;
   };
 
@@ -846,8 +1003,23 @@ const ClaimList = () => {
             
           </div>
           
-          
-
+          {/* Cache Statistics */}
+          {cacheStats && cacheStats.totalEntries > 0 && (
+            <div className="flex items-center gap-2 text-xs text-secondary-400">
+              <span>💾 Cache: {cacheStats.totalEntries} entries</span>
+              <button
+                onClick={() => {
+                  clearAllCachedEvents();
+                  updateCacheStats();
+                  toast.success('Cache cleared');
+                }}
+                className="text-warning-400 hover:text-warning-300 transition-colors"
+                title="Clear event cache"
+              >
+                Clear
+              </button>
+            </div>
+          )}
           
         </div>
       </div>
@@ -919,6 +1091,57 @@ const ClaimList = () => {
           } else {
             displayData = claims; // Fallback to original claims
           }
+
+          // Sort displayData by most recent first (by block number, then by timestamp)
+          displayData.sort((a, b) => {
+            // First, try to sort by block number (most recent first)
+            if (a.blockNumber && b.blockNumber) {
+              const blockDiff = b.blockNumber - a.blockNumber;
+              if (blockDiff !== 0) return blockDiff;
+            }
+            
+            // If block numbers are the same or missing, sort by timestamp (most recent first)
+            const timestampA = a.timestamp || a.blockTimestamp || 0;
+            const timestampB = b.timestamp || b.blockTimestamp || 0;
+            return timestampB - timestampA;
+          });
+
+          console.log(`🔍 Display data breakdown:`, {
+            filter: filter,
+            hasAggregatedData: !!aggregatedData,
+            totalDisplayItems: displayData.length,
+            completedTransfers: aggregatedData?.completedTransfers?.length || 0,
+            suspiciousClaims: aggregatedData?.suspiciousClaims?.length || 0,
+            pendingTransfers: aggregatedData?.pendingTransfers?.length || 0,
+            fallbackClaims: claims.length
+          });
+
+          // Debug: Show what's in each category
+          if (aggregatedData) {
+            console.log(`🔍 Completed transfers in display:`, aggregatedData.completedTransfers.map(ct => ({
+              claimNum: ct.claimNum || ct.actualClaimNum,
+              eventType: ct.transfer?.eventType,
+              amount: ct.amount?.toString(),
+              status: ct.status
+            })));
+            
+            console.log(`🔍 Pending transfers in display:`, aggregatedData.pendingTransfers.map(pt => ({
+              eventType: pt.eventType,
+              amount: pt.amount?.toString(),
+              status: pt.status,
+              transactionHash: pt.transactionHash
+            })));
+          }
+
+          console.log(`🔍 Sorted ${displayData.length} items by most recent first:`, 
+            displayData.slice(0, 5).map(item => ({
+              type: item.eventType ? 'transfer' : 'claim',
+              eventType: item.eventType,
+              blockNumber: item.blockNumber,
+              timestamp: item.timestamp || item.blockTimestamp,
+              claimNum: item.claimNum || item.actualClaimNum
+            }))
+          );
 
           return displayData.map((item, index) => {
             // Handle both claims and transfers
@@ -1040,7 +1263,13 @@ const ClaimList = () => {
                             formatted,
                             // Test with different decimals
                             testWith6Decimals: formatAmount(claim.amount, 6),
-                            testWith18Decimals: formatAmount(claim.amount, 18)
+                            testWith18Decimals: formatAmount(claim.amount, 18),
+                            // Additional debugging for transfers
+                            isTransfer: !!claim.eventType,
+                            eventType: claim.eventType,
+                            bridgeType: claim.bridgeType,
+                            networkKey: claim.networkKey,
+                            bridgeAddress: claim.bridgeAddress
                           });
                           return `${formatted} ${getTransferTokenSymbol(claim)}`;
                         })()}

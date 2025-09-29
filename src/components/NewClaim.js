@@ -11,6 +11,7 @@ import {
 import { 
   COUNTERSTAKE_ABI
 } from '../contracts/abi';
+import { NETWORKS } from '../config/networks';
 import { 
   X, 
   AlertCircle, 
@@ -23,6 +24,39 @@ import {
 import { motion, AnimatePresence } from 'framer-motion';
 import { ethers } from 'ethers';
 import toast from 'react-hot-toast';
+import { getReliableTimestamp } from '../utils/time';
+
+// Helper functions to get network and token configuration
+const getNetworkConfig = (networkId) => {
+  return Object.values(NETWORKS).find(network => network.id === networkId);
+};
+
+const getTokenDecimals = (networkId, tokenAddress) => {
+  const networkConfig = getNetworkConfig(networkId);
+  if (!networkConfig || !networkConfig.tokens) return 18; // Default fallback
+  
+  const token = Object.values(networkConfig.tokens).find(t => 
+    t.address?.toLowerCase() === tokenAddress?.toLowerCase()
+  );
+  return token?.decimals || 18; // Default fallback
+};
+
+const getStakeTokenDecimals = (networkId) => {
+  const networkConfig = getNetworkConfig(networkId);
+  if (!networkConfig) return 18; // Default fallback
+  
+  // For 3DPass, P3D has 18 decimals
+  if (networkId === NETWORKS.THREEDPASS.id) {
+    return 18;
+  }
+  
+  // For Ethereum, USDT has 6 decimals
+  if (networkId === NETWORKS.ETHEREUM.id) {
+    return 6;
+  }
+  
+  return 18; // Default fallback
+};
 
 const NewClaim = ({ isOpen, onClose, selectedToken = null, selectedTransfer = null }) => {
   const { account, provider, network, isConnected, signer } = useWeb3();
@@ -34,7 +68,7 @@ const NewClaim = ({ isOpen, onClose, selectedToken = null, selectedTransfer = nu
     amount: '',
     reward: '',
     txid: '',
-    txts: '',
+    txts: '', // Will be set with reliable external timestamp
     senderAddress: '',
     recipientAddress: '',
     data: '0x'
@@ -56,26 +90,28 @@ const NewClaim = ({ isOpen, onClose, selectedToken = null, selectedTransfer = nu
   useEffect(() => {
     if (isOpen) {
       // Add a small delay to ensure network switch has completed
-      const timer = setTimeout(() => {
+      const timer = setTimeout(async () => {
         if (selectedTransfer) {
           // Pre-fill form with transfer data
           console.log('🔍 Pre-filling form with transfer data:', selectedTransfer);
           
-          // Use the timestamp that was already fetched when the expatriation was discovered
-          const calculateTxts = () => {
-            const txtsValue = selectedTransfer.timestamp || selectedTransfer.blockTimestamp;
+          // Use reliable external timestamp for both Expatriation and Repatriation claims
+          const calculateTxts = async () => {
+            const reliableTimestamp = await getReliableTimestamp();
             
-            console.log('🔍 Available timestamp data:', {
+            console.log('🔍 Using reliable external timestamp:', {
+              reliableTimestamp: reliableTimestamp,
+              reliableDate: new Date(reliableTimestamp * 1000).toISOString(),
               transferTimestamp: selectedTransfer.timestamp,
               blockTimestamp: selectedTransfer.blockTimestamp,
               blockNumber: selectedTransfer.blockNumber
             });
             
-            console.log(`🔍 Using timestamp: ${txtsValue} (${new Date(txtsValue * 1000).toISOString()})`);
-            return txtsValue;
+            console.log(`🔍 Using reliable timestamp: ${reliableTimestamp} (${new Date(reliableTimestamp * 1000).toISOString()})`);
+            return reliableTimestamp;
           };
           
-          const txtsValue = calculateTxts();
+          const txtsValue = await calculateTxts();
           // Determine the correct token address based on the transfer type
           let tokenAddress = '';
           
@@ -85,10 +121,10 @@ const NewClaim = ({ isOpen, onClose, selectedToken = null, selectedTransfer = nu
             // Repatriation: use homeTokenAddress (USDT on Ethereum)
             tokenAddress = selectedTransfer.homeTokenAddress || selectedTransfer.fromTokenAddress || '';
             console.log('🔍 Repatriation detected - using homeTokenAddress:', tokenAddress);
-          } else if (network?.id === 1333) {
+          } else if (network?.id === NETWORKS.THREEDPASS.id) {
             // On 3DPass: use foreignTokenAddress (token on 3DPass side)
             tokenAddress = selectedTransfer.foreignTokenAddress || selectedTransfer.toTokenAddress || '';
-          } else if (network?.id === 1) {
+          } else if (network?.id === NETWORKS.ETHEREUM.id) {
             // On Ethereum: for repatriation claims, use homeTokenAddress (token on Ethereum side)
             // This is the token that will be claimed (USDT on Ethereum)
             tokenAddress = selectedTransfer.homeTokenAddress || selectedTransfer.fromTokenAddress || '';
@@ -112,7 +148,10 @@ const NewClaim = ({ isOpen, onClose, selectedToken = null, selectedTransfer = nu
             ...prev,
             tokenAddress: tokenAddress.toLowerCase(),
             amount: selectedTransfer.amount ? 
-              (typeof selectedTransfer.amount === 'string' ? selectedTransfer.amount : 
+              (typeof selectedTransfer.amount === 'string' ? 
+                (selectedTransfer.amount.startsWith('0x') ? 
+                  ethers.utils.formatUnits(selectedTransfer.amount, 6) : 
+                  selectedTransfer.amount) : 
                ethers.utils.formatUnits(selectedTransfer.amount, 6)) : '',
             txid: selectedTransfer.txid || selectedTransfer.transactionHash || '',
             txts: txtsValue,
@@ -121,18 +160,22 @@ const NewClaim = ({ isOpen, onClose, selectedToken = null, selectedTransfer = nu
             data: selectedTransfer.data || '0x'
           }));
         } else if (selectedToken) {
+          const reliableTimestamp = await getReliableTimestamp();
           setFormData(prev => ({
             ...prev,
             tokenAddress: selectedToken.address,
             recipientAddress: account || '',
-            senderAddress: account || ''
+            senderAddress: account || '',
+            txts: reliableTimestamp // Use reliable external timestamp
           }));
         } else if (account) {
           // If no selected token but account is available, still set the addresses
+          const reliableTimestamp = await getReliableTimestamp();
           setFormData(prev => ({
             ...prev,
             recipientAddress: account,
-            senderAddress: account
+            senderAddress: account,
+            txts: reliableTimestamp // Use reliable external timestamp
           }));
         }
         // Reset approval state when form opens or token changes
@@ -178,7 +221,7 @@ const NewClaim = ({ isOpen, onClose, selectedToken = null, selectedTransfer = nu
         // - On 3DPass: foreignTokenAddress is the token on 3DPass side (where we are)
         // - On Ethereum: homeTokenAddress is the token on Ethereum side (where we are for repatriation claims)
         if (bridge.type === 'export') {
-          if (network?.id === 1333) {
+          if (network?.id === NETWORKS.THREEDPASS.id) {
             // On 3DPass: load foreignTokenAddress (token on 3DPass side)
             if (bridge.foreignTokenAddress) {
               tokenAddresses.add(bridge.foreignTokenAddress.toLowerCase());
@@ -206,7 +249,7 @@ const NewClaim = ({ isOpen, onClose, selectedToken = null, selectedTransfer = nu
             currentNetworkId: network?.id
           });
           
-          if (network?.id === 1333) {
+          if (network?.id === NETWORKS.THREEDPASS.id) {
             // On 3DPass: use foreignTokenAddress (token on 3DPass side)
             if (bridge.foreignTokenAddress) {
               tokenAddresses.add(bridge.foreignTokenAddress.toLowerCase());
@@ -214,7 +257,7 @@ const NewClaim = ({ isOpen, onClose, selectedToken = null, selectedTransfer = nu
             } else {
               console.log('❌ Import_wrapper bridge has no foreignTokenAddress');
             }
-          } else if (network?.id === 1) {
+          } else if (network?.id === NETWORKS.ETHEREUM.id) {
             // On Ethereum: use homeTokenAddress (token on Ethereum side for repatriation claims)
             if (bridge.homeTokenAddress) {
               tokenAddresses.add(bridge.homeTokenAddress.toLowerCase());
@@ -258,7 +301,7 @@ const NewClaim = ({ isOpen, onClose, selectedToken = null, selectedTransfer = nu
       for (const address of tokenAddresses) {
         try {
           // For 3DPass network, use 3DPass token metadata
-          if (network?.id === 1333) {
+          if (network?.id === NETWORKS.THREEDPASS.id) {
             const metadata = await get3DPassTokenMetadata(provider, address);
             tokens.push(metadata);
           } else {
@@ -306,7 +349,7 @@ const NewClaim = ({ isOpen, onClose, selectedToken = null, selectedTransfer = nu
       let metadata;
       
       // For 3DPass network, use 3DPass token metadata
-      if (network?.id === 1333) {
+      if (network?.id === NETWORKS.THREEDPASS.id) {
         metadata = await get3DPassTokenMetadata(provider, formData.tokenAddress);
       } else {
         // For other networks (like Ethereum), use standard ERC20 metadata
@@ -345,7 +388,7 @@ const NewClaim = ({ isOpen, onClose, selectedToken = null, selectedTransfer = nu
       let balance;
       
       // For 3DPass network, use 3DPass token balance
-      if (network?.id === 1333) {
+      if (network?.id === NETWORKS.THREEDPASS.id) {
         balance = await get3DPassTokenBalance(provider, formData.tokenAddress, account);
       } else {
         // For other networks (like Ethereum), use standard ERC20 balance
@@ -354,7 +397,7 @@ const NewClaim = ({ isOpen, onClose, selectedToken = null, selectedTransfer = nu
         ], provider);
         
         const balanceWei = await tokenContract.balanceOf(account);
-        const decimals = tokenMetadata?.decimals || 18;
+        const decimals = getTokenDecimals(network?.id, formData.tokenAddress);
         balance = ethers.utils.formatUnits(balanceWei, decimals);
       }
       
@@ -363,7 +406,7 @@ const NewClaim = ({ isOpen, onClose, selectedToken = null, selectedTransfer = nu
       console.error('Error loading token balance:', error);
       setTokenBalance('0');
     }
-  }, [formData.tokenAddress, provider, account, network?.id, tokenMetadata?.decimals]);
+  }, [formData.tokenAddress, provider, account, network?.id]);
 
   // Load stake token balance (P3D)
   const loadStakeTokenBalance = useCallback(async () => {
@@ -376,7 +419,7 @@ const NewClaim = ({ isOpen, onClose, selectedToken = null, selectedTransfer = nu
         let balance;
         
         // For 3DPass network, use 3DPass token balance
-        if (network?.id === 1333) {
+        if (network?.id === NETWORKS.THREEDPASS.id) {
           balance = await get3DPassTokenBalance(provider, stakeTokenAddress, account);
         } else {
           // For other networks (like Ethereum), use standard ERC20 balance
@@ -452,7 +495,7 @@ const NewClaim = ({ isOpen, onClose, selectedToken = null, selectedTransfer = nu
     }
 
     // For 3DPass network (export and import_wrapper bridges)
-    if (network?.id === 1333) {
+    if (network?.id === NETWORKS.THREEDPASS.id) {
       const tokenSymbol = getTokenSymbolFromPrecompile(formData.tokenAddress);
       if (!tokenSymbol) return;
 
@@ -511,7 +554,7 @@ const NewClaim = ({ isOpen, onClose, selectedToken = null, selectedTransfer = nu
       }
     } 
            // For Ethereum network (export bridges for repatriation claims)
-           else if (network?.id === 1) {
+           else if (network?.id === NETWORKS.ETHEREUM.id) {
              console.log('🔍 Looking for export bridge for repatriation claim on Ethereum');
              
              // Look for export bridge for this token
@@ -552,7 +595,6 @@ const NewClaim = ({ isOpen, onClose, selectedToken = null, selectedTransfer = nu
     try {
       console.log('🔍 Loading required stake with amount:', amount);
       console.log('🔍 Selected bridge:', selectedBridge);
-      console.log('🔍 Token metadata:', tokenMetadata);
       
       const bridgeContract = new ethers.Contract(
         selectedBridge.address,
@@ -560,26 +602,20 @@ const NewClaim = ({ isOpen, onClose, selectedToken = null, selectedTransfer = nu
         provider
       );
 
-      // Use the correct decimals for the amount - should be the token being claimed (USDT = 6 decimals)
-      const amountDecimals = tokenMetadata?.decimals || 18;
+      // Use the correct decimals for the amount from configuration
+      const amountDecimals = getTokenDecimals(network?.id, formData.tokenAddress);
       const amountWei = ethers.utils.parseUnits(amount, amountDecimals);
       console.log('🔍 Amount parsing details:', {
         amount: amount,
         amountDecimals: amountDecimals,
-        amountWei: amountWei.toString(),
-        tokenMetadata: tokenMetadata
+        amountWei: amountWei.toString()
       });
       
       const stake = await bridgeContract.getRequiredStake(amountWei);
       console.log('🔍 Raw stake from contract:', stake.toString());
       
       // Get stake token decimals from configuration
-      let stakeTokenDecimals;
-      if (network?.id === 1333) {
-        stakeTokenDecimals = 18; // P3D has 18 decimals (from config)
-      } else {
-        stakeTokenDecimals = 6; // USDT has 6 decimals (from config)
-      }
+      const stakeTokenDecimals = getStakeTokenDecimals(network?.id);
       
       console.log('🔍 Using stake token decimals from config:', stakeTokenDecimals);
       
@@ -616,7 +652,7 @@ const NewClaim = ({ isOpen, onClose, selectedToken = null, selectedTransfer = nu
       console.error('Error loading required stake:', error);
       setRequiredStake('0');
     }
-  }, [selectedBridge, provider, tokenMetadata, network?.id]);
+  }, [selectedBridge, provider, formData.tokenAddress, network?.id]);
 
 
   // Check allowance
@@ -628,14 +664,14 @@ const NewClaim = ({ isOpen, onClose, selectedToken = null, selectedTransfer = nu
       let stakeTokenDecimals;
       
       // For 3DPass network, use 3DPass token allowance
-      if (network?.id === 1333) {
+      if (network?.id === NETWORKS.THREEDPASS.id) {
         currentAllowance = await get3DPassTokenAllowance(
           provider,
           selectedBridge.stakeTokenAddress, // P3D token address
           account,
           selectedBridge.address
         );
-        stakeTokenDecimals = 18; // P3D has 18 decimals
+        stakeTokenDecimals = getStakeTokenDecimals(network?.id);
       } else {
         // For other networks (like Ethereum), use standard ERC20 allowance
         const tokenContract = new ethers.Contract(selectedBridge.stakeTokenAddress, [
@@ -678,7 +714,7 @@ const NewClaim = ({ isOpen, onClose, selectedToken = null, selectedTransfer = nu
 
   // Load available tokens
   useEffect(() => {
-    if (isOpen && (network?.id === 1333 || network?.id === 1)) {
+    if (isOpen && (network?.id === NETWORKS.THREEDPASS.id || network?.id === NETWORKS.ETHEREUM.id)) {
       loadAvailableTokens();
     }
   }, [isOpen, network, loadAvailableTokens]);
@@ -764,7 +800,7 @@ const NewClaim = ({ isOpen, onClose, selectedToken = null, selectedTransfer = nu
     setSubmitting(true);
     try {
       // Approve the stake token, not the claim token
-      if (network?.id === 1333) {
+      if (network?.id === NETWORKS.THREEDPASS.id) {
         // For 3DPass network, use 3DPass token approval
         await approve3DPassToken(
           signer,
@@ -850,10 +886,10 @@ const NewClaim = ({ isOpen, onClose, selectedToken = null, selectedTransfer = nu
         signer
       );
 
-      const amountWei = ethers.utils.parseUnits(formData.amount, tokenMetadata?.decimals || 18);
-      const rewardWei = ethers.utils.parseUnits(formData.reward || '0', tokenMetadata?.decimals || 18);
-      const txts = parseInt(formData.txts) || Math.floor(Date.now() / 1000);
-      const stakeWei = ethers.utils.parseEther(requiredStake);
+      const amountWei = ethers.utils.parseUnits(formData.amount, getTokenDecimals(network?.id, formData.tokenAddress));
+      const rewardWei = ethers.utils.parseUnits(formData.reward || '0', getTokenDecimals(network?.id, formData.tokenAddress));
+      const txts = parseInt(formData.txts) || await getReliableTimestamp();
+      const stakeWei = ethers.utils.parseUnits(requiredStake, getStakeTokenDecimals(network?.id));
 
       console.log('🔍 Parsed values:', {
         amountWei: amountWei.toString(),
@@ -944,16 +980,11 @@ const NewClaim = ({ isOpen, onClose, selectedToken = null, selectedTransfer = nu
       console.log('🔍 Pre-flight checks before claim transaction:');
       
       // Recalculate stake to ensure we have the correct value
-      const amountWeiForStake = ethers.utils.parseUnits(formData.amount, tokenMetadata?.decimals || 18);
+      const amountWeiForStake = ethers.utils.parseUnits(formData.amount, getTokenDecimals(network?.id, formData.tokenAddress));
       const stake = await bridgeContract.getRequiredStake(amountWeiForStake);
       
       // Get stake token decimals from configuration
-      let stakeTokenDecimals;
-      if (network?.id === 1333) {
-        stakeTokenDecimals = 18; // P3D has 18 decimals (from config)
-      } else {
-        stakeTokenDecimals = 6; // USDT has 6 decimals (from config)
-      }
+      const stakeTokenDecimals = getStakeTokenDecimals(network?.id);
       
       // The contract is inconsistent - sometimes returns 18 decimals, sometimes stake token decimals
       let formattedStake;
@@ -1091,7 +1122,7 @@ const NewClaim = ({ isOpen, onClose, selectedToken = null, selectedTransfer = nu
        // Check if form is valid (for button state)
   const isFormValid = () => {
     if (!isConnected) return false;
-    if (network?.id !== 1333 && network?.id !== 1) return false; // Support both 3DPass and Ethereum
+    if (network?.id !== NETWORKS.THREEDPASS.id && network?.id !== NETWORKS.ETHEREUM.id) return false; // Support both 3DPass and Ethereum
     if (!formData.tokenAddress) return false;
     if (!formData.amount || parseFloat(formData.amount) <= 0) return false;
     if (!formData.txid) return false;
@@ -1332,14 +1363,14 @@ const NewClaim = ({ isOpen, onClose, selectedToken = null, selectedTransfer = nu
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                   <div>
                     <label className="block text-sm font-medium text-secondary-300 mb-2">
-                      Timestamp (optional)
+                      Timestamp (reliable external Unix timestamp)
                     </label>
                     <input
                       type="number"
                       value={formData.txts}
                       onChange={(e) => handleInputChange('txts', e.target.value)}
                       className="input-field w-full"
-                      placeholder="Unix timestamp from transaction"
+                      placeholder="Reliable external Unix timestamp"
                     />
                   </div>
 
