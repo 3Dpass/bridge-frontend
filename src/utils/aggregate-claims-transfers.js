@@ -1,3 +1,4 @@
+
 import { ethers } from 'ethers';
 
 /**
@@ -5,14 +6,13 @@ import { ethers } from 'ethers';
  * 
  * CORRECT FLOW LOGIC:
  * 1. Import (NewRepatriation) 3DPass → Export (Claim) Ethereum
- *    - NewRepatriation event from Import bridge on 3DPass
- *    - Should match Export claim on Ethereum
- *    - Data field must match for legitimacy
- * 
+ *    - NewRepatriation event txid from Import bridge on 3DPass
+ *    - Must match the txid from Export claim details or NewClaim event on Ethereum
+ *   
  * 2. Export (NewExpatriation) Ethereum → Import (Claim) 3DPass
- *    - NewExpatriation event from Export bridge on Ethereum
- *    - Should match Import claim on 3DPass
- *    - Data field must match for legitimacy
+ *    - NewExpatriation event txid from Export bridge on Ethereum
+ *    - Must match the txid from Import claim details or NewClaim event on 3DPass
+ *  
  * 
  * @param {Array} claims - Array of claims from fetchClaimsFromAllNetworks
  * @param {Array} transfers - Array of transfers from fetchLastTransfers
@@ -22,6 +22,129 @@ export const aggregateClaimsAndTransfers = (claims, transfers) => {
   console.log('🔍 ===== AGGREGATION FUNCTION CALLED =====');
   console.log('🔍 aggregateClaimsAndTransfers: Starting aggregation');
   console.log(`🔍 Claims count: ${claims.length}, Transfers count: ${transfers.length}`);
+  
+  // Helper function to check if txid matches transfer hash
+  const txidMatches = (claimTxid, transferHashOrId) => {
+    if (!claimTxid || !transferHashOrId) return false;
+    const normalizeHash = (val) => {
+      try {
+        const s = String(val).toLowerCase().trim();
+        // remove 0x and leading zeros for robust compare
+        return s.replace(/^0x/, '').replace(/^0+/, '');
+      } catch (e) {
+        return '';
+      }
+    };
+    const a = normalizeHash(claimTxid);
+    const b = normalizeHash(transferHashOrId);
+    return a && b && a === b;
+  };
+
+  // Helper function to check if amounts match (formats values to contract format before comparison)
+  const amountsMatchBigNumber = (amount1, amount2) => {
+    if (!amount1 || !amount2) return { match: false, reason: 'missing_amount' };
+    try {
+      // Convert both amounts to BigNumber format (contract format)
+      const bn1 = ethers.BigNumber.from(amount1.toString());
+      const bn2 = ethers.BigNumber.from(amount2.toString());
+      
+      // Compare the BigNumber values directly
+      if (bn1.eq(bn2)) {
+        return { match: true, reason: 'exact_match' };
+      } else {
+        return { 
+          match: false, 
+          reason: 'different_values',
+          amount1: bn1.toString(),
+          amount2: bn2.toString()
+        };
+      }
+    } catch (e) {
+      return { match: false, reason: 'conversion_error', error: e.message };
+    }
+  };
+
+  // Helper function to check if addresses match (with format validation)
+  const addressesMatch = (addr1, addr2) => {
+    if (!addr1 || !addr2) return { match: false, reason: 'missing_address' };
+    try {
+      // Check if both addresses are the same (case-insensitive)
+      const sameAddress = addr1.toLowerCase() === addr2.toLowerCase();
+      
+      if (!sameAddress) {
+        return { match: false, reason: 'different_addresses' };
+      }
+      
+      // Check if both addresses are EIP-55 checksummed
+      const isEIP55Checksummed = (addr) => {
+        // EIP-55 checksummed addresses have mixed case
+        // They should not be all lowercase or all uppercase
+        return addr !== addr.toLowerCase() && addr !== addr.toUpperCase();
+      };
+      
+      const addr1IsChecksummed = isEIP55Checksummed(addr1);
+      const addr2IsChecksummed = isEIP55Checksummed(addr2);
+      
+      if (addr1IsChecksummed && addr2IsChecksummed) {
+        // Both are checksummed - exact match required
+        if (addr1 === addr2) {
+          return { match: true, reason: 'exact_checksummed_match' };
+        } else {
+          return { match: false, reason: 'checksummed_format_mismatch' };
+        }
+      } else if (!addr1IsChecksummed && !addr2IsChecksummed) {
+        // Both are not checksummed - this is suspicious
+        return { match: false, reason: 'both_non_checksummed' };
+      } else {
+        // One is checksummed, one is not - this is suspicious
+        return { match: false, reason: 'mixed_checksum_format' };
+      }
+    } catch (e) {
+      return { match: false, reason: 'comparison_error' };
+    }
+  };
+
+  // Helper function to validate reward amounts (formats values to contract format before comparison)
+  // Claim reward should not exceed transfer reward
+  const validateRewardAmounts = (claimReward, transferReward) => {
+    if (!claimReward && !transferReward) {
+      return { match: true, reason: 'both_zero_or_missing' };
+    }
+    
+    if (!claimReward) {
+      return { match: true, reason: 'claim_reward_zero' };
+    }
+    
+    if (!transferReward) {
+      return { match: false, reason: 'transfer_reward_missing' };
+    }
+    
+    try {
+      // Convert both rewards to BigNumber format (contract format)
+      const claimRewardBN = ethers.BigNumber.from(claimReward.toString());
+      const transferRewardBN = ethers.BigNumber.from(transferReward.toString());
+      
+      // Claim reward should not be greater than transfer reward
+      if (claimRewardBN.gt(transferRewardBN)) {
+        return { 
+          match: false, 
+          reason: 'claim_reward_exceeds_transfer_reward',
+          claimReward: claimRewardBN.toString(),
+          transferReward: transferRewardBN.toString()
+        };
+      }
+      
+      // Check if they're equal
+      if (claimRewardBN.eq(transferRewardBN)) {
+        return { match: true, reason: 'rewards_equal' };
+      }
+      
+      // Claim reward is less than transfer reward (acceptable)
+      return { match: true, reason: 'claim_reward_less_than_transfer' };
+    } catch (e) {
+      return { match: false, reason: 'conversion_error', error: e.message };
+    }
+  };
   
   // Debug: Log the first transfer details
   if (transfers.length > 0) {
@@ -60,92 +183,7 @@ export const aggregateClaimsAndTransfers = (claims, transfers) => {
     }
   };
 
-  // Helper function to normalize data for comparison
-  const normalizeData = (data) => {
-    if (!data) return '';
-    return data.toString().toLowerCase().trim();
-  };
 
-  // Helper function to normalize amount for comparison
-  const normalizeAmount = (amount) => {
-    if (!amount) return '0';
-    return amount.toString();
-  };
-
-  // Helper function to check if amounts match using BigNumber comparison
-  const amountsMatchBigNumber = (claimAmount, transferAmount) => {
-    if (!claimAmount || !transferAmount) return false;
-    
-    try {
-      // Convert both to BigNumber for proper comparison
-      const claimBN = ethers.BigNumber.from(claimAmount.toString());
-      const transferBN = ethers.BigNumber.from(transferAmount.toString());
-      
-      return claimBN.eq(transferBN);
-    } catch (error) {
-      console.warn('Error comparing amounts as BigNumbers:', error);
-      // Fallback to string comparison
-      return normalizeAmount(claimAmount) === normalizeAmount(transferAmount);
-    }
-  };
-
-  // Helper function to check if data matches
-  const dataMatches = (claimData, transferData) => {
-    const normalizedClaimData = normalizeData(claimData);
-    const normalizedTransferData = normalizeData(transferData);
-    
-    console.log(`🔍 Data matching check:`, {
-      claimDataRaw: claimData,
-      transferDataRaw: transferData,
-      normalizedClaimData,
-      normalizedTransferData,
-      exactMatch: normalizedClaimData === normalizedTransferData
-    });
-    
-    // Don't match if both data fields are empty or default values
-    if ((!normalizedClaimData || normalizedClaimData === '' || normalizedClaimData === '0x') && 
-        (!normalizedTransferData || normalizedTransferData === '' || normalizedTransferData === '0x')) {
-      console.log(`🔍 Both data fields are empty/default - not matching`);
-      return false;
-    }
-    
-    // Check for exact match
-    if (normalizedClaimData === normalizedTransferData) {
-      console.log(`🔍 Data exact match found!`);
-      return true;
-    }
-    
-    // Check for partial match (in case of encoding differences)
-    if (normalizedClaimData && normalizedTransferData) {
-      // Remove common prefixes/suffixes that might differ
-      const cleanClaimData = normalizedClaimData.replace(/^0x/, '').replace(/^0+/, '');
-      const cleanTransferData = normalizedTransferData.replace(/^0x/, '').replace(/^0+/, '');
-      
-      console.log(`🔍 Clean data comparison:`, {
-        cleanClaimData,
-        cleanTransferData,
-        cleanMatch: cleanClaimData === cleanTransferData
-      });
-      
-      if (cleanClaimData === cleanTransferData) {
-        return true;
-      }
-      
-      // Check if one contains the other (for cases where data might be truncated)
-      if (cleanClaimData.includes(cleanTransferData) || cleanTransferData.includes(cleanClaimData)) {
-        return true;
-      }
-    }
-    
-    return false;
-  };
-
-
-  // Helper function to check if addresses match
-  const addressesMatch = (claimRecipient, transferRecipient) => {
-    if (!claimRecipient || !transferRecipient) return false;
-    return claimRecipient.toLowerCase() === transferRecipient.toLowerCase();
-  };
 
   // Process each claim
   for (const claim of claims) {
@@ -169,7 +207,17 @@ export const aggregateClaimsAndTransfers = (claims, transfers) => {
       noStake: claim.noStake?.toString(),
       expiryTs: claim.expiryTs?.toString(),
       finished: claim.finished,
-      withdrawn: claim.withdrawn
+      withdrawn: claim.withdrawn,
+      // DEBUG: Show txid field and all available fields
+      txid: claim.txid,
+      txidType: typeof claim.txid,
+      txidString: String(claim.txid),
+      // Show all available fields that might contain transaction hash
+      allFields: Object.keys(claim),
+      transaction_hash: claim.transaction_hash,
+      transactionHash: claim.transactionHash,
+      tx_hash: claim.tx_hash,
+      txHash: claim.txHash
     });
 
     console.log(`🔍 Available transfers for matching:`, transfers.map(t => ({
@@ -179,132 +227,89 @@ export const aggregateClaimsAndTransfers = (claims, transfers) => {
       senderAddress: t.senderAddress,
       amount: t.amount?.toString(),
       data: t.data,
-      matched: t.matched
+      matched: t.matched,
+      // DEBUG: Show transaction hash fields
+      transactionHash: t.transactionHash,
+      txid: t.txid,
+      transactionHashType: typeof t.transactionHash,
+      txidType: typeof t.txid
     })));
+
+    // Log withdrawn claims specifically
+    const withdrawnClaims = claims.filter(claim => claim.withdrawn === true);
+    if (withdrawnClaims.length > 0) {
+      console.log(`💰 WITHDRAWN CLAIMS (${withdrawnClaims.length}):`, withdrawnClaims.map(claim => ({
+        claimNum: claim.claimNum,
+        withdrawn: claim.withdrawn,
+        finished: claim.finished,
+        currentOutcome: claim.currentOutcome,
+        amount: claim.amount?.toString(),
+        recipientAddress: claim.recipientAddress,
+        networkName: claim.networkName,
+        bridgeType: claim.bridgeType,
+        expiryTs: claim.expiryTs?.toString(),
+        txid: claim.txid
+      })));
+    } else {
+      console.log(`💰 WITHDRAWN CLAIMS: None found`);
+    }
 
     let matchingTransfer = null;
     let matchReason = '';
 
-    // Find matching transfer based on the correct flow:
-    // Import (NewRepatriation) 3DPass → Export (Claim) Ethereum
-    // Export (NewExpatriation) Ethereum → Import (Claim) 3DPass
+    // Find matching transfer by txid only
     for (const transfer of transfers) {
       // Skip if already matched
       if (transfer.matched) continue;
 
-      // Determine the expected flow based on claim type
-      let isCorrectFlow = false;
-      let flowDescription = '';
+      // Check if txid matches transfer hash - try different possible field names
+      const claimTxid = claim.txid || claim.transaction_hash || claim.transactionHash || claim.tx_hash || claim.txHash;
+      const txMatch1 = txidMatches(claimTxid, transfer.transactionHash);
+      const txMatch2 = txidMatches(claimTxid, transfer.txid);
+      const txMatch = txMatch1 || txMatch2;
       
-      if (claim.bridgeType === 'export') {
-        // Export claim should match NewRepatriation event (from Import bridge)
-        // Flow: Import (NewRepatriation) 3DPass → Export (Claim) Ethereum
-        // The transfer should be from the foreign network to the home network
-        isCorrectFlow = (
-          transfer.eventType === 'NewRepatriation' &&
-          transfer.fromNetwork === claim.foreignNetwork &&
-          transfer.toNetwork === claim.homeNetwork
-        );
-        flowDescription = `Export claim (${claim.homeNetwork}) should match NewRepatriation from ${claim.foreignNetwork} to ${claim.homeNetwork}`;
-      } else if (claim.bridgeType === 'import' || claim.bridgeType === 'import_wrapper') {
-        // Import claim should match NewExpatriation event (from Export bridge)
-        // Flow: Export (NewExpatriation) Ethereum → Import (Claim) 3DPass
-        // The transfer should be from the home network to the foreign network
-        isCorrectFlow = (
-          transfer.eventType === 'NewExpatriation' &&
-          transfer.fromNetwork === claim.homeNetwork &&
-          transfer.toNetwork === claim.foreignNetwork
-        );
-        flowDescription = `Import claim (${claim.foreignNetwork}) should match NewExpatriation from ${claim.homeNetwork} to ${claim.foreignNetwork}`;
+      console.log(`🔍 Checking match for claim ${claim.claimNum} with transfer ${transfer.transactionHash}:`, {
+        claimTxid: claim.txid,
+        claimTransactionHash: claim.transaction_hash,
+        claimTxHash: claim.tx_hash,
+        resolvedClaimTxid: claimTxid,
+        transferTransactionHash: transfer.transactionHash,
+        transferTxid: transfer.txid,
+        txMatch1: txMatch1,
+        txMatch2: txMatch2,
+        finalMatch: txMatch
+      });
+      
+      if (txMatch) {
+        matchingTransfer = transfer;
+        matchReason = 'txid_match';
+        console.log(`🔍 TXID match found for transfer ${transfer.transactionHash}`);
+        break;
       }
-
-      console.log(`🔍 Flow check for transfer ${transfer.transactionHash}:`, {
-        claimBridgeType: claim.bridgeType,
-        transferEventType: transfer.eventType,
-        transferFromNetwork: transfer.fromNetwork,
-        transferToNetwork: transfer.toNetwork,
-        claimForeignNetwork: claim.foreignNetwork,
-        claimHomeNetwork: claim.homeNetwork,
-        isCorrectFlow,
-        flowDescription
-      });
-
-      if (!isCorrectFlow) {
-        console.log(`🔍 Skipping transfer ${transfer.transactionHash} - incorrect flow`);
-        continue;
-      }
-
-      // Check data match (this is the most important criteria)
-      const dataMatch = dataMatches(claim.data, transfer.data);
       
-      // Check amount match using BigNumber comparison
-      const amountMatch = amountsMatchBigNumber(claim.amount, transfer.amount);
-      
-      // Check address match (claim recipient should match transfer sender)
-      const addressMatch = addressesMatch(claim.recipientAddress, transfer.senderAddress);
-
-      console.log(`🔍 ===== CHECKING TRANSFER MATCH =====`);
-      console.log(`🔍 Transfer Details:`, {
-        eventType: transfer.eventType,
-        senderAddress: transfer.senderAddress,
-        recipientAddress: transfer.recipientAddress,
-        amount: transfer.amount?.toString(),
-        amountHex: transfer.amount?.toHexString?.(),
-        data: transfer.data,
-        dataHex: transfer.data?.toHexString?.(),
-        fromNetwork: transfer.fromNetwork,
-        toNetwork: transfer.toNetwork,
-        bridgeAddress: transfer.bridgeAddress,
-        bridgeType: transfer.bridgeType,
-        transactionHash: transfer.transactionHash,
-        blockNumber: transfer.blockNumber,
-        timestamp: transfer.timestamp
-      });
-      
-      console.log(`🔍 Match Analysis:`, {
-        claimType: claim.bridgeType,
-        transferEventType: transfer.eventType,
-        isCorrectFlow,
-        flowDescription,
-        dataMatch,
-        amountMatch,
-        addressMatch,
-        claimAmount: claim.amount?.toString(),
-        transferAmount: transfer.amount?.toString(),
-        claimData: claim.data?.toString(),
-        transferData: transfer.data?.toString(),
-        claimRecipient: claim.recipientAddress,
-        transferSender: transfer.senderAddress,
-        // Raw data for debugging
-        claimDataRaw: claim.data,
-        transferDataRaw: transfer.data,
-        claimDataType: typeof claim.data,
-        transferDataType: typeof transfer.data,
-        claimDataLength: claim.data?.length,
-        transferDataLength: transfer.data?.length,
-        // BigNumber comparison details
-        claimAmountBN: claim.amount ? ethers.BigNumber.from(claim.amount.toString()).toString() : 'null',
-        transferAmountBN: transfer.amount ? ethers.BigNumber.from(transfer.amount.toString()).toString() : 'null'
-      });
-
-      // Determine if this is a match
-      if (dataMatch && amountMatch && addressMatch) {
-        matchingTransfer = transfer;
-        matchReason = 'exact_match';
-        break;
-      } else if (dataMatch && amountMatch) {
-        matchingTransfer = transfer;
-        matchReason = 'data_amount_match';
-        break;
-      } else if (dataMatch && addressMatch) {
-        matchingTransfer = transfer;
-        matchReason = 'data_address_match';
-        break;
-      } else if (dataMatch) {
-        // Data match is the most critical - if data matches, it's likely the same transfer
-        matchingTransfer = transfer;
-        matchReason = 'data_match_only';
-        break;
+      // Fallback matching when txid is not available - match by amount, addresses, reward validation, and bridge type
+      if (!claimTxid && !transfer.matched) {
+        const amountMatchResult = amountsMatchBigNumber(claim.amount, transfer.amount);
+        const amountMatch = amountMatchResult.match;
+        const senderMatchResult = addressesMatch(claim.senderAddress, transfer.senderAddress);
+        const senderMatch = senderMatchResult.match;
+        const recipientMatchResult = addressesMatch(claim.recipientAddress, transfer.recipientAddress);
+        const recipientMatch = recipientMatchResult.match;
+        const rewardValidationResult = validateRewardAmounts(claim.reward, transfer.reward);
+        const rewardValid = rewardValidationResult.match;
+        
+        // Check if this is a valid flow (Export transfer should match Import claim, etc.)
+        const isValidFlow = (
+          (transfer.eventType === 'NewExpatriation' && claim.bridgeType === 'import_wrapper') ||
+          (transfer.eventType === 'NewRepatriation' && claim.bridgeType === 'export')
+        );
+        
+        if (amountMatch && senderMatch && recipientMatch && rewardValid && isValidFlow) {
+          matchingTransfer = transfer;
+          matchReason = 'fallback_match';
+          console.log(`🔍 Fallback match found for transfer ${transfer.transactionHash} - amount, addresses, reward, and flow match`);
+          break;
+        }
       }
     }
 
@@ -331,26 +336,91 @@ export const aggregateClaimsAndTransfers = (claims, transfers) => {
       matchingTransfer.matchedClaim = claim;
       matchingTransfer.matchReason = matchReason;
 
-      // Create completed transfer entry
-      const completedTransfer = {
-        ...claim,
-        transfer: matchingTransfer,
-        matchReason,
-        status: 'completed',
-        isFraudulent: false
-      };
+      // Check for parameter mismatches even when txid matches
+      // Skip sender address and data field checks as they may be acceptable to differ
+      const amountMatchResult = amountsMatchBigNumber(claim.amount, matchingTransfer.amount);
+      const amountMatch = amountMatchResult.match;
+      const recipientMatchResult = addressesMatch(claim.recipientAddress, matchingTransfer.recipientAddress);
+      const recipientMatch = recipientMatchResult.match;
+      const rewardValidationResult = validateRewardAmounts(claim.reward, matchingTransfer.reward);
+      const rewardValid = rewardValidationResult.match;
+      
+      // Check if this is a valid flow
+      const isValidFlow = (
+        (matchingTransfer.eventType === 'NewExpatriation' && claim.bridgeType === 'import_wrapper') ||
+        (matchingTransfer.eventType === 'NewRepatriation' && claim.bridgeType === 'export')
+      );
 
-      result.completedTransfers.push(completedTransfer);
-      result.stats.completedTransfers++;
-
-      console.log(`✅ Found matching transfer for claim ${claim.claimNum}:`, {
-        matchReason,
-        transferEventType: matchingTransfer.eventType,
-        transferBlockNumber: matchingTransfer.blockNumber,
-        transferTransactionHash: matchingTransfer.transactionHash
+      // Determine if this is suspicious due to parameter mismatches
+      // Check amount, recipient, reward validation, and flow validity
+      const hasParameterMismatches = !amountMatch || !recipientMatch || !rewardValid || !isValidFlow;
+      
+      console.log(`🔍 Parameter validation for claim ${claim.claimNum}:`, {
+        amountMatch,
+        recipientMatch,
+        rewardValid,
+        isValidFlow,
+        hasParameterMismatches,
+        claimAmount: claim.amount?.toString(),
+        transferAmount: matchingTransfer.amount?.toString(),
+        claimReward: claim.reward?.toString(),
+        transferReward: matchingTransfer.reward?.toString(),
+        rewardValidationReason: rewardValidationResult.reason,
+        claimRecipient: claim.recipientAddress,
+        transferRecipient: matchingTransfer.recipientAddress,
+        claimRecipientLower: claim.recipientAddress?.toLowerCase(),
+        transferRecipientLower: matchingTransfer.recipientAddress?.toLowerCase(),
+        claimBridgeType: claim.bridgeType,
+        transferEventType: matchingTransfer.eventType
       });
+
+          if (hasParameterMismatches) {
+            // TXID matches but parameters don't - this is suspicious
+            const suspiciousClaim = {
+              ...claim,
+              transfer: matchingTransfer,
+              matchReason,
+              status: 'suspicious',
+              isFraudulent: true,
+              reason: 'txid_match_but_parameter_mismatch',
+              parameterMismatches: {
+                amountMatch,
+                amountMatchReason: amountMatchResult.reason,
+                recipientMatch,
+                recipientMatchReason: recipientMatchResult.reason,
+                rewardValid,
+                rewardValidationReason: rewardValidationResult.reason,
+                isValidFlow
+              }
+            };
+
+        result.suspiciousClaims.push(suspiciousClaim);
+        result.stats.suspiciousClaims++;
+        result.fraudDetected = true;
+
+        console.log(`🔍 ===== SUSPICIOUS CLAIM - TXID MATCH BUT PARAMETER MISMATCH =====`);
+        console.log(`🔍 Suspicious Claim Details:`, {
+          claimNum: claim.claimNum,
+          actualClaimNum: claim.actualClaimNum,
+          matchReason,
+          parameterMismatches: suspiciousClaim.parameterMismatches,
+          reason: suspiciousClaim.reason
+        });
+      } else {
+        // TXID matches and all parameters match - this is a completed transfer
+        const completedTransfer = {
+          ...claim,
+          transfer: matchingTransfer,
+          matchReason,
+          status: 'completed',
+          isFraudulent: false
+        };
+
+        result.completedTransfers.push(completedTransfer);
+        result.stats.completedTransfers++;
+      }
     } else {
-      // No matching transfer found - suspicious claim
+      // No matching transfer found - standalone suspicious claim
       const suspiciousClaim = {
         ...claim,
         status: 'suspicious',
@@ -363,7 +433,7 @@ export const aggregateClaimsAndTransfers = (claims, transfers) => {
       result.stats.suspiciousClaims++;
       result.fraudDetected = true;
 
-      console.log(`🔍 ===== NO MATCH FOUND - SUSPICIOUS CLAIM =====`);
+      console.log(`🔍 ===== NO MATCH FOUND - STANDALONE SUSPICIOUS CLAIM =====`);
       console.log(`🔍 Suspicious Claim Details:`, {
         claimNum: claim.claimNum,
         actualClaimNum: claim.actualClaimNum,
@@ -383,7 +453,8 @@ export const aggregateClaimsAndTransfers = (claims, transfers) => {
         noStake: claim.noStake?.toString(),
         expiryTs: claim.expiryTs?.toString(),
         finished: claim.finished,
-        withdrawn: claim.withdrawn
+        withdrawn: claim.withdrawn,
+        reason: suspiciousClaim.reason
       });
     }
   }
@@ -511,6 +582,25 @@ export const aggregateClaimsAndTransfers = (claims, transfers) => {
     pendingTransfers: result.pendingTransfers.length,
     suspiciousClaims: result.suspiciousClaims.length
   });
+
+  // Log final withdrawn claims summary
+  const finalWithdrawnClaims = result.completedTransfers.filter(claim => claim.withdrawn === true);
+  if (finalWithdrawnClaims.length > 0) {
+    console.log(`💰 FINAL WITHDRAWN CLAIMS SUMMARY (${finalWithdrawnClaims.length}):`, finalWithdrawnClaims.map(claim => ({
+      claimNum: claim.claimNum,
+      withdrawn: claim.withdrawn,
+      finished: claim.finished,
+      currentOutcome: claim.currentOutcome,
+      amount: claim.amount?.toString(),
+      recipientAddress: claim.recipientAddress,
+      networkName: claim.networkName,
+      bridgeType: claim.bridgeType,
+      hasTransfer: !!claim.transfer,
+      transferTxHash: claim.transfer?.transactionHash
+    })));
+  } else {
+    console.log(`💰 FINAL WITHDRAWN CLAIMS SUMMARY: None found`);
+  }
 
   return result;
 };

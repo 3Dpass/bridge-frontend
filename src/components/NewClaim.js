@@ -26,6 +26,15 @@ import { ethers } from 'ethers';
 import toast from 'react-hot-toast';
 import { getReliableTimestamp } from '../utils/time';
 
+// Safely convert to EIP-55 checksum if it's an EVM address
+const toChecksumAddress = (address) => {
+  try {
+    return ethers.utils.getAddress(address);
+  } catch (e) {
+    return address;
+  }
+};
+
 // Helper functions to get network and token configuration
 const getNetworkConfig = (networkId) => {
   return Object.values(NETWORKS).find(network => network.id === networkId);
@@ -58,7 +67,7 @@ const getStakeTokenDecimals = (networkId) => {
   return 18; // Default fallback
 };
 
-const NewClaim = ({ isOpen, onClose, selectedToken = null, selectedTransfer = null }) => {
+const NewClaim = ({ isOpen, onClose, selectedToken = null, selectedTransfer = null, onClaimSubmitted = null }) => {
   const { account, provider, network, isConnected, signer } = useWeb3();
   const { getBridgeInstancesWithSettings, getNetworkWithSettings } = useSettings();
   
@@ -85,12 +94,30 @@ const NewClaim = ({ isOpen, onClose, selectedToken = null, selectedTransfer = nu
   const [allowance, setAllowance] = useState('0');
   const [needsApproval, setNeedsApproval] = useState(true);
   const [availableTokens, setAvailableTokens] = useState([]);
+  
+  // Custom control state for transaction details
+  const [customControls, setCustomControls] = useState({
+    amount: false,
+    reward: false,
+    txid: false,
+    txts: false,
+    data: false,
+    senderAddress: false,
+    recipientAddress: false
+  });
 
   // Initialize form when component mounts or token changes
   useEffect(() => {
     if (isOpen) {
       // Add a small delay to ensure network switch has completed
       const timer = setTimeout(async () => {
+        // Always set sender address from provider/account when dialog opens
+        if (account) {
+          setFormData(prev => ({
+            ...prev,
+            senderAddress: toChecksumAddress(account)
+          }));
+        }
         if (selectedTransfer) {
           // Pre-fill form with transfer data
           console.log('🔍 Pre-filling form with transfer data:', selectedTransfer);
@@ -141,7 +168,16 @@ const NewClaim = ({ isOpen, onClose, selectedToken = null, selectedTransfer = nu
             fromTokenAddress: selectedTransfer.fromTokenAddress,
             toTokenAddress: selectedTransfer.toTokenAddress,
             selectedTokenAddress: tokenAddress,
+            transferReward: selectedTransfer.reward,
             fullTransfer: selectedTransfer
+          });
+          
+          // Get the correct token decimals for formatting
+          const tokenDecimals = getTokenDecimals(network?.id, tokenAddress);
+          console.log('🔍 Using token decimals for formatting:', {
+            tokenAddress,
+            networkId: network?.id,
+            tokenDecimals
           });
           
           setFormData(prev => ({
@@ -150,13 +186,27 @@ const NewClaim = ({ isOpen, onClose, selectedToken = null, selectedTransfer = nu
             amount: selectedTransfer.amount ? 
               (typeof selectedTransfer.amount === 'string' ? 
                 (selectedTransfer.amount.startsWith('0x') ? 
-                  ethers.utils.formatUnits(selectedTransfer.amount, 6) : 
+                  ethers.utils.formatUnits(selectedTransfer.amount, tokenDecimals) : 
                   selectedTransfer.amount) : 
-               ethers.utils.formatUnits(selectedTransfer.amount, 6)) : '',
+               ethers.utils.formatUnits(selectedTransfer.amount, tokenDecimals)) : '',
+            reward: (() => {
+              const rewardValue = selectedTransfer.reward ? 
+                (typeof selectedTransfer.reward === 'string' ? 
+                  (selectedTransfer.reward.startsWith('0x') ? 
+                    ethers.utils.formatUnits(selectedTransfer.reward, tokenDecimals) : 
+                    selectedTransfer.reward) : 
+                 ethers.utils.formatUnits(selectedTransfer.reward, tokenDecimals)) : '0';
+              console.log('🔍 Pre-filling reward from transfer:', {
+                originalReward: selectedTransfer.reward,
+                formattedReward: rewardValue,
+                tokenDecimals
+              });
+              return rewardValue;
+            })(),
             txid: selectedTransfer.txid || selectedTransfer.transactionHash || '',
             txts: txtsValue,
-            senderAddress: selectedTransfer.fromAddress || selectedTransfer.senderAddress || '',
-            recipientAddress: selectedTransfer.toAddress || selectedTransfer.recipientAddress || account || '',
+            senderAddress: toChecksumAddress(account || selectedTransfer.fromAddress || selectedTransfer.senderAddress || ''),
+            recipientAddress: toChecksumAddress(selectedTransfer.toAddress || selectedTransfer.recipientAddress || account || ''),
             data: selectedTransfer.data || '0x'
           }));
         } else if (selectedToken) {
@@ -164,8 +214,8 @@ const NewClaim = ({ isOpen, onClose, selectedToken = null, selectedTransfer = nu
           setFormData(prev => ({
             ...prev,
             tokenAddress: selectedToken.address,
-            recipientAddress: account || '',
-            senderAddress: account || '',
+            recipientAddress: toChecksumAddress(account || ''),
+            senderAddress: toChecksumAddress(account || ''),
             txts: reliableTimestamp // Use reliable external timestamp
           }));
         } else if (account) {
@@ -173,13 +223,24 @@ const NewClaim = ({ isOpen, onClose, selectedToken = null, selectedTransfer = nu
           const reliableTimestamp = await getReliableTimestamp();
           setFormData(prev => ({
             ...prev,
-            recipientAddress: account,
-            senderAddress: account,
+            recipientAddress: toChecksumAddress(account),
+            senderAddress: toChecksumAddress(account),
             txts: reliableTimestamp // Use reliable external timestamp
           }));
         }
         // Reset approval state when form opens or token changes
         setNeedsApproval(true);
+        
+        // Reset custom controls when dialog opens
+        setCustomControls({
+          amount: false,
+          reward: false, // Disable reward editing by default
+          txid: false,
+          txts: false,
+          data: false,
+          senderAddress: false,
+          recipientAddress: false
+        });
       }, 1000); // Wait 1 second for network switch to complete
       
       return () => clearTimeout(timer);
@@ -755,7 +816,7 @@ const NewClaim = ({ isOpen, onClose, selectedToken = null, selectedTransfer = nu
     if (selectedBridge && formData.amount && provider && account) {
       checkAllowance();
     }
-  }, [selectedBridge, formData.amount, provider, account, checkAllowance]);
+  }, [selectedBridge, formData.amount, provider, account, checkAllowance, isOpen]);
 
   // Auto-select token when selectedTransfer is provided and availableTokens are loaded
   useEffect(() => {
@@ -787,9 +848,23 @@ const NewClaim = ({ isOpen, onClose, selectedToken = null, selectedTransfer = nu
 
   // Handle form input changes
   const handleInputChange = (field, value) => {
+    // Automatically checksum address fields
+    let processedValue = value;
+    if ((field === 'senderAddress' || field === 'recipientAddress') && value) {
+      processedValue = toChecksumAddress(value);
+    }
+    
     setFormData(prev => ({
       ...prev,
-      [field]: value
+      [field]: processedValue
+    }));
+  };
+
+  // Handle custom control toggle
+  const handleCustomControlToggle = (field, enabled) => {
+    setCustomControls(prev => ({
+      ...prev,
+      [field]: enabled
     }));
   };
 
@@ -888,18 +963,41 @@ const NewClaim = ({ isOpen, onClose, selectedToken = null, selectedTransfer = nu
 
       const amountWei = ethers.utils.parseUnits(formData.amount, getTokenDecimals(network?.id, formData.tokenAddress));
       const rewardWei = ethers.utils.parseUnits(formData.reward || '0', getTokenDecimals(network?.id, formData.tokenAddress));
-      const txts = parseInt(formData.txts) || await getReliableTimestamp();
+      
+      // Keep amount as BigNumber for proper uint encoding
+      const amountBigNumber = amountWei;
+      // Reward should be passed as int, not hex string
+      const rewardInt = rewardWei.toNumber();
+      
+      // Validate reward is within reasonable bounds
+      if (rewardInt < 0) {
+        throw new Error('Reward cannot be negative');
+      }
+      
+      console.log('🔍 Reward validation:', {
+        originalReward: formData.reward,
+        rewardWei: rewardWei.toString(),
+        rewardInt: rewardInt,
+        isNegative: rewardInt < 0,
+        isTooLarge: rewardInt > Number.MAX_SAFE_INTEGER
+      });
+      // txts should be passed as BigNumber for proper uint32 encoding
+      const txtsBigNumber = ethers.BigNumber.from(parseInt(formData.txts) || await getReliableTimestamp());
       const stakeWei = ethers.utils.parseUnits(requiredStake, getStakeTokenDecimals(network?.id));
+
+      const senderChecksummed = toChecksumAddress(formData.senderAddress);
+      const recipientChecksummed = toChecksumAddress(formData.recipientAddress);
 
       console.log('🔍 Parsed values:', {
         amountWei: amountWei.toString(),
+        amountBigNumber: amountBigNumber.toString(),
         rewardWei: rewardWei.toString(),
-        txts: txts,
-        txtsHex: '0x' + txts.toString(16),
+        rewardInt: rewardInt,
+        txtsBigNumber: txtsBigNumber.toString(),
         stakeWei: stakeWei.toString(),
         txid: formData.txid,
-        senderAddress: formData.senderAddress,
-        recipientAddress: formData.recipientAddress,
+        senderAddress: senderChecksummed,
+        recipientAddress: recipientChecksummed,
         data: formData.data
       });
 
@@ -907,29 +1005,89 @@ const NewClaim = ({ isOpen, onClose, selectedToken = null, selectedTransfer = nu
       if (!formData.txid || formData.txid.trim() === '') {
         throw new Error('Transaction ID is required');
       }
-      if (!formData.senderAddress || formData.senderAddress.trim() === '') {
+      if (!senderChecksummed || senderChecksummed.trim() === '') {
         throw new Error('Sender address is required');
       }
-      if (!formData.recipientAddress || formData.recipientAddress.trim() === '') {
+      if (!recipientChecksummed || recipientChecksummed.trim() === '') {
         throw new Error('Recipient address is required');
       }
+      if (!ethers.utils.isAddress(recipientChecksummed)) return;
 
+      // Validate reward against transfer data if available
+      if (selectedTransfer && selectedTransfer.reward) {
+        const tokenDecimals = getTokenDecimals(network?.id, formData.tokenAddress);
+        const transferRewardFormatted = typeof selectedTransfer.reward === 'string' ? 
+          (selectedTransfer.reward.startsWith('0x') ? 
+            ethers.utils.formatUnits(selectedTransfer.reward, tokenDecimals) : 
+            selectedTransfer.reward) : 
+          ethers.utils.formatUnits(selectedTransfer.reward, tokenDecimals);
+        
+        const currentRewardFormatted = formData.reward || '0';
+        
+        console.log('🔍 Validating reward against transfer data:', {
+          transferReward: selectedTransfer.reward,
+          transferRewardFormatted,
+          currentReward: formData.reward,
+          currentRewardFormatted,
+          match: transferRewardFormatted === currentRewardFormatted
+        });
+        
+        // Warn if reward doesn't match but don't block the transaction
+        if (transferRewardFormatted !== currentRewardFormatted) {
+          console.warn('⚠️ Reward amount differs from transfer data:', {
+            transferReward: transferRewardFormatted,
+            claimReward: currentRewardFormatted
+          });
+        }
+      }
+
+      // Keep txid in original format (hex string with 0x prefix as expected by bot)
+      const txidString = formData.txid;
+      
+      // Validate txid format
+      if (!txidString || txidString.trim() === '') {
+        throw new Error('Transaction ID is required');
+      }
+      
+      // Ensure txid is properly formatted
+      let processedTxid = txidString.trim();
+      if (!processedTxid.startsWith('0x')) {
+        processedTxid = '0x' + processedTxid;
+      }
+      
+      // Check if txid is a valid hex string
+      if (!/^0x[0-9a-fA-F]+$/.test(processedTxid)) {
+        throw new Error('Transaction ID must be a valid hexadecimal string');
+      }
+      
+      // Check txid length (should be 66 characters for a 32-byte hash: 0x + 64 hex chars)
+      if (processedTxid.length !== 66) {
+        console.warn('⚠️ Transaction ID length is unusual:', {
+          txid: processedTxid,
+          length: processedTxid.length,
+          expectedLength: 66
+        });
+      }
+      
       console.log('🔍 Calling claim function with parameters:', [
-        formData.txid,
-        txts,
-        amountWei,
-        rewardWei,
+        processedTxid,
+        txtsBigNumber,
+        amountBigNumber,
+        rewardInt,
         stakeWei,
-        formData.senderAddress,
-        formData.recipientAddress,
+        senderChecksummed,
+        recipientChecksummed,
         formData.data
       ]);
       
       console.log('🔍 Parameter details:', {
-        txid: formData.txid,
-        txts: txts.toString(),
+        originalTxid: formData.txid,
+        processedTxid: processedTxid,
+        txtsBigNumber: txtsBigNumber.toString(),
         amountWei: amountWei.toString(),
+        amountBigNumber: amountBigNumber.toString(),
         rewardWei: rewardWei.toString(),
+        rewardInt: rewardInt,
         stakeWei: stakeWei.toString(),
         senderAddress: formData.senderAddress,
         recipientAddress: formData.recipientAddress,
@@ -962,9 +1120,9 @@ const NewClaim = ({ isOpen, onClose, selectedToken = null, selectedTransfer = nu
             });
             
             // Check if this matches our transfer
-            if (claim.txid === formData.txid && 
-                claim.sender_address === formData.senderAddress &&
-                claim.recipient_address.toLowerCase() === formData.recipientAddress.toLowerCase()) {
+            if (claim.txid === processedTxid && 
+                claim.sender_address === senderChecksummed &&
+                claim.recipient_address.toLowerCase() === recipientChecksummed.toLowerCase()) {
               console.log(`⚠️ Found existing claim ${claimNum} for this transfer!`);
               throw new Error(`This transfer has already been claimed (Claim #${claimNum})`);
             }
@@ -1043,13 +1201,13 @@ const NewClaim = ({ isOpen, onClose, selectedToken = null, selectedTransfer = nu
       let gasLimit;
       try {
         const gasEstimate = await bridgeContract.estimateGas.claim(
-          formData.txid,
-          txts,
-          amountWei,
-          rewardWei,
-          stakeWei,
-          formData.senderAddress,
-          formData.recipientAddress,
+          processedTxid,
+          txtsBigNumber,
+          amountBigNumber,
+          rewardInt,
+          stakeWeiForCheck,
+          senderChecksummed,
+          recipientChecksummed,
           formData.data
         );
         gasLimit = gasEstimate.mul(120).div(100); // Add 20% buffer
@@ -1065,13 +1223,13 @@ const NewClaim = ({ isOpen, onClose, selectedToken = null, selectedTransfer = nu
       }
 
       const claimTx = await bridgeContract.claim(
-        formData.txid,
-        txts,
-        amountWei,
-        rewardWei,
+        processedTxid,
+        txtsBigNumber,
+        amountBigNumber,
+        rewardInt,
         stakeWeiForCheck,
-        formData.senderAddress,
-        formData.recipientAddress,
+        senderChecksummed,
+        recipientChecksummed,
         formData.data,
         { 
           value: 0, // No ETH value needed, USDT is transferred via transferFrom
@@ -1086,6 +1244,15 @@ const NewClaim = ({ isOpen, onClose, selectedToken = null, selectedTransfer = nu
       console.log('🔍 Claim transaction confirmed:', receipt);
       toast.success(`Claim confirmed! Transaction: ${receipt.transactionHash}`);
       
+      // Call the callback to refresh the claim list
+      if (onClaimSubmitted) {
+        onClaimSubmitted({
+          claimTxHash: receipt.transactionHash,
+          selectedTransfer: selectedTransfer,
+          formData: formData
+        });
+      }
+      
       onClose();
     } catch (error) {
       console.error('❌ Error submitting claim:', error);
@@ -1098,19 +1265,23 @@ const NewClaim = ({ isOpen, onClose, selectedToken = null, selectedTransfer = nu
       
       // Handle different types of errors gracefully
       let errorMessage = 'Claim failed';
+      const providerMessage = error.data?.message || error.message;
       
-      if (error.code === 4001 || error.message?.includes('User denied transaction') || error.message?.includes('user rejected transaction')) {
+      if (error.code === 4001 || providerMessage?.includes('User denied transaction') || providerMessage?.includes('user rejected transaction')) {
         errorMessage = 'Transaction cancelled by user';
-      } else if (error.code === -32603 || error.message?.includes('insufficient funds')) {
+      } else if (providerMessage?.toLowerCase().includes('insufficient funds') || providerMessage?.toLowerCase().includes('insufficient balance')) {
         errorMessage = 'Insufficient ETH for gas fees. Please add ETH to your wallet.';
-      } else if (error.message?.includes('gas')) {
+      } else if (error.code === -32603) {
+        // Generic provider error; surface original message if any
+        errorMessage = providerMessage ? `Provider error (-32603): ${providerMessage}` : 'Provider internal error (-32603). Please try again or reconnect your wallet.';
+      } else if (providerMessage?.toLowerCase().includes('gas')) {
         errorMessage = 'Transaction failed due to gas issues. Please try again.';
-      } else if (error.message?.includes('execution reverted') || error.message?.includes('revert')) {
+      } else if (providerMessage?.includes('execution reverted') || providerMessage?.includes('revert')) {
         errorMessage = 'Transaction failed. Please check your inputs and try again.';
-      } else if (error.message?.includes('Internal JSON-RPC error') || error.message?.includes('network')) {
+      } else if (providerMessage?.includes('Internal JSON-RPC error') || providerMessage?.toLowerCase().includes('network')) {
         errorMessage = 'Network error. Please check your connection and try again.';
       } else {
-        errorMessage = `Claim failed: ${error.message}`;
+        errorMessage = `Claim failed: ${providerMessage}`;
       }
       
       toast.error(errorMessage);
@@ -1127,6 +1298,7 @@ const NewClaim = ({ isOpen, onClose, selectedToken = null, selectedTransfer = nu
     if (!formData.amount || parseFloat(formData.amount) <= 0) return false;
     if (!formData.txid) return false;
     if (!formData.senderAddress) return false;
+    if (!ethers.utils.isAddress(formData.senderAddress)) return false;
     if (!formData.recipientAddress) return false;
     if (!ethers.utils.isAddress(formData.recipientAddress)) return false;
     if (!selectedBridge) return false;
@@ -1319,97 +1491,216 @@ const NewClaim = ({ isOpen, onClose, selectedToken = null, selectedTransfer = nu
                 
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                   <div>
-                    <label className="block text-sm font-medium text-secondary-300 mb-2">
-                      Amount
-                    </label>
+                    <div className="flex items-center justify-between mb-2">
+                      <label className="block text-sm font-medium text-secondary-300">
+                        Amount
+                      </label>
+                      <div className="flex items-center gap-2">
+                        <input
+                          type="checkbox"
+                          id="custom-amount"
+                          checked={customControls.amount}
+                          onChange={(e) => handleCustomControlToggle('amount', e.target.checked)}
+                          className="w-4 h-4 text-primary-600 bg-dark-800 border-secondary-600 rounded focus:ring-primary-500"
+                        />
+                        <label htmlFor="custom-amount" className="text-xs text-secondary-400">
+                          Custom
+                        </label>
+                      </div>
+                    </div>
                     <input
                       type="number"
                       step="any"
                       value={formData.amount}
                       onChange={(e) => handleInputChange('amount', e.target.value)}
-                      className="input-field w-full"
+                      disabled={!customControls.amount}
+                      className={`input-field w-full ${
+                        !customControls.amount ? 'opacity-50 cursor-not-allowed bg-dark-800' : ''
+                      }`}
                       placeholder="0.0"
                     />
                   </div>
 
                   <div>
-                    <label className="block text-sm font-medium text-secondary-300 mb-2">
-                      Reward (optional)
-                    </label>
+                    <div className="flex items-center justify-between mb-2">
+                      <label className="block text-sm font-medium text-secondary-300">
+                        Reward (optional)
+                      </label>
+                      <div className="flex items-center gap-2">
+                        <input
+                          type="checkbox"
+                          id="custom-reward"
+                          checked={customControls.reward}
+                          onChange={(e) => handleCustomControlToggle('reward', e.target.checked)}
+                          className="w-4 h-4 text-primary-600 bg-dark-800 border-secondary-600 rounded focus:ring-primary-500"
+                        />
+                        <label htmlFor="custom-reward" className="text-xs text-secondary-400">
+                          Custom
+                        </label>
+                      </div>
+                    </div>
                     <input
                       type="number"
                       step="any"
                       value={formData.reward}
                       onChange={(e) => handleInputChange('reward', e.target.value)}
-                      className="input-field w-full"
+                      disabled={!customControls.reward}
+                      className={`input-field w-full ${
+                        !customControls.reward ? 'opacity-50 cursor-not-allowed bg-dark-800' : ''
+                      }`}
                       placeholder="0.0"
                     />
                   </div>
                 </div>
 
                 <div>
-                  <label className="block text-sm font-medium text-secondary-300 mb-2">
-                    Transaction ID (from source network)
-                  </label>
+                  <div className="flex items-center justify-between mb-2">
+                    <label className="block text-sm font-medium text-secondary-300">
+                      Transaction ID (from source network)
+                    </label>
+                    <div className="flex items-center gap-2">
+                      <input
+                        type="checkbox"
+                        id="custom-txid"
+                        checked={customControls.txid}
+                        onChange={(e) => handleCustomControlToggle('txid', e.target.checked)}
+                        className="w-4 h-4 text-primary-600 bg-dark-800 border-secondary-600 rounded focus:ring-primary-500"
+                      />
+                      <label htmlFor="custom-txid" className="text-xs text-secondary-400">
+                        Custom
+                      </label>
+                    </div>
+                  </div>
                   <input
                     type="text"
                     value={formData.txid}
                     onChange={(e) => handleInputChange('txid', e.target.value)}
-                    className="input-field w-full"
+                    disabled={!customControls.txid}
+                    className={`input-field w-full ${
+                      !customControls.txid ? 'opacity-50 cursor-not-allowed bg-dark-800' : ''
+                    }`}
                     placeholder="0x..."
                   />
                 </div>
 
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                   <div>
-                    <label className="block text-sm font-medium text-secondary-300 mb-2">
-                      Timestamp (reliable external Unix timestamp)
-                    </label>
+                    <div className="flex items-center justify-between mb-2">
+                      <label className="block text-sm font-medium text-secondary-300">
+                        Timestamp (reliable external Unix timestamp)
+                      </label>
+                      <div className="flex items-center gap-2">
+                        <input
+                          type="checkbox"
+                          id="custom-txts"
+                          checked={customControls.txts}
+                          onChange={(e) => handleCustomControlToggle('txts', e.target.checked)}
+                          className="w-4 h-4 text-primary-600 bg-dark-800 border-secondary-600 rounded focus:ring-primary-500"
+                        />
+                        <label htmlFor="custom-txts" className="text-xs text-secondary-400">
+                          Custom
+                        </label>
+                      </div>
+                    </div>
                     <input
                       type="number"
                       value={formData.txts}
                       onChange={(e) => handleInputChange('txts', e.target.value)}
-                      className="input-field w-full"
+                      disabled={!customControls.txts}
+                      className={`input-field w-full ${
+                        !customControls.txts ? 'opacity-50 cursor-not-allowed bg-dark-800' : ''
+                      }`}
                       placeholder="Reliable external Unix timestamp"
                     />
                   </div>
 
                   <div>
-                    <label className="block text-sm font-medium text-secondary-300 mb-2">
-                      Additional data from transaction (optional)
-                    </label>
+                    <div className="flex items-center justify-between mb-2">
+                      <label className="block text-sm font-medium text-secondary-300">
+                        Additional data from transaction (optional)
+                      </label>
+                      <div className="flex items-center gap-2">
+                        <input
+                          type="checkbox"
+                          id="custom-data"
+                          checked={customControls.data}
+                          onChange={(e) => handleCustomControlToggle('data', e.target.checked)}
+                          className="w-4 h-4 text-primary-600 bg-dark-800 border-secondary-600 rounded focus:ring-primary-500"
+                        />
+                        <label htmlFor="custom-data" className="text-xs text-secondary-400">
+                          Custom
+                        </label>
+                      </div>
+                    </div>
                     <input
                       type="text"
                       value={formData.data}
                       onChange={(e) => handleInputChange('data', e.target.value)}
-                      className="input-field w-full"
+                      disabled={!customControls.data}
+                      className={`input-field w-full ${
+                        !customControls.data ? 'opacity-50 cursor-not-allowed bg-dark-800' : ''
+                      }`}
                       placeholder="0x"
                     />
                   </div>
                 </div>
 
                 <div>
-                  <label className="block text-sm font-medium text-secondary-300 mb-2">
-                    Sender Address
-                  </label>
+                  <div className="flex items-center justify-between mb-2">
+                    <label className="block text-sm font-medium text-secondary-300">
+                      Sender Address
+                    </label>
+                    <div className="flex items-center gap-2">
+                      <input
+                        type="checkbox"
+                        id="custom-sender"
+                        checked={customControls.senderAddress}
+                        onChange={(e) => handleCustomControlToggle('senderAddress', e.target.checked)}
+                        className="w-4 h-4 text-primary-600 bg-dark-800 border-secondary-600 rounded focus:ring-primary-500"
+                      />
+                      <label htmlFor="custom-sender" className="text-xs text-secondary-400">
+                        Custom
+                      </label>
+                    </div>
+                  </div>
                   <input
                     type="text"
                     value={formData.senderAddress}
                     onChange={(e) => handleInputChange('senderAddress', e.target.value)}
-                    className="input-field w-full"
+                    disabled={!customControls.senderAddress}
+                    className={`input-field w-full ${
+                      !customControls.senderAddress ? 'opacity-50 cursor-not-allowed bg-dark-800' : ''
+                    }`}
                     placeholder="0x..."
                   />
                 </div>
 
                 <div>
-                  <label className="block text-sm font-medium text-secondary-300 mb-2">
-                    Recipient Address
-                  </label>
+                  <div className="flex items-center justify-between mb-2">
+                    <label className="block text-sm font-medium text-secondary-300">
+                      Recipient Address
+                    </label>
+                    <div className="flex items-center gap-2">
+                      <input
+                        type="checkbox"
+                        id="custom-recipient"
+                        checked={customControls.recipientAddress}
+                        onChange={(e) => handleCustomControlToggle('recipientAddress', e.target.checked)}
+                        className="w-4 h-4 text-primary-600 bg-dark-800 border-secondary-600 rounded focus:ring-primary-500"
+                      />
+                      <label htmlFor="custom-recipient" className="text-xs text-secondary-400">
+                        Custom
+                      </label>
+                    </div>
+                  </div>
                   <input
                     type="text"
                     value={formData.recipientAddress}
                     onChange={(e) => handleInputChange('recipientAddress', e.target.value)}
-                    className="input-field w-full"
+                    disabled={!customControls.recipientAddress}
+                    className={`input-field w-full ${
+                      !customControls.recipientAddress ? 'opacity-50 cursor-not-allowed bg-dark-800' : ''
+                    }`}
                     placeholder="0x..."
                   />
                 </div>

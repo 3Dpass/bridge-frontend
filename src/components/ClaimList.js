@@ -675,6 +675,11 @@ const ClaimList = () => {
         pendingTransfers: aggregated.pendingTransfers.length,
         fraudDetected: aggregated.fraudDetected
       });
+
+      console.log('🔍 History search depth setting:', {
+        historySearchDepth,
+        historySearchDepthType: typeof historySearchDepth
+      });
       
       // Debug: Show details of all aggregated data
       console.log('🔍 Aggregated data breakdown:', {
@@ -686,13 +691,15 @@ const ClaimList = () => {
 
       // Debug: Show details of pending transfers
       if (aggregated.pendingTransfers.length > 0) {
-        console.log('🔍 Pending transfers details:', aggregated.pendingTransfers.map(t => ({
+        console.log('🔍 Pending transfers details (BEFORE time filtering):', aggregated.pendingTransfers.map(t => ({
           eventType: t.eventType,
           senderAddress: t.senderAddress,
           recipientAddress: t.recipientAddress,
           amount: t.amount?.toString(),
           transactionHash: t.transactionHash,
           blockNumber: t.blockNumber,
+          timestamp: t.timestamp,
+          timestampDate: t.timestamp ? new Date(t.timestamp * 1000).toISOString() : 'No timestamp',
           status: t.status,
           bridgeAddress: t.bridgeAddress,
           networkKey: t.networkKey
@@ -723,9 +730,26 @@ const ClaimList = () => {
         const cutoffTs = Math.floor(Date.now() / 1000) - Math.floor(historySearchDepth * 3600);
         const withinWindow = (ts) => typeof ts === 'number' && ts >= cutoffTs;
 
+        console.log('🔍 Time filtering debug:', {
+          currentTime: Math.floor(Date.now() / 1000),
+          historySearchDepth,
+          cutoffTs,
+          cutoffDate: new Date(cutoffTs * 1000).toISOString()
+        });
+
         const filteredCompleted = (aggregated.completedTransfers || []).filter((ct) => {
           // Prefer transfer timestamp when available
-          if (ct.transfer?.timestamp) return withinWindow(ct.transfer.timestamp);
+          if (ct.transfer?.timestamp) {
+            const result = withinWindow(ct.transfer.timestamp);
+            console.log(`🔍 Completed transfer ${ct.transfer.transactionHash} timestamp check:`, {
+              timestamp: ct.transfer.timestamp,
+              timestampDate: new Date(ct.transfer.timestamp * 1000).toISOString(),
+              cutoffTs,
+              cutoffDate: new Date(cutoffTs * 1000).toISOString(),
+              withinWindow: result
+            });
+            return result;
+          }
           // Fallbacks: blockTimestamp on claim if present
           if (ct.blockTimestamp) return withinWindow(ct.blockTimestamp);
           // As a last resort, use expiryTs if available (approximation)
@@ -736,7 +760,17 @@ const ClaimList = () => {
           return false;
         });
 
-        const filteredPending = (aggregated.pendingTransfers || []).filter((pt) => withinWindow(pt.timestamp));
+        const filteredPending = (aggregated.pendingTransfers || []).filter((pt) => {
+          const result = withinWindow(pt.timestamp);
+          console.log(`🔍 Pending transfer ${pt.transactionHash} timestamp check:`, {
+            timestamp: pt.timestamp,
+            timestampDate: new Date(pt.timestamp * 1000).toISOString(),
+            cutoffTs,
+            cutoffDate: new Date(cutoffTs * 1000).toISOString(),
+            withinWindow: result
+          });
+          return result;
+        });
 
         const filteredSuspicious = (aggregated.suspiciousClaims || []).filter((sc) => {
           // If we have a timestamp-like field, use it
@@ -825,11 +859,11 @@ const ClaimList = () => {
     loadClaimsAndTransfers();
   }, [loadClaimsAndTransfers, filter]);
 
-  // Auto-refresh every 30 seconds
+  // Auto-refresh every 6 minutes
   useEffect(() => {
     const interval = setInterval(() => {
       loadClaimsAndTransfers();
-    }, 30000);
+    }, 360000);
 
     return () => clearInterval(interval);
   }, [loadClaimsAndTransfers]);
@@ -1028,7 +1062,7 @@ const ClaimList = () => {
       {loading && (
         <div className="text-center py-12">
           <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary-500 mx-auto mb-4"></div>
-          <p className="text-secondary-400">Loading claims...</p>
+          <p className="text-secondary-400">Discovering transfers...</p>
         </div>
       )}
 
@@ -1115,6 +1149,19 @@ const ClaimList = () => {
             pendingTransfers: aggregatedData?.pendingTransfers?.length || 0,
             fallbackClaims: claims.length
           });
+
+          // Check for withdrawn claims in display data
+          const withdrawnInDisplay = displayData.filter(item => item.withdrawn === true);
+          console.log(`💰 WITHDRAWN CLAIMS IN DISPLAY (${withdrawnInDisplay.length}):`, withdrawnInDisplay.map(item => ({
+            claimNum: item.claimNum || item.actualClaimNum,
+            withdrawn: item.withdrawn,
+            finished: item.finished,
+            currentOutcome: item.currentOutcome,
+            amount: item.amount?.toString(),
+            recipientAddress: item.recipientAddress,
+            networkName: item.networkName,
+            bridgeType: item.bridgeType
+          })));
 
           // Debug: Show what's in each category
           if (aggregatedData) {
@@ -1208,6 +1255,23 @@ const ClaimList = () => {
           });
           
           const status = getClaimStatus(claim);
+          
+          // Debug withdrawn claims rendering
+          if (claim.withdrawn === true) {
+            console.log(`💰 RENDERING WITHDRAWN CLAIM:`, {
+              claimNum: claim.claimNum || claim.actualClaimNum,
+              withdrawn: claim.withdrawn,
+              finished: claim.finished,
+              status: status,
+              currentOutcome: claim.currentOutcome,
+              amount: claim.amount?.toString(),
+              recipientAddress: claim.recipientAddress,
+              networkName: claim.networkName,
+              bridgeType: claim.bridgeType,
+              hasTransfer: !!claim.transfer
+            });
+          }
+          
           return (
             <motion.div
               key={`${claim.bridgeAddress}-${claim.actualClaimNum || claim.claimNum || claim.transactionHash}`}
@@ -1218,6 +1282,7 @@ const ClaimList = () => {
               className={`card mb-4 ${
                 isSuspicious ? 'border-red-500 bg-red-900/10' : 
                 isPending ? 'border-yellow-500 bg-yellow-900/10' : 
+                claim.withdrawn ? 'border-green-500 bg-green-900/10' :
                 'border-dark-700'
               }`}
             >
@@ -1228,6 +1293,8 @@ const ClaimList = () => {
                     <span className="text-sm font-medium text-white">
                       {isPending ? `Transfer #${index + 1}` : (isTransfer ? `Transfer #${index + 1}` : `Claim #${claim.actualClaimNum || claim.claimNum}`)}
                     </span>
+                    {isSuspicious && claim.withdrawn && <CheckCircle className="w-4 h-4 text-green-500" />}
+                    {isSuspicious && status === 'active' && <Clock className="w-4 h-4 text-warning-500" />}
                     {isSuspicious && <AlertTriangle className="w-4 h-4 text-red-500" />}
                     {isPending && <Clock className="w-4 h-4 text-yellow-500" />}
                     {!isTransfer && !isSuspicious && !isPending && getStatusIcon(status)}
@@ -1248,62 +1315,356 @@ const ClaimList = () => {
                     </span>
                   </div>
 
-                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 text-sm mb-3">
-                    <div>
-                      <span className="text-secondary-400">Amount:</span>
-                      <span className="text-white ml-2 font-medium">
-                        {(() => {
-                          const decimals = getTokenDecimals(claim);
-                          const formatted = formatAmount(claim.amount, decimals);
-                          console.log(`🔍 Amount formatting for claim:`, {
-                            rawAmount: claim.amount?.toString(),
-                            rawAmountHex: claim.amount?.toHexString?.(),
-                            tokenSymbol: getTransferTokenSymbol(claim),
-                            decimals,
-                            formatted,
-                            // Test with different decimals
-                            testWith6Decimals: formatAmount(claim.amount, 6),
-                            testWith18Decimals: formatAmount(claim.amount, 18),
-                            // Additional debugging for transfers
-                            isTransfer: !!claim.eventType,
-                            eventType: claim.eventType,
-                            bridgeType: claim.bridgeType,
-                            networkKey: claim.networkKey,
-                            bridgeAddress: claim.bridgeAddress
-                          });
-                          return `${formatted} ${getTransferTokenSymbol(claim)}`;
-                        })()}
-                      </span>
+                  {/* Show both transfer and claim details for completed transfers and suspicious claims with transfers */}
+                  {claim.transfer && (
+                    <div className="mb-4">
+                      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+                        {/* Transfer Details */}
+                        <div className="bg-dark-800 border border-secondary-700 rounded-lg p-3">
+                          <h4 className="text-sm font-medium text-primary-400 mb-2">Transfer from {claim.transfer.fromNetwork || 'Unknown Network'}</h4>
+                          <div className="space-y-2 text-sm">
+                            <div>
+                              <span className="text-secondary-400">Amount:</span>
+                              <span className="text-white ml-2 font-medium">
+                                {(() => {
+                                  const decimals = getTokenDecimals(claim.transfer);
+                                  const formatted = formatAmount(claim.transfer.amount, decimals);
+                                  return `${formatted} ${getTransferTokenSymbol(claim.transfer)}`;
+                                })()}
+                              </span>
+                            </div>
+                            {claim.transfer.reward && claim.transfer.reward !== '0' && claim.transfer.reward !== '0x0' && (
+                              <div>
+                                <span className="text-secondary-400">Reward:</span>
+                                <span className="text-white ml-2 font-medium">
+                                  {(() => {
+                                    const decimals = getTokenDecimals(claim.transfer);
+                                    const formatted = formatAmount(claim.transfer.reward, decimals);
+                                    return `${formatted} ${getTransferTokenSymbol(claim.transfer)}`;
+                                  })()}
+                                </span>
+                              </div>
+                            )}
+                            <div>
+                              <span className="text-secondary-400">Sender:</span>
+                              <span className="text-white ml-2 font-mono">
+                                {formatAddress(claim.transfer.senderAddress)}
+                              </span>
+                            </div>
+                            <div>
+                              <span className="text-secondary-400">Recipient:</span>
+                              <span className="text-white ml-2 font-mono">
+                                {formatAddress(claim.transfer.recipientAddress)}
+                              </span>
+                            </div>
+                            <div>
+                              <span className="text-secondary-400">Tx Hash:</span>
+                              <span className="text-white ml-2 font-mono">
+                                {formatAddress(claim.transfer.transactionHash)}
+                              </span>
+                              <button
+                                onClick={() => copyToClipboard(claim.transfer.transactionHash, 'Transfer transaction hash')}
+                                className="ml-2 p-1 hover:bg-dark-700 rounded transition-colors"
+                                title="Copy transfer transaction hash"
+                              >
+                                <Copy className="w-3 h-3 text-secondary-400 hover:text-white" />
+                              </button>
+                            </div>
+                            <div>
+                              <span className="text-secondary-400">Block:</span>
+                              <span className="text-white ml-2">{claim.transfer.blockNumber}</span>
+                            </div>
+                            <div>
+                              <span className="text-secondary-400">Data:</span>
+                              <span className="text-white ml-2 font-mono text-xs">
+                                {claim.transfer.data || '0x'}
+                              </span>
+                            </div>
+                          </div>
+                        </div>
+
+                        {/* Claim Details */}
+                        <div className="bg-dark-800 border border-secondary-700 rounded-lg p-3">
+                          <h4 className="text-sm font-medium text-success-400 mb-2">Claim to {claim.transfer.toNetwork || 'Unknown Network'}</h4>
+                          <div className="space-y-2 text-sm">
+                            <div>
+                              <span className="text-secondary-400">Amount:</span>
+                              <span className="text-white ml-2 font-medium">
+                                {(() => {
+                                  const decimals = getTokenDecimals(claim);
+                                  const formatted = formatAmount(claim.amount, decimals);
+                                  return `${formatted} ${getTransferTokenSymbol(claim)}`;
+                                })()}
+                              </span>
+                            </div>
+                            {claim.reward && claim.reward !== '0' && claim.reward !== '0x0' && (
+                              <div>
+                                <span className="text-secondary-400">Reward:</span>
+                                <span className="text-white ml-2 font-medium">
+                                  {(() => {
+                                    const decimals = getTokenDecimals(claim);
+                                    const formatted = formatAmount(claim.reward, decimals);
+                                    return `${formatted} ${getTransferTokenSymbol(claim)}`;
+                                  })()}
+                                </span>
+                              </div>
+                            )}
+                            <div>
+                              <span className="text-secondary-400">Sender:</span>
+                              <span className="text-white ml-2 font-mono">
+                                {formatAddress(claim.senderAddress)}
+                              </span>
+                            </div>
+                            <div>
+                              <span className="text-secondary-400">Recipient:</span>
+                              <span className="text-white ml-2 font-mono">
+                                {formatAddress(claim.recipientAddress)}
+                              </span>
+                            </div>
+                            <div>
+                              <span className="text-secondary-400">Claim Txid:</span>
+                              <span className="text-white ml-2 font-mono">
+                                {formatAddress(claim.txid)}
+                              </span>
+                              <button
+                                onClick={() => copyToClipboard(claim.txid, 'Claim transaction ID')}
+                                className="ml-2 p-1 hover:bg-dark-700 rounded transition-colors"
+                                title="Copy claim transaction ID"
+                              >
+                                <Copy className="w-3 h-3 text-secondary-400 hover:text-white" />
+                              </button>
+                            </div>
+                            <div>
+                              <span className="text-secondary-400">Data:</span>
+                              <span className="text-white ml-2 font-mono text-xs">
+                                {claim.data || '0x'}
+                              </span>
+                            </div>
+                            <div>
+                              <span className="text-secondary-400">Match Reason:</span>
+                              <span className="text-white ml-2 text-xs">
+                                {claim.matchReason || 'txid_match'}
+                              </span>
+                            </div>
+                            {isSuspicious && claim.parameterMismatches && (
+                              <div>
+                                <span className="text-secondary-400">Mismatch Reason:</span>
+                                <span className="text-red-400 ml-2 text-xs">
+                                  {(() => {
+                                    const mismatches = [];
+                                    if (!claim.parameterMismatches.amountMatch) {
+                                      // Show specific amount mismatch reason
+                                      const amountReason = claim.parameterMismatches.amountMatchReason;
+                                      if (amountReason === 'format_mismatch_and_different') {
+                                        mismatches.push('Amount (different values)');
+                                      } else if (amountReason === 'same_format_different_value') {
+                                        mismatches.push('Amount (different values)');
+                                      } else if (amountReason === 'format_mismatch_but_equal') {
+                                        mismatches.push('Amount (format mismatch)');
+                                      } else {
+                                        mismatches.push('Amount');
+                                      }
+                                    }
+                                    if (!claim.parameterMismatches.recipientMatch) {
+                                      // Show specific recipient mismatch reason
+                                      const recipientReason = claim.parameterMismatches.recipientMatchReason;
+                                      if (recipientReason === 'mixed_checksum_format') {
+                                        mismatches.push('Recipient (format mismatch)');
+                                      } else if (recipientReason === 'both_non_checksummed') {
+                                        mismatches.push('Recipient (non-checksummed)');
+                                      } else if (recipientReason === 'checksummed_format_mismatch') {
+                                        mismatches.push('Recipient (checksum mismatch)');
+                                      } else if (recipientReason === 'different_addresses') {
+                                        mismatches.push('Recipient (different address)');
+                                      } else {
+                                        mismatches.push('Recipient');
+                                      }
+                                    }
+                                    if (!claim.parameterMismatches.isValidFlow) {
+                                      mismatches.push('Flow');
+                                    }
+                                    return mismatches.length > 0 ? mismatches.join(', ') : 'Unknown';
+                                  })()}
+                                </span>
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                      </div>
                     </div>
-                    
-                    <div>
-                      <span className="text-secondary-400">Sender:</span>
-                      <span className="text-white ml-2 font-mono">
-                        {formatAddress(claim.senderAddress)}
-                      </span>
-                      <button
-                        onClick={() => copyToClipboard(claim.senderAddress, 'Sender address')}
-                        className="ml-2 p-1 hover:bg-dark-700 rounded transition-colors"
-                        title="Copy sender address"
-                      >
-                        <Copy className="w-3 h-3 text-secondary-400 hover:text-white" />
-                      </button>
+                  )}
+
+                  {/* Show single details for pending transfers or suspicious claims */}
+                  {isPending && (
+                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 text-sm mb-3">
+                      <div>
+                        <span className="text-secondary-400">Amount:</span>
+                        <span className="text-white ml-2 font-medium">
+                          {(() => {
+                            const decimals = getTokenDecimals(claim);
+                            const formatted = formatAmount(claim.amount, decimals);
+                            return `${formatted} ${getTransferTokenSymbol(claim)}`;
+                          })()}
+                        </span>
+                      </div>
+                      
+                      {claim.reward && claim.reward !== '0' && claim.reward !== '0x0' && (
+                        <div>
+                          <span className="text-secondary-400">Reward:</span>
+                          <span className="text-white ml-2 font-medium">
+                            {(() => {
+                              const decimals = getTokenDecimals(claim);
+                              const formatted = formatAmount(claim.reward, decimals);
+                              return `${formatted} ${getTransferTokenSymbol(claim)}`;
+                            })()}
+                          </span>
+                        </div>
+                      )}
+                      
+                      <div>
+                        <span className="text-secondary-400">Sender:</span>
+                        <span className="text-white ml-2 font-mono">
+                          {formatAddress(claim.senderAddress)}
+                        </span>
+                        <button
+                          onClick={() => copyToClipboard(claim.senderAddress, 'Sender address')}
+                          className="ml-2 p-1 hover:bg-dark-700 rounded transition-colors"
+                          title="Copy sender address"
+                        >
+                          <Copy className="w-3 h-3 text-secondary-400 hover:text-white" />
+                        </button>
+                      </div>
+                      
+                      <div>
+                        <span className="text-secondary-400">Recipient:</span>
+                        <span className="text-white ml-2 font-mono">
+                          {formatAddress(claim.recipientAddress)}
+                        </span>
+                        <button
+                          onClick={() => copyToClipboard(claim.recipientAddress, 'Recipient address')}
+                          className="ml-2 p-1 hover:bg-dark-700 rounded transition-colors"
+                          title="Copy recipient address"
+                        >
+                          <Copy className="w-3 h-3 text-secondary-400 hover:text-white" />
+                        </button>
+                      </div>
                     </div>
-                    
-                    <div>
-                      <span className="text-secondary-400">Recipient:</span>
-                      <span className="text-white ml-2 font-mono">
-                        {formatAddress(claim.recipientAddress)}
-                      </span>
-                      <button
-                        onClick={() => copyToClipboard(claim.recipientAddress, 'Recipient address')}
-                        className="ml-2 p-1 hover:bg-dark-700 rounded transition-colors"
-                        title="Copy recipient address"
-                      >
-                        <Copy className="w-3 h-3 text-secondary-400 hover:text-white" />
-                      </button>
+                  )}
+
+                  {/* Show mismatch reason for suspicious claims without transfers */}
+                  {isSuspicious && !claim.transfer && (
+                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 text-sm mb-3">
+                      <div>
+                        <span className="text-secondary-400">Amount:</span>
+                        <span className="text-white ml-2 font-medium">
+                          {(() => {
+                            const decimals = getTokenDecimals(claim);
+                            const formatted = formatAmount(claim.amount, decimals);
+                            return `${formatted} ${getTransferTokenSymbol(claim)}`;
+                          })()}
+                        </span>
+                      </div>
+                      
+                      {claim.reward && claim.reward !== '0' && claim.reward !== '0x0' && (
+                        <div>
+                          <span className="text-secondary-400">Reward:</span>
+                          <span className="text-white ml-2 font-medium">
+                            {(() => {
+                              const decimals = getTokenDecimals(claim);
+                              const formatted = formatAmount(claim.reward, decimals);
+                              return `${formatted} ${getTransferTokenSymbol(claim)}`;
+                            })()}
+                          </span>
+                        </div>
+                      )}
+                      
+                      <div>
+                        <span className="text-secondary-400">Sender:</span>
+                        <span className="text-white ml-2 font-mono">
+                          {formatAddress(claim.senderAddress)}
+                        </span>
+                        <button
+                          onClick={() => copyToClipboard(claim.senderAddress, 'Sender address')}
+                          className="ml-2 p-1 hover:bg-dark-700 rounded transition-colors"
+                          title="Copy sender address"
+                        >
+                          <Copy className="w-3 h-3 text-secondary-400 hover:text-white" />
+                        </button>
+                      </div>
+                      
+                      <div>
+                        <span className="text-secondary-400">Recipient:</span>
+                        <span className="text-white ml-2 font-mono">
+                          {formatAddress(claim.recipientAddress)}
+                        </span>
+                        <button
+                          onClick={() => copyToClipboard(claim.recipientAddress, 'Recipient address')}
+                          className="ml-2 p-1 hover:bg-dark-700 rounded transition-colors"
+                          title="Copy recipient address"
+                        >
+                          <Copy className="w-3 h-3 text-secondary-400 hover:text-white" />
+                        </button>
+                      </div>
                     </div>
-                  </div>
+                  )}
+
+                  {/* Show mismatch reason for suspicious claims */}
+                  {isSuspicious && (
+                    <div className="mb-3">
+                      <div className="bg-red-900/20 border border-red-500/50 rounded-lg p-3">
+                        <div className="text-sm">
+                          <span className="text-red-400 font-medium">Suspicious Reason:</span>
+                          <span className="text-red-300 ml-2">
+                            {claim.reason === 'no_matching_transfer' ? 'No matching transfer found' :
+                             claim.reason === 'txid_match_but_parameter_mismatch' ? 'TXID matches but parameters differ' :
+                             claim.reason || 'Unknown suspicious activity'}
+                          </span>
+                        </div>
+                        {claim.parameterMismatches && (
+                          <div className="mt-2 text-xs">
+                            <span className="text-red-400">Parameter Mismatches:</span>
+                            <span className="text-red-300 ml-2">
+                              {(() => {
+                                const mismatches = [];
+                                if (!claim.parameterMismatches.amountMatch) {
+                                  // Show specific amount mismatch reason
+                                  const amountReason = claim.parameterMismatches.amountMatchReason;
+                                  if (amountReason === 'format_mismatch_and_different') {
+                                    mismatches.push('Amount (different values)');
+                                  } else if (amountReason === 'same_format_different_value') {
+                                    mismatches.push('Amount (different values)');
+                                  } else if (amountReason === 'format_mismatch_but_equal') {
+                                    mismatches.push('Amount (format mismatch)');
+                                  } else {
+                                    mismatches.push('Amount');
+                                  }
+                                }
+                                if (!claim.parameterMismatches.recipientMatch) {
+                                  // Show specific recipient mismatch reason
+                                  const recipientReason = claim.parameterMismatches.recipientMatchReason;
+                                  if (recipientReason === 'mixed_checksum_format') {
+                                    mismatches.push('Recipient (format mismatch)');
+                                  } else if (recipientReason === 'both_non_checksummed') {
+                                    mismatches.push('Recipient (non-checksummed)');
+                                  } else if (recipientReason === 'checksummed_format_mismatch') {
+                                    mismatches.push('Recipient (checksum mismatch)');
+                                  } else if (recipientReason === 'different_addresses') {
+                                    mismatches.push('Recipient (different address)');
+                                  } else {
+                                    mismatches.push('Recipient');
+                                  }
+                                }
+                                if (!claim.parameterMismatches.isValidFlow) {
+                                  mismatches.push('Flow');
+                                }
+                                return mismatches.length > 0 ? mismatches.join(', ') : 'None detected';
+                              })()}
+                            </span>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  )}
 
                   {/* Only show claim-specific data for actual claims, not pending transfers */}
                   {!isPending && (
@@ -1314,6 +1675,19 @@ const ClaimList = () => {
                           {getOutcomeText(claim.currentOutcome)}
                         </span>
                       </div>
+                      
+                      {claim.reward && claim.reward !== '0' && claim.reward !== '0x0' && (
+                        <div>
+                          <span className="text-secondary-400">Reward:</span>
+                          <span className="text-white ml-2 font-medium">
+                            {(() => {
+                              const decimals = getTokenDecimals(claim);
+                              const formatted = formatAmount(claim.reward, decimals);
+                              return `${formatted} ${getTransferTokenSymbol(claim)}`;
+                            })()}
+                          </span>
+                        </div>
+                      )}
                       
                       <div>
                         <span className="text-secondary-400">YES Stakes:</span>
@@ -1524,6 +1898,11 @@ const ClaimList = () => {
           setSelectedTransfer(null);
         }}
         selectedTransfer={selectedTransfer}
+        onClaimSubmitted={(claimData) => {
+          console.log('🔍 Claim submitted successfully, refreshing claim list:', claimData);
+          // Refresh the claim list to show the new claim
+          loadClaimsAndTransfers();
+        }}
       />
 
       {/* Withdraw Claim Dialog */}

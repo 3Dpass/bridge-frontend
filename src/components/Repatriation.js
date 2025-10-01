@@ -5,6 +5,15 @@ import { motion } from 'framer-motion';
 import { IMPORT_WRAPPER_ABI } from '../contracts/abi';
 import toast from 'react-hot-toast';
 
+// Safely convert to EIP-55 checksum if it's an EVM address
+const toChecksumAddress = (address) => {
+  try {
+    return ethers.utils.getAddress(address);
+  } catch (e) {
+    return address;
+  }
+};
+
 const Repatriation = ({ 
   bridgeInstance, 
   formData, 
@@ -123,8 +132,10 @@ const Repatriation = ({
       });
 
       const contract = await createImportWrapperContract();
+      const destinationAddressChecksummed = toChecksumAddress(formData.destinationAddress);
       const amountWei = ethers.utils.parseUnits(formData.amount, sourceToken.decimals);
-      const rewardWei = ethers.utils.parseUnits(formData.reward, sourceToken.decimals);
+      const rewardInput = (formData.reward && String(formData.reward).length > 0) ? formData.reward : '0';
+      const rewardWei = ethers.utils.parseUnits(rewardInput, sourceToken.decimals);
       const data = "0x"; // Empty data for repatriation
       
       console.log('💰 Parsed amounts:', {
@@ -141,7 +152,7 @@ const Repatriation = ({
       
       console.log('🔐 Executing repatriation transfer...');
       const repatriationTx = await contract.transferToHomeChain(
-        formData.destinationAddress,
+        destinationAddressChecksummed,
         data,
         amountWei,
         rewardWei,

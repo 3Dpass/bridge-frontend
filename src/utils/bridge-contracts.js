@@ -595,6 +595,125 @@ export const getClaimDetails = async (contract, claimNum, rpcUrl) => {
 };
 
 /**
+ * Get NewClaim events to extract txid information
+ * @param {ethers.Contract} contract - Counterstake contract instance
+ * @param {number} limit - Maximum number of events to fetch (default: 100)
+ * @returns {Promise<Array>} Array of NewClaim events with txid
+ */
+export const getNewClaimEvents = async (contract, limit = 100) => {
+  try {
+    console.log('🔍 getNewClaimEvents: Getting NewClaim events from contract:', contract.address);
+    
+    // Get the last claim number to determine the range
+    const lastClaimNum = await contract.last_claim_num();
+    const startClaim = Math.max(1, lastClaimNum.toNumber() - limit + 1);
+    const endClaim = lastClaimNum.toNumber();
+    
+    console.log('🔍 getNewClaimEvents: Checking NewClaim events from', startClaim, 'to', endClaim);
+    
+    // Get current block number to limit the query range
+    const provider = contract.provider;
+    const currentBlock = await provider.getBlockNumber();
+    
+    // Query events from the last 1000 blocks to avoid timeouts
+    const fromBlock = Math.max(0, currentBlock - 1000);
+    
+    console.log('🔍 getNewClaimEvents: Querying events from block', fromBlock, 'to', currentBlock);
+    
+    try {
+      // Try to get recent NewClaim events with block range limit
+      const allEvents = await contract.queryFilter(
+        contract.filters.NewClaim(),
+        fromBlock,
+        currentBlock
+      );
+      
+      console.log('🔍 getNewClaimEvents: Found', allEvents.length, 'NewClaim events in recent blocks');
+      
+      // If we found events, process and return them
+      if (allEvents.length > 0) {
+        // Sort by claim number and return the most recent ones
+        const sortedEvents = allEvents.sort((a, b) => a.args.claim_num.toNumber() - b.args.claim_num.toNumber());
+        const recentEvents = sortedEvents.slice(-limit);
+        
+        const events = [];
+        for (const event of recentEvents) {
+          const claimNum = event.args.claim_num.toNumber();
+          const eventData = {
+            claim_num: claimNum,
+            author_address: event.args.author_address,
+            sender_address: event.args.sender_address,
+            recipient_address: event.args.recipient_address,
+            txid: event.args.txid,
+            txts: event.args.txts,
+            amount: event.args.amount,
+            reward: event.args.reward,
+            stake: event.args.stake,
+            data: event.args.data,
+            expiry_ts: event.args.expiry_ts,
+            blockNumber: event.blockNumber,
+            transactionHash: event.transactionHash,
+            logIndex: event.logIndex
+          };
+          events.push(eventData);
+          console.log('🔍 getNewClaimEvents: Found NewClaim event for claim', claimNum, 'with txid:', eventData.txid);
+        }
+        
+        console.log('🔍 getNewClaimEvents: Returning', events.length, 'most recent events');
+        return events;
+      }
+      
+    } catch (recentError) {
+      console.log('🔍 getNewClaimEvents: Recent events query failed:', recentError.message);
+    }
+    
+    // Fallback: try to get events for each claim individually
+    console.log('🔍 getNewClaimEvents: Trying fallback method...');
+    
+    const events = [];
+    for (let claimNum = startClaim; claimNum <= endClaim; claimNum++) {
+      try {
+        const filter = contract.filters.NewClaim(claimNum);
+        const claimEvents = await Promise.race([
+          contract.queryFilter(filter),
+          new Promise((_, reject) => setTimeout(() => reject(new Error('Individual query timeout')), 5000))
+        ]);
+        
+        for (const event of claimEvents) {
+          const eventData = {
+            claim_num: claimNum,
+            author_address: event.args.author_address,
+            sender_address: event.args.sender_address,
+            recipient_address: event.args.recipient_address,
+            txid: event.args.txid,
+            txts: event.args.txts,
+            amount: event.args.amount,
+            reward: event.args.reward,
+            stake: event.args.stake,
+            data: event.args.data,
+            expiry_ts: event.args.expiry_ts,
+            blockNumber: event.blockNumber,
+            transactionHash: event.transactionHash,
+            logIndex: event.logIndex
+          };
+          events.push(eventData);
+          console.log('🔍 getNewClaimEvents: Found NewClaim event for claim', claimNum, 'with txid:', eventData.txid);
+        }
+      } catch (individualError) {
+        console.log(`🔍 getNewClaimEvents: Failed to get event for claim ${claimNum}:`, individualError.message);
+        // Continue with next claim
+      }
+    }
+    
+    console.log('🔍 getNewClaimEvents: Total NewClaim events found via fallback:', events.length);
+    return events;
+  } catch (error) {
+    console.error('❌ Error getting NewClaim events:', error);
+    return [];
+  }
+};
+
+/**
  * Get all claims for a contract (up to a limit)
  * @param {ethers.Contract} contract - Counterstake contract instance
  * @param {number} limit - Maximum number of claims to fetch (default: 100)
@@ -613,6 +732,10 @@ export const getAllClaims = async (contract, limit = 100, rpcUrl) => {
     const lastClaimNum = await directContract.last_claim_num();
     console.log('🔍 getAllClaims: last_claim_num result:', lastClaimNum.toString());
     
+    // Get NewClaim events to extract txid information
+    const newClaimEvents = await getNewClaimEvents(contract, limit);
+    console.log('🔍 getAllClaims: Got NewClaim events:', newClaimEvents.length);
+    
     const claims = [];
     
     // Start from the most recent claims and work backwards
@@ -621,26 +744,48 @@ export const getAllClaims = async (contract, limit = 100, rpcUrl) => {
     
     console.log('🔍 getAllClaims: Checking claims from', startClaim, 'to', endClaim);
     
-          for (let claimNum = endClaim; claimNum >= startClaim; claimNum--) {
-        console.log('🔍 getAllClaims: Checking claim number:', claimNum);
-        const claimDetails = await getClaimDetails(contract, claimNum, rpcUrl);
-        if (claimDetails) {
-          console.log('🔍 getAllClaims: Found claim:', claimNum, claimDetails);
-          // Add the claim number to the claim details
-          const claimWithNumber = {
-            ...claimDetails,
-            claim_num: claimNum
-          };
-          console.log('🔍 getAllClaims: Added claim with number:', {
-            claimNum: claimNum,
-            claimWithNumber: claimWithNumber,
-            hasClaimNum: !!claimWithNumber.claim_num
-          });
-          claims.push(claimWithNumber);
+    for (let claimNum = endClaim; claimNum >= startClaim; claimNum--) {
+      console.log('🔍 getAllClaims: Checking claim number:', claimNum);
+      const claimDetails = await getClaimDetails(contract, claimNum, rpcUrl);
+      if (claimDetails) {
+        console.log('🔍 getAllClaims: Found claim:', claimNum, claimDetails);
+        
+        // Find the corresponding NewClaim event to get the txid and reward
+        const newClaimEvent = newClaimEvents.find(event => event.claim_num === claimNum);
+        let txid = newClaimEvent ? newClaimEvent.txid : null;
+        let reward = newClaimEvent ? newClaimEvent.reward : null;
+        
+        // If we couldn't get txid from NewClaim event, try to get it from the claim data itself
+        if (!txid && claimDetails.txid) {
+          txid = claimDetails.txid;
+          console.log('🔍 getAllClaims: Claim', claimNum, 'txid from claim data:', txid);
+        } else if (newClaimEvent) {
+          console.log('🔍 getAllClaims: Claim', claimNum, 'txid from NewClaim event:', txid);
         } else {
-          console.log('🔍 getAllClaims: Claim not found:', claimNum);
+          console.log('🔍 getAllClaims: Claim', claimNum, 'no txid available');
         }
+        
+        // Add the claim number, txid, and reward to the claim details
+        const claimWithNumber = {
+          ...claimDetails,
+          claim_num: claimNum,
+          txid: txid, // Add the txid from the NewClaim event
+          reward: reward // Add the reward from the NewClaim event
+        };
+        console.log('🔍 getAllClaims: Added claim with number, txid, and reward:', {
+          claimNum: claimNum,
+          txid: txid,
+          reward: reward,
+          claimWithNumber: claimWithNumber,
+          hasClaimNum: !!claimWithNumber.claim_num,
+          hasTxid: !!claimWithNumber.txid,
+          hasReward: !!claimWithNumber.reward
+        });
+        claims.push(claimWithNumber);
+      } else {
+        console.log('🔍 getAllClaims: Claim not found:', claimNum);
       }
+    }
     
     console.log('🔍 getAllClaims: Total claims found:', claims.length);
     return claims;

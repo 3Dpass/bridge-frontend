@@ -4,6 +4,15 @@ import { AlertCircle, CheckCircle, ArrowRight, Loader, RefreshCw } from 'lucide-
 import { motion } from 'framer-motion';
 import toast from 'react-hot-toast';
 
+// Safely convert to EIP-55 checksum if it's an EVM address
+const toChecksumAddress = (address) => {
+  try {
+    return ethers.utils.getAddress(address);
+  } catch (e) {
+    return address;
+  }
+};
+
 const Expatriation = ({ 
   bridgeInstance, 
   formData, 
@@ -333,12 +342,14 @@ const Expatriation = ({
       // Use actual decimals instead of configured ones
       const amount = ethers.utils.parseUnits(formData.amount, actualDecimals);
       const rewardInput = (formData.reward && String(formData.reward).length > 0) ? formData.reward : '0';
-      const reward = ethers.utils.parseUnits(rewardInput, actualDecimals);
+      // Reward should be passed as int, not BigNumber for transferToForeignChain
+      const reward = parseInt(ethers.utils.parseUnits(rewardInput, actualDecimals).toString());
       const data = '0x'; // Empty data for ERC20 transfers (matching test script)
       
       console.log('💰 Parsed amounts:', {
         amount: ethers.utils.formatUnits(amount, actualDecimals),
-        reward: ethers.utils.formatUnits(reward, actualDecimals)
+        reward: reward,
+        rewardFormatted: ethers.utils.formatUnits(ethers.BigNumber.from(reward), actualDecimals)
       });
 
       // Validate parameters
@@ -425,8 +436,9 @@ const Expatriation = ({
       } catch (e) {
         console.warn('⚠️ Could not check allowance before transfer:', e);
       }
+      const foreignAddressChecksummed = toChecksumAddress(formData.destinationAddress);
       const transferTx = await exportContract.transferToForeignChain(
-        formData.destinationAddress,
+        foreignAddressChecksummed,
         data,
         amount,
         reward,
