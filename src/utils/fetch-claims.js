@@ -139,10 +139,10 @@ export const fetchClaimsFromAllNetworks = async ({
             // For "My Claims", we need to filter by recipient address
             // Since getClaimsForRecipient gets claims where user is recipient,
             // we'll get all claims and filter by recipient on the frontend
-            bridgeClaims = await getAllClaims(contract, estimatedClaims, rpcUrl);
+            bridgeClaims = await getAllClaims(contract, estimatedClaims, rpcUrl, claimSearchDepth, networkKey);
           } else {
             console.log(`🔍 Fetching all claims from ${networkKey}`);
-            bridgeClaims = await getAllClaims(contract, estimatedClaims, rpcUrl);
+            bridgeClaims = await getAllClaims(contract, estimatedClaims, rpcUrl, claimSearchDepth, networkKey);
           }
           
           console.log(`✅ Fetched ${bridgeClaims.length} claims from bridge: ${bridgeInstance.address} on ${networkKey}`);

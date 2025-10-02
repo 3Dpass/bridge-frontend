@@ -102,7 +102,7 @@ function App() {
                   {
                     step: '1',
                     title: 'Initiate Transfer',
-                    description: 'Select source and destination, offer 2-3% to the bridge nodes.',
+                    description: 'Select source and destination, offer 2-3% fee to the bridge nodes.',
                   },
                   {
                     step: '2',
@@ -116,12 +116,12 @@ function App() {
                         Counterstake consensus
                       </a>
                     ),
-                    description: 'Nodes claim valid transfers and challenge fraudulent ones.',
+                    description: 'Nodes are to claim valid transfers and challenge fraudulent ones.',
                   },
                   {
                     step: '3',
                     title: 'Receive Tokens',
-                    description: 'Receive tokens on destination chain.',
+                    description: 'Receive your tokens on destination chain.',
                   },
                 ].map((item, index) => (
                   <motion.div

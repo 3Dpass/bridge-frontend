@@ -16,13 +16,72 @@ import {
   Download,
   ArrowDown,
   AlertTriangle,
-  Copy
+  Copy,
+  X
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import toast from 'react-hot-toast';
 import NewClaim from './NewClaim';
 import WithdrawClaim from './WithdrawClaim';
 import Challenge from './Challenge';
+
+// Helper functions for match/mismatch indicators
+const getMatchStatus = (claim) => {
+  if (!claim.parameterMismatches) {
+    return { hasMismatches: false, mismatches: [] };
+  }
+  
+  const mismatches = [];
+  if (!claim.parameterMismatches.amountMatch) {
+    const amountReason = claim.parameterMismatches.amountMatchReason;
+    if (amountReason === 'format_mismatch_and_different') {
+      mismatches.push({ field: 'amount', reason: 'different values' });
+    } else if (amountReason === 'same_format_different_value') {
+      mismatches.push({ field: 'amount', reason: 'different values' });
+    } else if (amountReason === 'format_mismatch_but_equal') {
+      mismatches.push({ field: 'amount', reason: 'format mismatch' });
+    } else {
+      mismatches.push({ field: 'amount', reason: 'mismatch' });
+    }
+  }
+  
+  if (!claim.parameterMismatches.recipientMatch) {
+    const recipientReason = claim.parameterMismatches.recipientMatchReason;
+    if (recipientReason === 'mixed_checksum_format') {
+      mismatches.push({ field: 'recipient', reason: 'format mismatch' });
+    } else if (recipientReason === 'both_non_checksummed') {
+      mismatches.push({ field: 'recipient', reason: 'non-checksummed' });
+    } else if (recipientReason === 'checksummed_format_mismatch') {
+      mismatches.push({ field: 'recipient', reason: 'checksum mismatch' });
+    } else if (recipientReason === 'different_addresses') {
+      mismatches.push({ field: 'recipient', reason: 'different address' });
+    } else {
+      mismatches.push({ field: 'recipient', reason: 'mismatch' });
+    }
+  }
+  
+  if (!claim.parameterMismatches.isValidFlow) {
+    mismatches.push({ field: 'flow', reason: 'invalid flow' });
+  }
+  
+  return { hasMismatches: mismatches.length > 0, mismatches };
+};
+
+const getFieldMatchStatus = (claim, field) => {
+  const { mismatches } = getMatchStatus(claim);
+  const fieldMismatch = mismatches.find(m => m.field === field);
+  
+  if (fieldMismatch) {
+    return { isMatch: false, reason: fieldMismatch.reason };
+  }
+  
+  // Check if txid matches (for txid field)
+  if (field === 'txid') {
+    return { isMatch: true, reason: null };
+  }
+  
+  return { isMatch: true, reason: null };
+};
 
 const ClaimList = () => {
   const { account, network, getNetworkWithSettings } = useWeb3();
@@ -999,7 +1058,7 @@ const ClaimList = () => {
               }`}
             >
               <Users className="w-4 h-4" />
-              All {getHistorySearchDepth()}h
+              All
             </button>
             <button
               onClick={() => setFilter('my')}
@@ -1062,7 +1121,7 @@ const ClaimList = () => {
       {loading && (
         <div className="text-center py-12">
           <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary-500 mx-auto mb-4"></div>
-          <p className="text-secondary-400">Discovering transfers...</p>
+          <p className="text-secondary-400">Discovering transfers for the last {getHistorySearchDepth()} hours...</p>
         </div>
       )}
 
@@ -1350,12 +1409,26 @@ const ClaimList = () => {
                               <span className="text-white ml-2 font-mono">
                                 {formatAddress(claim.transfer.senderAddress)}
                               </span>
+                              <button
+                                onClick={() => copyToClipboard(claim.transfer.senderAddress, 'Transfer sender address')}
+                                className="ml-2 p-1 hover:bg-dark-700 rounded transition-colors"
+                                title="Copy transfer sender address"
+                              >
+                                <Copy className="w-3 h-3 text-secondary-400 hover:text-white" />
+                              </button>
                             </div>
                             <div>
                               <span className="text-secondary-400">Recipient:</span>
                               <span className="text-white ml-2 font-mono">
                                 {formatAddress(claim.transfer.recipientAddress)}
                               </span>
+                              <button
+                                onClick={() => copyToClipboard(claim.transfer.recipientAddress, 'Transfer recipient address')}
+                                className="ml-2 p-1 hover:bg-dark-700 rounded transition-colors"
+                                title="Copy transfer recipient address"
+                              >
+                                <Copy className="w-3 h-3 text-secondary-400 hover:text-white" />
+                              </button>
                             </div>
                             <div>
                               <span className="text-secondary-400">Tx Hash:</span>
@@ -1396,6 +1469,19 @@ const ClaimList = () => {
                                   return `${formatted} ${getTransferTokenSymbol(claim)}`;
                                 })()}
                               </span>
+                              {(() => {
+                                const matchStatus = getFieldMatchStatus(claim, 'amount');
+                                if (matchStatus.isMatch) {
+                                  return <CheckCircle className="w-4 h-4 text-green-500 ml-2 inline" />;
+                                } else {
+                                  return (
+                                    <span className="ml-2 inline-flex items-center">
+                                      <X className="w-4 h-4 text-red-500 mr-1" />
+                                      <span className="text-red-400 text-xs">{matchStatus.reason}</span>
+                                    </span>
+                                  );
+                                }
+                              })()}
                             </div>
                             {claim.reward && claim.reward !== '0' && claim.reward !== '0x0' && (
                               <div>
@@ -1414,12 +1500,39 @@ const ClaimList = () => {
                               <span className="text-white ml-2 font-mono">
                                 {formatAddress(claim.senderAddress)}
                               </span>
+                              <button
+                                onClick={() => copyToClipboard(claim.senderAddress, 'Claim sender address')}
+                                className="ml-2 p-1 hover:bg-dark-700 rounded transition-colors"
+                                title="Copy claim sender address"
+                              >
+                                <Copy className="w-3 h-3 text-secondary-400 hover:text-white" />
+                              </button>
                             </div>
                             <div>
                               <span className="text-secondary-400">Recipient:</span>
                               <span className="text-white ml-2 font-mono">
                                 {formatAddress(claim.recipientAddress)}
                               </span>
+                              <button
+                                onClick={() => copyToClipboard(claim.recipientAddress, 'Claim recipient address')}
+                                className="ml-2 p-1 hover:bg-dark-700 rounded transition-colors"
+                                title="Copy claim recipient address"
+                              >
+                                <Copy className="w-3 h-3 text-secondary-400 hover:text-white" />
+                              </button>
+                              {(() => {
+                                const matchStatus = getFieldMatchStatus(claim, 'recipient');
+                                if (matchStatus.isMatch) {
+                                  return <CheckCircle className="w-4 h-4 text-green-500 ml-2 inline" />;
+                                } else {
+                                  return (
+                                    <span className="ml-2 inline-flex items-center">
+                                      <X className="w-4 h-4 text-red-500 mr-1" />
+                                      <span className="text-red-400 text-xs">{matchStatus.reason}</span>
+                                    </span>
+                                  );
+                                }
+                              })()}
                             </div>
                             <div>
                               <span className="text-secondary-400">Claim Txid:</span>
@@ -1433,6 +1546,23 @@ const ClaimList = () => {
                               >
                                 <Copy className="w-3 h-3 text-secondary-400 hover:text-white" />
                               </button>
+                              {(() => {
+                                const matchStatus = getFieldMatchStatus(claim, 'txid');
+                                if (matchStatus.isMatch) {
+                                  return <CheckCircle className="w-4 h-4 text-green-500 ml-2 inline" />;
+                                } else {
+                                  return (
+                                    <span className="ml-2 inline-flex items-center">
+                                      <X className="w-4 h-4 text-red-500 mr-1" />
+                                      <span className="text-red-400 text-xs">{matchStatus.reason}</span>
+                                    </span>
+                                  );
+                                }
+                              })()}
+                            </div>
+                            <div>
+                              <span className="text-secondary-400">Claim Block:</span>
+                              <span className="text-white ml-2">{claim.blockNumber || 'N/A'}</span>
                             </div>
                             <div>
                               <span className="text-secondary-400">Data:</span>
@@ -1440,54 +1570,6 @@ const ClaimList = () => {
                                 {claim.data || '0x'}
                               </span>
                             </div>
-                            <div>
-                              <span className="text-secondary-400">Match Reason:</span>
-                              <span className="text-white ml-2 text-xs">
-                                {claim.matchReason || 'txid_match'}
-                              </span>
-                            </div>
-                            {isSuspicious && claim.parameterMismatches && (
-                              <div>
-                                <span className="text-secondary-400">Mismatch Reason:</span>
-                                <span className="text-red-400 ml-2 text-xs">
-                                  {(() => {
-                                    const mismatches = [];
-                                    if (!claim.parameterMismatches.amountMatch) {
-                                      // Show specific amount mismatch reason
-                                      const amountReason = claim.parameterMismatches.amountMatchReason;
-                                      if (amountReason === 'format_mismatch_and_different') {
-                                        mismatches.push('Amount (different values)');
-                                      } else if (amountReason === 'same_format_different_value') {
-                                        mismatches.push('Amount (different values)');
-                                      } else if (amountReason === 'format_mismatch_but_equal') {
-                                        mismatches.push('Amount (format mismatch)');
-                                      } else {
-                                        mismatches.push('Amount');
-                                      }
-                                    }
-                                    if (!claim.parameterMismatches.recipientMatch) {
-                                      // Show specific recipient mismatch reason
-                                      const recipientReason = claim.parameterMismatches.recipientMatchReason;
-                                      if (recipientReason === 'mixed_checksum_format') {
-                                        mismatches.push('Recipient (format mismatch)');
-                                      } else if (recipientReason === 'both_non_checksummed') {
-                                        mismatches.push('Recipient (non-checksummed)');
-                                      } else if (recipientReason === 'checksummed_format_mismatch') {
-                                        mismatches.push('Recipient (checksum mismatch)');
-                                      } else if (recipientReason === 'different_addresses') {
-                                        mismatches.push('Recipient (different address)');
-                                      } else {
-                                        mismatches.push('Recipient');
-                                      }
-                                    }
-                                    if (!claim.parameterMismatches.isValidFlow) {
-                                      mismatches.push('Flow');
-                                    }
-                                    return mismatches.length > 0 ? mismatches.join(', ') : 'Unknown';
-                                  })()}
-                                </span>
-                              </div>
-                            )}
                           </div>
                         </div>
                       </div>
@@ -1830,13 +1912,6 @@ const ClaimList = () => {
                         <AlertTriangle className="w-4 h-4" />
                         Challenge
                       </button>
-                    )}
-                    
-                    {/* Show connection prompt for actions that require wallet */}
-                    {!account && (isPending || (!isTransfer && (canWithdrawClaim(claim) || canChallengeClaim(claim)))) && (
-                      <div className="text-xs text-secondary-400 bg-dark-800 px-3 py-2 rounded">
-                        Connect wallet to interact with this {isPending ? 'transfer' : 'claim'}
-                      </div>
                     )}
                   </div>
                   

@@ -1,4 +1,4 @@
-import React, { useState, useCallback, useEffect } from 'react';
+import React, { useState, useCallback, useEffect, useRef } from 'react';
 import { useWeb3 } from '../contexts/Web3Context';
 import { useSettings } from '../contexts/SettingsContext';
 import { ethers } from 'ethers';
@@ -24,6 +24,9 @@ const Withdraw = ({ assistant, onClose, onSuccess }) => {
   });
   const [amount, setAmount] = useState('');
   const [loading, setLoading] = useState(false);
+  const [isProcessing, setIsProcessing] = useState(false);
+  const [lastClickTime, setLastClickTime] = useState(0);
+  const isExecutingRef = useRef(false);
   const [userShareBalance, setUserShareBalance] = useState('0');
   const [step, setStep] = useState('connect'); // 'connect', 'network', 'withdraw', 'success'
 
@@ -484,70 +487,121 @@ const Withdraw = ({ assistant, onClose, onSuccess }) => {
     }
   };
 
-  const handleWithdraw = async () => {
+  const handleWithdraw = useCallback(async () => {
     console.log('🚀 handleWithdraw called!');
     
-    if (!account || !signer) {
-      console.log('❌ No account or signer');
-      toast.error('Please connect your wallet');
+    // Use ref to prevent execution - this is the most reliable way
+    if (isExecutingRef.current) {
+      console.log('❌ Function already executing, ignoring duplicate call');
       return;
     }
-
-    if (!amount || parseFloat(amount) <= 0) {
-      console.log('❌ No amount entered');
-      toast.error('Please enter a valid amount');
-      return;
-    }
-
-    // Check if we need to switch networks FIRST, before any balance checks
-    console.log('🔍 Checking network before withdraw...');
-    console.log('🔍 Assistant info:', {
-      address: assistant.address,
-      type: assistant.type,
-      bridgeAddress: assistant.bridgeAddress
-    });
-    const requiredNetwork = getRequiredNetwork();
-    const isCorrectNetwork = await checkNetwork();
-    console.log('🔍 Network check result:', isCorrectNetwork);
     
-    if (!isCorrectNetwork) {
-      console.log('🚨 NETWORK SWITCHING WILL BE TRIGGERED NOW!');
-      console.log('🔄 Wrong network detected, switching automatically...');
-      toast(`Switching to ${requiredNetwork.name} network...`);
-      const switchSuccess = await switchToRequiredNetwork();
-      console.log('🔍 Network switch result:', switchSuccess);
-      if (!switchSuccess) {
-        toast.error('Failed to switch to the required network');
-        return;
-      }
-      // Wait a moment for the network to settle
-      await new Promise(resolve => setTimeout(resolve, 1000));
-    }
-
-    // Now check balances after ensuring we're on the correct network
-    const amountWei = ethers.utils.parseUnits(amount, 18);
-    if (amountWei.gt(userShareBalance)) {
-      toast.error('Insufficient share token balance');
+    // Debounce rapid clicks (prevent clicks within 1 second)
+    const now = Date.now();
+    if (now - lastClickTime < 1000) {
+      console.log('❌ Click too soon after last click, ignoring');
       return;
     }
-
+    setLastClickTime(now);
+    
+    // Prevent double execution with multiple guards
+    if (loading || isProcessing) {
+      console.log('❌ Withdraw already in progress, ignoring duplicate call');
+      return;
+    }
+    
+    // Set all flags immediately to prevent any other calls
+    isExecutingRef.current = true;
+    setIsProcessing(true);
     setLoading(true);
+    
+    let shouldProceed = true;
+    
     try {
+      // Validation checks - if any fail, set shouldProceed to false
+      if (!account || !signer) {
+        console.log('❌ No account or signer');
+        toast.error('Please connect your wallet');
+        shouldProceed = false;
+      } else if (!amount || parseFloat(amount) <= 0) {
+        console.log('❌ No amount entered');
+        toast.error('Please enter a valid amount');
+        shouldProceed = false;
+      }
 
-      const assistantContract = new ethers.Contract(
-        assistant.address,
-        getAssistantABI(),
-        signer
-      );
+      if (shouldProceed) {
+        // Check if we need to switch networks FIRST, before any balance checks
+        console.log('🔍 Checking network before withdraw...');
+        const requiredNetwork = getRequiredNetwork();
+        const isCorrectNetwork = await checkNetwork();
+        console.log('🔍 Network check result:', isCorrectNetwork);
+        
+        if (!isCorrectNetwork) {
+          console.log('🚨 NETWORK SWITCHING WILL BE TRIGGERED NOW!');
+          console.log('🔄 Wrong network detected, switching automatically...');
+          toast(`Switching to ${requiredNetwork.name} network...`);
+          
+          try {
+            const switchSuccess = await switchToRequiredNetwork();
+            console.log('🔍 Network switch result:', switchSuccess);
+            if (!switchSuccess) {
+              toast.error('Failed to switch to the required network');
+              shouldProceed = false;
+            } else {
+              // Wait for network to settle
+              await new Promise(resolve => setTimeout(resolve, 3000));
+              
+              // Re-verify we have a valid signer after network switch
+              if (!signer) {
+                console.log('❌ No signer available after network switch');
+                toast.error('Please reconnect your wallet after network switch');
+                shouldProceed = false;
+              } else {
+                console.log('🔍 Signer verified after network switch:', await signer.getAddress());
+              }
+            }
+          } catch (switchError) {
+            console.error('Network switch error:', switchError);
+            toast.error('Network switch failed. Please try again.');
+            shouldProceed = false;
+          }
+        }
+      }
 
-      const amountWei = ethers.utils.parseUnits(amount, 18);
-      const tx = await assistantContract.redeemShares(amountWei);
+      if (shouldProceed) {
+        // Now check balances after ensuring we're on the correct network
+        const amountWei = ethers.utils.parseUnits(amount, 18);
+        if (amountWei.gt(userShareBalance)) {
+          toast.error('Insufficient share token balance');
+          shouldProceed = false;
+        }
+      }
 
-      toast.success('Transaction submitted! Waiting for confirmation...');
-      await tx.wait();
-      toast.success('Withdraw successful!');
-      setStep('success');
-      onSuccess();
+      if (shouldProceed) {
+        console.log('🔍 Creating contract instance with:', {
+          assistantAddress: assistant.address,
+          signerAddress: await signer.getAddress(),
+          amountWei: ethers.utils.parseUnits(amount, 18).toString(),
+          network: (await signer.provider.getNetwork()).name
+        });
+        
+        const assistantContract = new ethers.Contract(
+          assistant.address,
+          getAssistantABI(),
+          signer
+        );
+
+        const amountWei = ethers.utils.parseUnits(amount, 18);
+        console.log('🔍 Calling redeemShares with amount:', amountWei.toString());
+        const tx = await assistantContract.redeemShares(amountWei);
+        console.log('🔍 Transaction sent:', tx.hash);
+
+        toast.success('Transaction submitted! Waiting for confirmation...');
+        await tx.wait();
+        toast.success('Withdraw successful!');
+        setStep('success');
+        onSuccess();
+      }
     } catch (error) {
       console.error('Withdraw error:', error);
       
@@ -575,8 +629,10 @@ const Withdraw = ({ assistant, onClose, onSuccess }) => {
       }
     } finally {
       setLoading(false);
+      setIsProcessing(false);
+      isExecutingRef.current = false;
     }
-  };
+  }, [account, signer, amount, userShareBalance, assistant, getRequiredNetwork, checkNetwork, switchToRequiredNetwork, getAssistantABI, onSuccess, lastClickTime, loading, isProcessing]);
 
 
   const handleMaxAmount = () => {
@@ -652,10 +708,10 @@ const Withdraw = ({ assistant, onClose, onSuccess }) => {
               </button>
               <button
                 onClick={handleWithdraw}
-                disabled={loading || !amount}
+                disabled={loading || isProcessing || !amount || isExecutingRef.current}
                 className="flex-1 bg-secondary-600 hover:bg-secondary-700 disabled:bg-dark-600 disabled:cursor-not-allowed text-white py-2 px-4 rounded-md text-sm font-medium transition-colors"
               >
-                {loading ? 'Processing...' : 'Withdraw'}
+                {loading || isProcessing ? 'Processing...' : 'Withdraw'}
               </button>
             </div>
           </div>

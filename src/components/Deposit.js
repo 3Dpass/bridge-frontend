@@ -3,7 +3,6 @@ import { useWeb3 } from '../contexts/Web3Context';
 import { useSettings } from '../contexts/SettingsContext';
 import { ethers } from 'ethers';
 import toast from 'react-hot-toast';
-import { NETWORKS } from '../config/networks';
 import { 
   EXPORT_ASSISTANT_ABI, 
   EXPORT_WRAPPER_ASSISTANT_ABI, 
@@ -16,12 +15,13 @@ import {
 const Deposit = ({ assistant, onClose, onSuccess }) => {
   console.log('🎯 Deposit component rendered for assistant:', assistant.address);
   const { account, provider, signer, network } = useWeb3();
-  const { getAllNetworksWithSettings } = useSettings();
+  const { getAllNetworksWithSettings, get3DPassTokenDecimals } = useSettings();
   const [amount, setAmount] = useState('');
   const [imageAmount, setImageAmount] = useState(''); // For ImportWrapper assistants
   const [loading, setLoading] = useState(false);
   const [userBalance, setUserBalance] = useState('0');
   const [userImageBalance, setUserImageBalance] = useState('0'); // For ImportWrapper assistants
+  const [imageTokenDecimals, setImageTokenDecimals] = useState(18); // For ImportWrapper assistants
   const [step, setStep] = useState('approve'); // 'approve', 'approved', 'deposit', 'success'
   const [currentAllowance, setCurrentAllowance] = useState('0');
   const [requiredAmount, setRequiredAmount] = useState('0');
@@ -59,15 +59,26 @@ const Deposit = ({ assistant, onClose, onSuccess }) => {
     return null;
   }, [getAllNetworksWithSettings]);
 
+  // Check if a token address represents a native token (ETH)
+  const isNativeToken = useCallback((tokenAddress) => {
+    if (!tokenAddress) return false;
+    // Native tokens are typically represented as zero address or null
+    return tokenAddress === '0x0000000000000000000000000000000000000000' || 
+           tokenAddress === null || 
+           tokenAddress === undefined;
+  }, []);
+
   // Get image token address (for Import Wrapper assistants)
   const getImageTokenAddress = useCallback((assistant) => {
     if (assistant.type !== 'import_wrapper') {
+      console.log('🔍 Not an Import Wrapper assistant, returning null for image token address');
       return null;
     }
     
     const networks = getAllNetworksWithSettings();
     console.log('🔍 Searching for image token address in networks:', {
       assistantBridgeAddress: assistant.bridgeAddress,
+      assistantType: assistant.type,
       networksCount: Object.keys(networks).length,
       networkNames: Object.keys(networks)
     });
@@ -88,11 +99,14 @@ const Deposit = ({ assistant, onClose, onSuccess }) => {
               assistantBridgeAddress: assistant.bridgeAddress
             });
             // For Import Wrapper assistants, the image token is the foreign token address
-            return bridge.foreignTokenAddress;
+            const imageTokenAddress = bridge.foreignTokenAddress;
+            console.log('✅ Returning image token address:', imageTokenAddress);
+            return imageTokenAddress;
           }
         }
       }
     }
+    console.log('❌ No matching bridge found for assistant bridge address:', assistant.bridgeAddress);
     return null;
   }, [getAllNetworksWithSettings]);
 
@@ -159,22 +173,24 @@ const Deposit = ({ assistant, onClose, onSuccess }) => {
     });
   }, [assistant.key, assistant.type, assistant.bridgeAddress, stakeTokenAddress, stakeTokenSymbol]);
 
-  // Get foreign token address for ImportWrapper assistants
-  const getForeignTokenAddress = useCallback(() => {
-    const networks = getAllNetworksWithSettings();
-    for (const network of Object.values(networks)) {
-      if (network.bridges) {
-        for (const bridge of Object.values(network.bridges)) {
-          if (bridge.address === assistant.bridgeAddress) {
-            return bridge.foreignTokenAddress;
-          }
-        }
-      }
+  // Use getImageTokenAddress consistently for ImportWrapper assistants
+  const imageTokenAddress = getImageTokenAddress(assistant);
+  
+  // Debug logging for image token address
+  React.useEffect(() => {
+    if (assistant.type === 'import_wrapper') {
+      console.log('🔍 Image token address resolved:', {
+        assistantKey: assistant.key,
+        assistantType: assistant.type,
+        bridgeAddress: assistant.bridgeAddress,
+        imageTokenAddress,
+        hasImageTokenAddress: !!imageTokenAddress,
+        imageTokenSymbol,
+        userImageBalance,
+        formattedImageBalance: formatBalance(userImageBalance)
+      });
     }
-    return null;
-  }, [assistant.bridgeAddress, getAllNetworksWithSettings]);
-
-  const foreignTokenAddress = getForeignTokenAddress();
+  }, [assistant.key, assistant.type, assistant.bridgeAddress, imageTokenAddress, imageTokenSymbol, userImageBalance]);
 
   // Get the required network for this assistant
   const getRequiredNetwork = useCallback(() => {
@@ -227,12 +243,12 @@ const Deposit = ({ assistant, onClose, onSuccess }) => {
 
   // Check current network and detect if switching is needed
   const checkNetwork = useCallback(async () => {
-    if (!window.ethereum) return false;
+    if (!provider) return false;
     
     try {
-      // Use window.ethereum directly for more reliable network checking
-      const currentChainId = await window.ethereum.request({ method: 'eth_chainId' });
-      const currentChainIdNumber = parseInt(currentChainId, 16);
+      // Use ethers provider for network checking
+      const currentNetwork = await provider.getNetwork();
+      const currentChainId = currentNetwork.chainId;
       
       const requiredNetwork = getRequiredNetwork();
       
@@ -241,11 +257,11 @@ const Deposit = ({ assistant, onClose, onSuccess }) => {
         return false;
       }
       
-      const isCorrectNetwork = currentChainIdNumber === requiredNetwork.chainId;
+      const isCorrectNetwork = currentChainId === requiredNetwork.chainId;
       
       console.log('🔍 Network check:', {
-        currentChainId: currentChainIdNumber,
-        currentChainIdHex: currentChainId,
+        currentChainId: currentChainId,
+        currentNetworkName: currentNetwork.name,
         requiredNetwork: requiredNetwork,
         isCorrectNetwork
       });
@@ -255,161 +271,96 @@ const Deposit = ({ assistant, onClose, onSuccess }) => {
       console.error('Error checking network:', error);
       return false;
     }
-  }, [getRequiredNetwork, assistant.bridgeAddress]);
+  }, [provider, getRequiredNetwork, assistant.bridgeAddress]);
 
-  // Switch to the required network
+  // Switch to the required network using ethers
   const switchToRequiredNetwork = useCallback(async () => {
-    if (!requiredNetwork || !window.ethereum) {
+    const currentRequiredNetwork = getRequiredNetwork();
+    if (!currentRequiredNetwork || !provider) {
       toast.error('Cannot switch network. Please switch manually in your wallet.');
       return false;
     }
     
     // Check if chainId exists
-    if (!requiredNetwork.chainId) {
-      console.error('❌ requiredNetwork.chainId is undefined:', requiredNetwork);
+    if (!currentRequiredNetwork.chainId) {
+      console.error('❌ currentRequiredNetwork.chainId is undefined:', currentRequiredNetwork);
       toast.error('Network configuration is missing chain ID. Please check your settings.');
       return false;
     }
     
-    // Format chain ID properly
-    const chainIdHex = `0x${requiredNetwork.chainId.toString(16)}`;
-    
     console.log('🔍 Attempting network switch:', {
-      requiredNetwork,
-      chainId: requiredNetwork.chainId,
-      chainIdHex,
-      rpcUrl: requiredNetwork.rpcUrl,
-      blockExplorerUrl: requiredNetwork.blockExplorerUrl
+      requiredNetwork: currentRequiredNetwork,
+      chainId: currentRequiredNetwork.chainId,
+      rpcUrl: currentRequiredNetwork.rpcUrl,
+      blockExplorerUrl: currentRequiredNetwork.blockExplorerUrl
     });
     
     try {
       setLoading(true);
       
-      // First try to switch to existing network
-      await window.ethereum.request({
-        method: 'wallet_switchEthereumChain',
-        params: [{ chainId: chainIdHex }],
-      });
+      // Use ethers to switch network
+      const network = await provider.getNetwork();
+      const currentChainId = network.chainId;
       
-      console.log('✅ Network switch request sent');
+      if (currentChainId === currentRequiredNetwork.chainId) {
+        console.log('✅ Already on correct network');
+        toast.success(`Already on ${currentRequiredNetwork.name}`);
+        return true;
+      }
       
-      // Wait for network change event instead of fixed timeout
-      console.log('⏳ Waiting for network change event...');
+      // For network switching, we still need to use window.ethereum as ethers doesn't provide this functionality
+      // But we'll use ethers for verification
+      if (!window.ethereum) {
+        toast.error('MetaMask not available for network switching');
+        return false;
+      }
       
-      // Set up a promise that resolves when network changes
-      const networkChangePromise = new Promise((resolve, reject) => {
-        const timeout = setTimeout(() => {
-          reject(new Error('Network switch timeout'));
-        }, 10000); // 10 second timeout
-        
-        const handleChange = (chainId) => {
-          clearTimeout(timeout);
-          window.ethereum.removeListener('chainChanged', handleChange);
-          console.log('✅ Network change event received:', chainId);
-          resolve(chainId);
-        };
-        
-        window.ethereum.on('chainChanged', handleChange);
-      });
+      const chainIdHex = `0x${currentRequiredNetwork.chainId.toString(16)}`;
       
       try {
-        await networkChangePromise;
-        
-        // Wait a moment for the network to settle and Web3Context to update
-        await new Promise(resolve => setTimeout(resolve, 1500));
-        
-        // Recheck the network using the updated provider from context
-        console.log('🔍 Verifying network switch...');
-        
-        // Get the most current network directly from window.ethereum to avoid stale provider
-        let currentNetworkFromEthereum;
-        try {
-          const chainId = await window.ethereum.request({ method: 'eth_chainId' });
-          const chainIdNumber = parseInt(chainId, 16);
-          
-          // Get network name from our config
-          const networkKey = Object.keys(NETWORKS).find(key => NETWORKS[key].id === chainIdNumber);
-          const networkName = networkKey ? NETWORKS[networkKey].name : 'Unknown';
-          
-          currentNetworkFromEthereum = {
-            chainId: chainIdNumber,
-            name: networkName
-          };
-          console.log('🔍 Network from window.ethereum at verification time:', currentNetworkFromEthereum);
-        } catch (error) {
-          console.log('🔍 Error getting network from window.ethereum:', error);
-          // If window.ethereum fails, fall back to context
-          const currentNetworkFromContext = network;
-          currentNetworkFromEthereum = {
-            chainId: currentNetworkFromContext?.chainId || currentNetworkFromContext?.id,
-            name: currentNetworkFromContext?.name || 'Unknown'
-          };
-          console.log('🔍 Using fallback network from context:', currentNetworkFromEthereum);
-        }
-        
-        const requiredNetworkForVerification = getRequiredNetwork();
-        
-        console.log('🔍 Verification details:', {
-          currentNetworkFromEthereum,
-          requiredNetworkForVerification,
-          currentChainId: currentNetworkFromEthereum?.chainId,
-          requiredChainId: requiredNetworkForVerification?.chainId
+        // Try to switch to existing network
+        await window.ethereum.request({
+          method: 'wallet_switchEthereumChain',
+          params: [{ chainId: chainIdHex }],
         });
         
-        if (currentNetworkFromEthereum && requiredNetworkForVerification) {
-          const currentChainId = currentNetworkFromEthereum.chainId;
-          const isCorrectNetwork = currentChainId === requiredNetworkForVerification.chainId;
-          
-          console.log('🔍 Network verification result:', isCorrectNetwork);
-          console.log('🔍 Current network from window.ethereum:', currentNetworkFromEthereum);
-          console.log('🔍 Required network:', requiredNetworkForVerification);
+        console.log('✅ Network switch request sent');
+        
+        // Wait for network change and verify with ethers
+        await new Promise(resolve => setTimeout(resolve, 2000));
+        
+        // Verify the switch using ethers
+        const newNetwork = await provider.getNetwork();
+        const isCorrectNetwork = newNetwork.chainId === currentRequiredNetwork.chainId;
           
           if (isCorrectNetwork) {
-            toast.success(`Switched to ${requiredNetworkForVerification.name}`);
+          toast.success(`Switched to ${currentRequiredNetwork.name}`);
             return true;
           } else {
-            console.log('❌ Network switch verification failed - chain IDs do not match');
-            console.log('❌ Current chain ID:', currentChainId, 'Required chain ID:', requiredNetworkForVerification.chainId);
+          console.log('❌ Network switch verification failed');
             toast.error('Network switch failed. Please try again.');
             return false;
           }
-        } else {
-          console.log('❌ Network verification failed - missing network data');
-          console.log('❌ Current network:', currentNetworkFromEthereum);
-          console.log('❌ Required network:', requiredNetworkForVerification);
-          toast.error('Network switch verification failed. Please try again.');
-          return false;
-        }
-      } catch (error) {
-        console.log('❌ Network switch timeout or error:', error);
-        toast.error('Network switch timeout. Please check your wallet.');
-        return false;
-      }
-    } catch (error) {
-      console.error('Network switch error:', error);
-      
-      if (error.code === 4902) {
-        // Chain not added to wallet, try to add it
+        
+      } catch (switchError) {
+        if (switchError.code === 4902) {
+          // Chain not added, try to add it
         console.log('🔍 Chain not added, attempting to add it');
         
-        try {
           const addChainParams = {
             chainId: chainIdHex,
-            chainName: requiredNetwork.name,
-            rpcUrls: [requiredNetwork.rpcUrl],
+            chainName: currentRequiredNetwork.name,
+            rpcUrls: [currentRequiredNetwork.rpcUrl],
             nativeCurrency: {
-              name: requiredNetwork.nativeCurrency?.name || 'ETH',
-              symbol: requiredNetwork.nativeCurrency?.symbol || 'ETH',
-              decimals: requiredNetwork.nativeCurrency?.decimals || 18,
+              name: currentRequiredNetwork.nativeCurrency?.name || 'ETH',
+              symbol: currentRequiredNetwork.nativeCurrency?.symbol || 'ETH',
+              decimals: currentRequiredNetwork.nativeCurrency?.decimals || 18,
             },
           };
           
-          // Only add blockExplorerUrls if it exists
-          if (requiredNetwork.blockExplorerUrl) {
-            addChainParams.blockExplorerUrls = [requiredNetwork.blockExplorerUrl];
+          if (currentRequiredNetwork.blockExplorerUrl) {
+            addChainParams.blockExplorerUrls = [currentRequiredNetwork.blockExplorerUrl];
           }
-          
-          console.log('🔍 Adding chain with params:', addChainParams);
           
           await window.ethereum.request({
             method: 'wallet_addEthereumChain',
@@ -418,119 +369,35 @@ const Deposit = ({ assistant, onClose, onSuccess }) => {
           
           console.log('✅ Chain added successfully');
           
-          // Wait for network change event
-          console.log('⏳ Waiting for network change event after chain addition...');
+          // Wait and verify with ethers
+          await new Promise(resolve => setTimeout(resolve, 2000));
           
-          const networkChangePromise = new Promise((resolve, reject) => {
-            const timeout = setTimeout(() => {
-              reject(new Error('Network switch timeout after chain addition'));
-            }, 10000);
-            
-            const handleChange = (chainId) => {
-              clearTimeout(timeout);
-              window.ethereum.removeListener('chainChanged', handleChange);
-              console.log('✅ Network change event received after chain addition:', chainId);
-              resolve(chainId);
-            };
-            
-            window.ethereum.on('chainChanged', handleChange);
-          });
-          
-          try {
-            await networkChangePromise;
-            
-            // Wait a moment for the network to settle and Web3Context to update
-            await new Promise(resolve => setTimeout(resolve, 1500));
-            
-            // Recheck the network using the updated provider from context
-            console.log('🔍 Verifying network switch after chain addition...');
-            
-            // Get the most current network directly from window.ethereum to avoid stale provider
-            let currentNetworkFromEthereum;
-            try {
-              const chainId = await window.ethereum.request({ method: 'eth_chainId' });
-              const chainIdNumber = parseInt(chainId, 16);
-              
-              // Get network name from our config
-              const networkKey = Object.keys(NETWORKS).find(key => NETWORKS[key].id === chainIdNumber);
-              const networkName = networkKey ? NETWORKS[networkKey].name : 'Unknown';
-              
-              currentNetworkFromEthereum = {
-                chainId: chainIdNumber,
-                name: networkName
-              };
-              console.log('🔍 Network from window.ethereum at chain addition verification time:', currentNetworkFromEthereum);
-            } catch (error) {
-              console.log('🔍 Error getting network from window.ethereum:', error);
-              // If window.ethereum fails, fall back to context
-              const currentNetworkFromContext = network;
-              currentNetworkFromEthereum = {
-                chainId: currentNetworkFromContext?.chainId || currentNetworkFromContext?.id,
-                name: currentNetworkFromContext?.name || 'Unknown'
-              };
-              console.log('🔍 Using fallback network from context:', currentNetworkFromEthereum);
-            }
-            
-            const requiredNetworkForVerification = getRequiredNetwork();
-            
-            console.log('🔍 Chain addition verification details:', {
-              currentNetworkFromEthereum,
-              requiredNetworkForVerification,
-              currentChainId: currentNetworkFromEthereum?.chainId,
-              requiredChainId: requiredNetworkForVerification?.chainId
-            });
-            
-            if (currentNetworkFromEthereum && requiredNetworkForVerification) {
-              const currentChainId = currentNetworkFromEthereum.chainId;
-              const isCorrectNetwork = currentChainId === requiredNetworkForVerification.chainId;
-              
-              console.log('🔍 Network verification result after addition:', isCorrectNetwork);
-              console.log('🔍 Current network after addition:', currentNetworkFromEthereum);
-              console.log('🔍 Required network after addition:', requiredNetworkForVerification);
+          const newNetwork = await provider.getNetwork();
+          const isCorrectNetwork = newNetwork.chainId === currentRequiredNetwork.chainId;
               
               if (isCorrectNetwork) {
-                toast.success(`Added and switched to ${requiredNetworkForVerification.name}`);
+            toast.success(`Added and switched to ${currentRequiredNetwork.name}`);
                 return true;
               } else {
-                console.log('❌ Chain add verification failed - chain IDs do not match');
-                console.log('❌ Current chain ID:', currentChainId, 'Required chain ID:', requiredNetworkForVerification.chainId);
                 toast.error('Network was added but switch failed. Please try again.');
                 return false;
               }
-            } else {
-              console.log('❌ Chain add verification failed - missing network data');
-              console.log('❌ Current network:', currentNetworkFromEthereum);
-              console.log('❌ Required network:', requiredNetworkForVerification);
-              toast.error('Network was added but verification failed. Please try again.');
+        } else if (switchError.code === 4001) {
+          toast.error('Network switch was rejected by user');
               return false;
-            }
-          } catch (error) {
-            console.log('❌ Network switch timeout after chain addition:', error);
-            toast.error('Network was added but switch timeout. Please check your wallet.');
-            return false;
-          }
-        } catch (addError) {
-          console.error('Add chain error:', addError);
-          
-          if (addError.code === 4001) {
-            toast.error('Network addition was rejected by user');
           } else {
-            toast.error(`Failed to add network: ${addError.message || 'Unknown error'}`);
-          }
-          return false;
+          throw switchError;
         }
-      } else if (error.code === 4001) {
-        toast.error('Network switch was rejected by user');
-        return false;
-      } else {
-        console.error('Unexpected network switch error:', error);
+      }
+      
+    } catch (error) {
+      console.error('Network switch error:', error);
         toast.error(`Network switch failed: ${error.message || 'Unknown error'}`);
         return false;
-      }
     } finally {
       setLoading(false);
     }
-  }, [requiredNetwork, getRequiredNetwork, network]);
+  }, [provider, getRequiredNetwork]);
 
   // Create token contract for approval
   const createTokenContract = useCallback((tokenAddress) => {
@@ -551,7 +418,7 @@ const Deposit = ({ assistant, onClose, onSuccess }) => {
     return new ethers.Contract(BATCH_ADDRESS, BATCH_ABI, signer);
   }, [signer]);
 
-  // Check if batch approval is needed for Import Wrapper assistants
+  // Check if batch approval is needed for ImportWrapper assistants (3DPass only)
   const checkBatchApprovalNeeded = useCallback(async () => {
     if (assistant.type !== 'import_wrapper') {
       return false;
@@ -647,13 +514,13 @@ const Deposit = ({ assistant, onClose, onSuccess }) => {
     }
   }, [assistant, account, signer, amount, imageAmount, getStakeTokenAddress, getImageTokenAddress, stakeTokenSymbol, imageTokenSymbol]);
 
-  // Handle batch approval for Import Wrapper assistants
+  // Handle batch approval for ImportWrapper assistants (3DPass only)
   const handleBatchApprove = async () => {
     if (assistant.type !== 'import_wrapper') {
       return;
     }
 
-    console.log('🔐 Starting batch approval for Import Wrapper assistant...');
+    console.log('🔐 Starting batch approval for ImportWrapper assistant...');
     
     setLoading(true);
     try {
@@ -681,9 +548,9 @@ const Deposit = ({ assistant, onClose, onSuccess }) => {
       const imageTokenContract = new ethers.Contract(imageTokenAddress, IPRECOMPILE_ERC20_ABI, signer);
       const batchContract = createBatchContract();
       
-      // Get decimals and amounts
-      const stakeDecimals = await stakeTokenContract.decimals();
-      const imageDecimals = await imageTokenContract.decimals();
+      // Get decimals and amounts from settings (not from contract)
+      const stakeDecimals = get3DPassTokenDecimals(stakeTokenAddress) || 18;
+      const imageDecimals = get3DPassTokenDecimals(imageTokenAddress) || 18;
       
       // Approve large amounts for both tokens to avoid re-approval
       const maxApprovalAmount = ethers.utils.parseUnits('1000000', stakeDecimals); // 1M tokens
@@ -812,9 +679,9 @@ const Deposit = ({ assistant, onClose, onSuccess }) => {
       return false;
     }
     
-    // For Import Wrapper assistants, check if either amount or imageAmount is entered
+    // For Import and ImportWrapper assistants, check if either amount or imageAmount is entered
     // For other assistants, only check amount
-    const hasValidAmount = assistant.type === 'import_wrapper' 
+    const hasValidAmount = (assistant.type === 'import_wrapper' || assistant.type === 'import')
       ? (amount && parseFloat(amount) > 0) || (imageAmount && parseFloat(imageAmount) > 0)
       : (amount && parseFloat(amount) > 0);
       
@@ -824,9 +691,9 @@ const Deposit = ({ assistant, onClose, onSuccess }) => {
       return false;
     }
     
-    // For Import Wrapper assistants, use batch approval check
+    // For ImportWrapper assistants, use batch approval check (3DPass only)
     if (assistant.type === 'import_wrapper') {
-      console.log('🔍 Calling checkBatchApprovalNeeded for Import Wrapper assistant');
+      console.log('🔍 Calling checkBatchApprovalNeeded for ImportWrapper assistant');
       const result = await checkBatchApprovalNeeded();
       console.log('🔍 checkBatchApprovalNeeded returned:', result);
       return result;
@@ -882,9 +749,9 @@ const Deposit = ({ assistant, onClose, onSuccess }) => {
       return;
     }
 
-    // For Import Wrapper assistants, use batch approval
+    // For ImportWrapper assistants, use batch approval (3DPass only)
     if (assistant.type === 'import_wrapper') {
-      console.log('🔐 Calling handleBatchApprove for Import Wrapper assistant');
+      console.log('🔐 Calling handleBatchApprove for ImportWrapper assistant');
       return await handleBatchApprove();
     }
 
@@ -949,11 +816,25 @@ const Deposit = ({ assistant, onClose, onSuccess }) => {
 
   // Load user balances
   const loadUserBalances = useCallback(async () => {
-    if (!account || !provider) return;
+    console.log('🔄 loadUserBalances called:', {
+      hasAccount: !!account,
+      hasProvider: !!provider,
+      assistantType: assistant.type,
+      imageTokenAddress,
+      stakeTokenAddress
+    });
+    
+    if (!account || !provider) {
+      console.log('❌ Early return - missing account or provider');
+      return;
+    }
 
     try {
+      console.log('🔍 Starting balance loading process...');
+      
       // Load stake token balance
       if (stakeTokenAddress) {
+        console.log('🔍 Loading stake token balance for:', stakeTokenAddress);
         const networks = getAllNetworksWithSettings();
         const isNativeToken = Object.values(networks).some(network => {
           if (network.tokens) {
@@ -968,9 +849,14 @@ const Deposit = ({ assistant, onClose, onSuccess }) => {
           const balance = await provider.getBalance(account);
           setUserBalance(balance.toString());
         } else {
+          const tokenABI = [
+            'function balanceOf(address account) external view returns (uint256)',
+            'function decimals() external view returns (uint8)',
+            'function symbol() external view returns (string)'
+          ];
           const tokenContract = new ethers.Contract(
             stakeTokenAddress,
-            ['function balanceOf(address) view returns (uint256)'],
+            tokenABI,
             provider
           );
           const balance = await tokenContract.balanceOf(account);
@@ -978,26 +864,133 @@ const Deposit = ({ assistant, onClose, onSuccess }) => {
         }
       }
 
-      // Load foreign token balance for ImportWrapper assistants
-      if (assistant.type === 'import_wrapper' && foreignTokenAddress) {
-        const tokenContract = new ethers.Contract(
-          foreignTokenAddress,
-          ['function balanceOf(address) view returns (uint256)'],
-          provider
-        );
-        const balance = await tokenContract.balanceOf(account);
-        setUserImageBalance(balance.toString());
+      // Load image token balance for ImportWrapper assistants
+      console.log('🔍 Checking if should load image token balance:', {
+        assistantType: assistant.type,
+        hasImageTokenAddress: !!imageTokenAddress,
+        imageTokenAddress
+      });
+      
+      if (assistant.type === 'import_wrapper' && imageTokenAddress) {
+        console.log('🔍 Loading image token balance:', {
+          imageTokenAddress,
+          account,
+          assistantType: assistant.type,
+          provider: !!provider,
+          networkId: network?.id || network?.chainId
+        });
+        
+        try {
+          console.log('🔍 Creating token contract...');
+          const tokenContract = new ethers.Contract(
+            imageTokenAddress,
+            IPRECOMPILE_ERC20_ABI,
+            provider
+          );
+          console.log('🔍 Token contract created successfully');
+          
+          // Get decimals from settings context instead of contract
+          const decimals = get3DPassTokenDecimals(imageTokenAddress) || 18;
+          console.log('🔍 Token decimals from settings:', decimals);
+          
+          // Try to get token info (name and symbol) from contract
+          console.log('🔍 Getting token info...');
+          let name, symbol;
+          
+          try {
+            name = await tokenContract.name();
+            console.log('🔍 Token name:', name);
+          } catch (nameError) {
+            console.log('⚠️ Failed to get token name:', nameError.message);
+            name = 'Unknown';
+          }
+          
+          try {
+            symbol = await tokenContract.symbol();
+            console.log('🔍 Token symbol:', symbol);
+          } catch (symbolError) {
+            console.log('⚠️ Failed to get token symbol:', symbolError.message);
+            symbol = 'Unknown';
+          }
+          
+          console.log('🔍 Token info summary:', { name, symbol, decimals });
+          
+          console.log('🔍 Getting balance...');
+          const balance = await tokenContract.balanceOf(account);
+          console.log('🔍 Image token balance loaded successfully:', {
+            balance: balance.toString(),
+            formatted: ethers.utils.formatUnits(balance, decimals),
+            isZero: balance.isZero(),
+            tokenName: name,
+            tokenSymbol: symbol,
+            tokenDecimals: decimals
+          });
+          setUserImageBalance(balance.toString());
+          setImageTokenDecimals(decimals);
+        } catch (balanceError) {
+          console.error('❌ Error loading image token balance:', balanceError);
+          console.log('🔍 Balance loading error details:', {
+            imageTokenAddress,
+            account,
+            errorMessage: balanceError.message,
+            errorCode: balanceError.code,
+            errorStack: balanceError.stack
+          });
+          
+          // Try with a simpler ABI as fallback
+          try {
+            console.log('🔍 Trying fallback with simple ABI...');
+            const fallbackContract = new ethers.Contract(
+              imageTokenAddress,
+              ['function balanceOf(address) view returns (uint256)'],
+              provider
+            );
+            const fallbackBalance = await fallbackContract.balanceOf(account);
+            const fallbackDecimals = get3DPassTokenDecimals(imageTokenAddress) || 18;
+            console.log('🔍 Fallback balance loaded:', {
+              balance: fallbackBalance.toString(),
+              formatted: ethers.utils.formatUnits(fallbackBalance, fallbackDecimals),
+              decimals: fallbackDecimals
+            });
+            setUserImageBalance(fallbackBalance.toString());
+            setImageTokenDecimals(fallbackDecimals);
+          } catch (fallbackError) {
+            console.error('❌ Fallback also failed:', fallbackError);
+            setUserImageBalance('0');
+            setImageTokenDecimals(18); // Default fallback
+          }
+        }
+      } else if (assistant.type === 'import_wrapper') {
+        console.log('⚠️ Import Wrapper assistant but no image token address found:', {
+          assistantType: assistant.type,
+          imageTokenAddress,
+          bridgeAddress: assistant.bridgeAddress,
+          hasImageTokenAddress: !!imageTokenAddress,
+          networks: getAllNetworksWithSettings()
+        });
+        // Set to 0 if no token address found
+        setUserImageBalance('0');
+        setImageTokenDecimals(18); // Default fallback
       }
     } catch (error) {
       console.error('Error loading user balances:', error);
+    } finally {
+      console.log('🔍 loadUserBalances completed');
     }
-  }, [account, provider, stakeTokenAddress, foreignTokenAddress, assistant.type, getAllNetworksWithSettings]);
+  }, [account, provider, stakeTokenAddress, imageTokenAddress, assistant.type, assistant.bridgeAddress, getAllNetworksWithSettings, get3DPassTokenDecimals, network?.chainId, network?.id]);
 
   // Load balances when component mounts
   React.useEffect(() => {
     loadUserBalances();
   }, [loadUserBalances]);
 
+
+  // Initialize required network when component mounts
+  React.useEffect(() => {
+    const requiredNetwork = getRequiredNetwork();
+    setRequiredNetwork(requiredNetwork);
+    console.log('🔍 Initialized required network:', requiredNetwork);
+  }, [getRequiredNetwork]);
 
   // Check network when component mounts
   React.useEffect(() => {
@@ -1092,8 +1085,8 @@ const Deposit = ({ assistant, onClose, onSuccess }) => {
       return;
     }
 
-    if (assistant.type === 'import_wrapper' && (!imageAmount || parseFloat(imageAmount) <= 0)) {
-      console.log('❌ No image amount entered for import_wrapper');
+    if ((assistant.type === 'import_wrapper' || assistant.type === 'import') && (!imageAmount || parseFloat(imageAmount) <= 0)) {
+      console.log('❌ No image amount entered for', assistant.type, 'assistant');
       toast.error('Please enter a valid image asset amount');
       return;
     }
@@ -1112,7 +1105,7 @@ const Deposit = ({ assistant, onClose, onSuccess }) => {
     if (!isCorrectNetwork) {
       console.log('🚨 NETWORK SWITCHING WILL BE TRIGGERED NOW!');
       console.log('🔄 Wrong network detected, switching automatically...');
-      toast(`Switching to ${requiredNetwork.name} network...`);
+      toast(`Switching to ${requiredNetwork?.name || 'required'} network...`);
       const switchSuccess = await switchToRequiredNetwork();
       console.log('🔍 Network switch result:', switchSuccess);
       if (!switchSuccess) {
@@ -1130,9 +1123,25 @@ const Deposit = ({ assistant, onClose, onSuccess }) => {
       return;
     }
 
-    if (assistant.type === 'import_wrapper') {
-      const imageAmountWei = ethers.utils.parseUnits(imageAmount, 18);
+    if (assistant.type === 'import_wrapper' || assistant.type === 'import') {
+      const imageAmountWei = ethers.utils.parseUnits(imageAmount, imageTokenDecimals);
+      console.log('🔍 Balance check for', assistant.type, 'assistant:', {
+        imageAmount,
+        imageAmountWei: imageAmountWei.toString(),
+        userImageBalance,
+        userImageBalanceWei: userImageBalance,
+        imageTokenAddress,
+        imageTokenSymbol,
+        imageTokenDecimals,
+        hasEnoughBalance: imageAmountWei.lte(userImageBalance)
+      });
+      
       if (imageAmountWei.gt(userImageBalance)) {
+        console.log('❌ Insufficient image asset balance detected:', {
+          requested: imageAmountWei.toString(),
+          available: userImageBalance,
+          difference: imageAmountWei.sub(userImageBalance).toString()
+        });
         toast.error('Insufficient image asset balance');
         return;
       }
@@ -1140,36 +1149,340 @@ const Deposit = ({ assistant, onClose, onSuccess }) => {
 
     setLoading(true);
     try {
+      console.log('🔍 Creating assistant contract...');
+      const abi = getAssistantABI();
+      console.log('🔍 Contract details:', {
+        assistantAddress: assistant.address,
+        assistantType: assistant.type,
+        abiLength: abi.length,
+        abiFunctions: abi.filter(item => item.type === 'function').length,
+        hasSigner: !!signer,
+        signerAddress: signer ? await signer.getAddress() : 'No signer'
+      });
 
       const assistantContract = new ethers.Contract(
         assistant.address,
-        getAssistantABI(),
+        abi,
         signer
       );
+      console.log('✅ Assistant contract created successfully');
+      
+      // Verify the contract is properly connected
+      console.log('🔍 Contract connection details:', {
+        contractAddress: assistantContract.address,
+        hasBuyShares: typeof assistantContract.buyShares === 'function',
+        signerAddress: await assistantContract.signer.getAddress()
+      });
+      
+      // Verify the contract has the buyShares method
+      if (!assistantContract.buyShares) {
+        throw new Error(`Contract at ${assistant.address} does not have buyShares method`);
+      }
+      console.log('✅ buyShares method found on contract');
 
       let tx;
-      const amountWei = ethers.utils.parseUnits(amount, 18);
+      
+      // Get the correct decimals for stake token from settings
+      const stakeTokenDecimals = get3DPassTokenDecimals(stakeTokenAddress) || 18;
+      
+      const amountWei = ethers.utils.parseUnits(amount, stakeTokenDecimals);
+      console.log('🔍 Amount details:', {
+        amount,
+        amountWei: amountWei.toString(),
+        stakeTokenDecimals,
+        stakeTokenAddress,
+        isNativeToken: isNativeToken(stakeTokenAddress)
+      });
 
-      if (assistant.type === 'import_wrapper') {
-        // ImportWrapper assistants require both stake and image amounts
-        if (!imageAmount) {
-          toast.error('Please enter image asset amount for ImportWrapper assistant');
-          setLoading(false);
-          return;
+    // Call buyShares with the correct signature based on assistant type
+    if (assistant.type === 'import_wrapper') {
+      // ImportWrapperAssistant: buyShares(uint stake_asset_amount, uint image_asset_amount)
+      if (!imageAmount) {
+        toast.error('Please enter image asset amount for ImportWrapper assistant');
+        setLoading(false);
+        return;
+      }
+      const imageAmountWei = ethers.utils.parseUnits(imageAmount, imageTokenDecimals);
+      console.log('🔍 ImportWrapperAssistant transaction details:', {
+        amountWei: amountWei.toString(),
+        imageAmountWei: imageAmountWei.toString(),
+        value: isNativeToken(stakeTokenAddress) ? amountWei.toString() : '0'
+      });
+      console.log('🔍 Calling buyShares with 2 parameters (stake, image)...');
+      console.log('🔍 Contract method details:', {
+        contractAddress: assistant.address,
+        methodName: 'buyShares',
+        params: [amountWei.toString(), imageAmountWei.toString()],
+        value: isNativeToken(stakeTokenAddress) ? amountWei.toString() : '0',
+        hasSigner: !!signer,
+        signerAddress: await signer.getAddress()
+      });
+      
+      try {
+        console.log('🚀 About to call buyShares on ImportWrapperAssistant...');
+        console.log('🚀 Parameters:', {
+          amountWei: amountWei.toString(),
+          imageAmountWei: imageAmountWei.toString(),
+          value: isNativeToken(stakeTokenAddress) ? amountWei.toString() : '0'
+        });
+        
+        // First, let's verify the contract is working by calling a simple view function
+        console.log('🔍 Testing contract connectivity...');
+        try {
+          const bridgeAddress = await assistantContract.bridgeAddress();
+          const tokenAddress = await assistantContract.tokenAddress();
+          const precompileAddress = await assistantContract.precompileAddress();
+          console.log('✅ Contract connectivity test passed:', {
+            bridgeAddress,
+            tokenAddress,
+            precompileAddress
+          });
+        } catch (connectError) {
+          console.error('❌ Contract connectivity test failed:', connectError);
+          throw new Error(`Contract not responding: ${connectError.message}`);
         }
-        const imageAmountWei = ethers.utils.parseUnits(imageAmount, 18);
-        tx = await assistantContract.buyShares(amountWei, imageAmountWei, {
-          value: stakeTokenAddress === '0x0000000000000000000000000000000000000000' ? amountWei : 0
+        
+        // Check token approvals - User must approve Assistant to spend tokens
+        console.log('🔍 Checking token approvals...');
+        const userAddress = await signer.getAddress();
+        
+        // Check stake token approval (P3D precompile)
+        if (!isNativeToken(stakeTokenAddress)) {
+          console.log('🔍 Stake token is ERC20, checking allowance...');
+          const stakeTokenContract = new ethers.Contract(stakeTokenAddress, IPRECOMPILE_ERC20_ABI, signer);
+          const stakeAllowance = await stakeTokenContract.allowance(userAddress, assistant.address);
+          console.log('🔍 Stake token allowance:', {
+            allowance: stakeAllowance.toString(),
+            required: amountWei.toString(),
+            sufficient: stakeAllowance.gte(amountWei)
+          });
+          
+          if (stakeAllowance.lt(amountWei)) {
+            throw new Error(`Insufficient stake token allowance. Need to approve ${amountWei.toString()}, have ${stakeAllowance.toString()}`);
+          }
+    } else {
+          console.log('🔍 Stake token is P3D (native), no approval needed');
+        }
+        
+        // Check image token approval (IPrecompileERC20 interface)
+        const imageTokenAddress = getImageTokenAddress(assistant);
+        if (imageTokenAddress) {
+          console.log('🔍 Image token is ERC20, checking allowance...');
+          const imageTokenContract = new ethers.Contract(imageTokenAddress, IPRECOMPILE_ERC20_ABI, signer);
+          const imageAllowance = await imageTokenContract.allowance(userAddress, assistant.address);
+          console.log('🔍 Image token allowance:', {
+            allowance: imageAllowance.toString(),
+            required: imageAmountWei.toString(),
+            sufficient: imageAllowance.gte(imageAmountWei)
+          });
+          
+          if (imageAllowance.lt(imageAmountWei)) {
+            throw new Error(`Insufficient image token allowance. Need to approve ${imageAmountWei.toString()}, have ${imageAllowance.toString()}`);
+          }
+        } else {
+          console.log('🔍 No image token address found');
+        }
+        
+        // Use exact gas strategy from test script
+        console.log('🔍 Using exact test script gas strategy...');
+        
+        // Prepare transaction options matching test script exactly
+        const txOptions = {
+          gasLimit: 9000000,  // Exact same as test script
+          value: 0 // No ETH value needed, tokens are transferred via transferFrom
+        };
+        
+        console.log('🚀 Transaction options for ImportWrapper (test script strategy):', txOptions);
+        
+        // Debug: Log exact parameters being sent (like test script)
+        console.log('🔍 Final transaction parameters:', {
+          stakeAssetAmount: amountWei.toString(),
+          imageAssetAmount: imageAmountWei.toString(),
+          stakeTokenAddress,
+          imageTokenAddress,
+          assistantAddress: assistant.address,
+          userAddress: await signer.getAddress(),
+          gasLimit: txOptions.gasLimit,
+          value: txOptions.value
         });
-      } else {
-        // Export and Import assistants only require stake amount
-        tx = await assistantContract.buyShares(amountWei, {
-          value: stakeTokenAddress === '0x0000000000000000000000000000000000000000' ? amountWei : 0
+        
+        // Debug: Check if we have the right token addresses
+        console.log('🔍 Token address verification:', {
+          stakeTokenAddress,
+          imageTokenAddress,
+          stakeTokenSymbol,
+          imageTokenSymbol,
+          assistantType: assistant.type,
+          bridgeAddress: assistant.bridgeAddress
         });
+        
+        tx = await assistantContract.buyShares(amountWei, imageAmountWei, txOptions);
+        
+        console.log('✅ ImportWrapperAssistant buyShares transaction created successfully');
+        console.log('✅ Transaction object:', {
+          hash: tx.hash,
+          from: tx.from,
+          to: tx.to,
+          value: tx.value?.toString(),
+          gasLimit: tx.gasLimit?.toString(),
+          gasPrice: tx.gasPrice?.toString()
+        });
+      } catch (contractError) {
+        console.error('❌ ImportWrapperAssistant buyShares contract call failed:', contractError);
+        console.error('❌ Error details:', {
+          message: contractError.message,
+          code: contractError.code,
+          reason: contractError.reason,
+          method: contractError.method,
+          transaction: contractError.transaction
+        });
+        throw contractError;
+      }
+    } else if (assistant.type === 'import') {
+      // ImportAssistant: buyShares(uint stake_asset_amount, uint image_asset_amount)
+      // Note: Import assistants don't use batch precompile, they use regular ERC20 transfers
+      if (!imageAmount) {
+        toast.error('Please enter image asset amount for Import assistant');
+        setLoading(false);
+        return;
+      }
+      const imageAmountWei = ethers.utils.parseUnits(imageAmount, imageTokenDecimals);
+      console.log('🔍 ImportAssistant transaction details:', {
+          amountWei: amountWei.toString(),
+        imageAmountWei: imageAmountWei.toString(),
+        value: isNativeToken(stakeTokenAddress) ? amountWei.toString() : '0'
+      });
+      console.log('🔍 Calling buyShares with 2 parameters (stake, image)...');
+      console.log('🔍 Contract method details:', {
+        contractAddress: assistant.address,
+        methodName: 'buyShares',
+        params: [amountWei.toString(), imageAmountWei.toString()],
+        value: isNativeToken(stakeTokenAddress) ? amountWei.toString() : '0',
+        hasSigner: !!signer,
+        signerAddress: await signer.getAddress()
+      });
+      
+      try {
+        console.log('🚀 About to call buyShares on ImportAssistant...');
+        console.log('🚀 Parameters:', {
+          amountWei: amountWei.toString(),
+          imageAmountWei: imageAmountWei.toString(),
+          value: isNativeToken(stakeTokenAddress) ? amountWei.toString() : '0'
+        });
+        
+        // Use exact gas strategy from test script
+        console.log('🔍 Using exact test script gas strategy...');
+        
+        // Prepare transaction options matching test script exactly
+        const txOptions = {
+          gasLimit: 9000000,  // Exact same as test script
+          value: 0 // No ETH value needed, tokens are transferred via transferFrom
+        };
+        
+        console.log('🚀 Transaction options for Import (test script strategy):', txOptions);
+        
+        tx = await assistantContract.buyShares(amountWei, imageAmountWei, txOptions);
+        
+        console.log('✅ ImportAssistant buyShares transaction created successfully');
+        console.log('✅ Transaction object:', {
+          hash: tx.hash,
+          from: tx.from,
+          to: tx.to,
+          value: tx.value?.toString(),
+          gasLimit: tx.gasLimit?.toString(),
+          gasPrice: tx.gasPrice?.toString()
+        });
+      } catch (contractError) {
+        console.error('❌ ImportAssistant buyShares contract call failed:', contractError);
+        console.error('❌ Error details:', {
+          message: contractError.message,
+          code: contractError.code,
+          reason: contractError.reason,
+          method: contractError.method,
+          transaction: contractError.transaction
+        });
+        throw contractError;
+      }
+    } else if (assistant.type === 'export' || assistant.type === 'export_wrapper') {
+      // ExportAssistant and ExportWrapperAssistant: buyShares(uint stake_asset_amount)
+      console.log('🔍 ExportAssistant transaction details:', {
+        amountWei: amountWei.toString(),
+        value: isNativeToken(stakeTokenAddress) ? amountWei.toString() : '0'
+      });
+      console.log('🔍 Calling buyShares with 1 parameter (stake only)...');
+      console.log('🔍 Contract method details:', {
+        contractAddress: assistant.address,
+        methodName: 'buyShares',
+        params: [amountWei.toString()],
+        value: isNativeToken(stakeTokenAddress) ? amountWei.toString() : '0',
+        hasSigner: !!signer,
+        signerAddress: await signer.getAddress()
+      });
+      
+      try {
+        console.log('🚀 About to call buyShares on ExportAssistant...');
+        console.log('🚀 Parameters:', {
+          amountWei: amountWei.toString(),
+          value: isNativeToken(stakeTokenAddress) ? amountWei.toString() : '0'
+        });
+        
+        // Use exact gas strategy from test script
+        console.log('🔍 Using exact test script gas strategy...');
+        
+        // Prepare transaction options matching test script exactly
+        const txOptions = {
+          gasLimit: 9000000,  // Exact same as test script
+          value: 0 // No ETH value needed, tokens are transferred via transferFrom
+        };
+        
+        console.log('🚀 Transaction options for ExportWrapper (test script strategy):', txOptions);
+        
+        tx = await assistantContract.buyShares(amountWei, txOptions);
+        
+        console.log('✅ ExportAssistant buyShares transaction created successfully');
+        console.log('✅ Transaction object:', {
+          hash: tx.hash,
+          from: tx.from,
+          to: tx.to,
+          value: tx.value?.toString(),
+          gasLimit: tx.gasLimit?.toString(),
+          gasPrice: tx.gasPrice?.toString()
+        });
+      } catch (contractError) {
+        console.error('❌ ExportAssistant buyShares contract call failed:', contractError);
+        console.error('❌ Error details:', {
+          message: contractError.message,
+          code: contractError.code,
+          reason: contractError.reason,
+          method: contractError.method,
+          transaction: contractError.transaction
+        });
+        throw contractError;
+      }
+    } else {
+      throw new Error(`Unsupported assistant type: ${assistant.type}`);
       }
 
+      console.log('✅ Transaction submitted successfully:', {
+        txHash: tx.hash,
+        from: tx.from,
+        to: tx.to,
+        value: tx.value?.toString(),
+        gasLimit: tx.gasLimit?.toString(),
+        gasPrice: tx.gasPrice?.toString()
+      });
       toast.success('Transaction submitted! Waiting for confirmation...');
-      await tx.wait();
+    
+    // Wait for transaction confirmation with extended timeout
+    console.log('⏳ Waiting for transaction confirmation...');
+    const receipt = await Promise.race([
+      tx.wait(),
+      new Promise((_, reject) => 
+        setTimeout(() => reject(new Error('Transaction timeout after 5 minutes')), 300000) // 5 minutes
+      )
+    ]);
+    
+    console.log('✅ Transaction confirmed!', receipt);
       toast.success('Deposit successful!');
       setStep('success');
       onSuccess();
@@ -1208,7 +1521,7 @@ const Deposit = ({ assistant, onClose, onSuccess }) => {
   };
 
   const handleMaxImageAmount = () => {
-    setImageAmount(formatBalance(userImageBalance));
+    setImageAmount(formatBalance(userImageBalance, imageTokenDecimals));
   };
 
   const renderStep = () => {
@@ -1452,11 +1765,11 @@ const Deposit = ({ assistant, onClose, onSuccess }) => {
                 </p>
               </div>
 
-              {/* Image Token Amount (for ImportWrapper assistants) */}
-              {assistant.type === 'import_wrapper' && (
+              {/* Image Token Amount (for Import and ImportWrapper assistants) */}
+              {(assistant.type === 'import_wrapper' || assistant.type === 'import') && (
                 <div>
                   <label className="block text-sm font-medium text-secondary-300 mb-2">
-                    Foreign Token Amount (wUSDT)
+                    Foreign Token Amount ({imageTokenSymbol || 'wUSDT'})
                   </label>
                   <div className="flex gap-2">
                     <input
@@ -1473,9 +1786,28 @@ const Deposit = ({ assistant, onClose, onSuccess }) => {
                       Max
                     </button>
                   </div>
-                  <p className="text-xs text-secondary-500 mt-1">
-                    Balance: {formatBalance(userImageBalance)} wUSDT
-                  </p>
+                  <div className="flex items-center justify-between mt-1">
+                    <p className="text-xs text-secondary-500">
+                      Balance: {formatBalance(userImageBalance, imageTokenDecimals)} {imageTokenSymbol || 'wUSDT'}
+                    </p>
+                    <button
+                      onClick={() => {
+                        console.log('🔄 Manual balance refresh triggered');
+                        console.log('🔍 Current state before refresh:', {
+                          imageTokenAddress,
+                          imageTokenSymbol,
+                          userImageBalance,
+                          account,
+                          assistantType: assistant.type,
+                          bridgeAddress: assistant.bridgeAddress
+                        });
+                        loadUserBalances();
+                      }}
+                      className="text-xs text-primary-400 hover:text-primary-300 underline"
+                    >
+                      Refresh
+                    </button>
+                  </div>
                 </div>
               )}
             </>

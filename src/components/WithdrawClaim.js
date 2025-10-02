@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useCallback, useRef } from 'react';
 import { ethers } from 'ethers';
 import { createCounterstakeContract } from '../utils/bridge-contracts';
 import { useWeb3 } from '../contexts/Web3Context';
@@ -6,15 +6,62 @@ import { motion } from 'framer-motion';
 import { CheckCircle, XCircle, Loader, Clock } from 'lucide-react';
 import toast from 'react-hot-toast';
 
+// Global execution tracker to prevent double execution across component instances
+const globalExecutionTracker = new Set();
+
 const WithdrawClaim = ({ claim, onWithdrawSuccess, onClose }) => {
   const { signer } = useWeb3();
   const [loading, setLoading] = useState(false);
+  const [isProcessing, setIsProcessing] = useState(false);
+  const [lastClickTime, setLastClickTime] = useState(0);
   const [error, setError] = useState(null);
+  const isExecutingRef = useRef(false);
+  const loadingRef = useRef(false);
+  const isProcessingRef = useRef(false);
+  const componentId = useRef(Math.random().toString(36).substr(2, 9));
 
-  const handleWithdraw = async () => {
+  const handleWithdraw = useCallback(async () => {
+    const executionId = Math.random().toString(36).substr(2, 9);
+    const globalKey = `${componentId.current}-${claim.actualClaimNum || claim.claimNum}`;
+    console.log(`🚀 WithdrawClaim handleWithdraw called! Execution ID: ${executionId}, Global Key: ${globalKey}`);
+    
+    // Global execution tracker - most aggressive protection
+    if (globalExecutionTracker.has(globalKey)) {
+      console.log(`❌ Global execution already in progress, ignoring duplicate call. Global Key: ${globalKey}`);
+      return;
+    }
+    
+    // Use ref to prevent execution - this is the most reliable way
+    if (isExecutingRef.current) {
+      console.log(`❌ Function already executing, ignoring duplicate call. Execution ID: ${executionId}`);
+      return;
+    }
+    
+    // Debounce rapid clicks (prevent clicks within 1 second)
+    const now = Date.now();
+    if (now - lastClickTime < 1000) {
+      console.log(`❌ Click too soon after last click, ignoring. Execution ID: ${executionId}`);
+      return;
+    }
+    setLastClickTime(now);
+    
+    // Prevent double execution with multiple guards
+    if (loadingRef.current || isProcessingRef.current) {
+      console.log(`❌ Withdraw already in progress, ignoring duplicate call. Execution ID: ${executionId}`);
+      return;
+    }
+    
+    // Set all flags immediately to prevent any other calls
+    globalExecutionTracker.add(globalKey);
+    isExecutingRef.current = true;
+    isProcessingRef.current = true;
+    loadingRef.current = true;
+    setIsProcessing(true);
     setLoading(true);
     setError(null);
-
+    
+    console.log(`✅ Proceeding with withdraw. Execution ID: ${executionId}, Global Key: ${globalKey}`);
+    
     try {
       console.log('🔍 Starting withdraw process for claim:', claim.actualClaimNum || claim.claimNum);
       console.log('🔍 Signer address:', await signer.getAddress());
@@ -212,64 +259,9 @@ const WithdrawClaim = ({ claim, onWithdrawSuccess, onClose }) => {
         // If we can't get claim details, we'll still try the withdrawal but log the issue
       }
       
-      // Gas Fee Strategy for Withdraw
-      console.log('🔍 Implementing gas fee strategy for withdraw...');
-      
-      // Get current gas price and fee data
-      let gasPrice, maxFeePerGas, maxPriorityFeePerGas;
-      try {
-        const feeData = await signer.provider.getFeeData();
-        gasPrice = feeData.gasPrice;
-        maxFeePerGas = feeData.maxFeePerGas;
-        maxPriorityFeePerGas = feeData.maxPriorityFeePerGas;
-        
-        console.log('🔍 Current fee data:');
-        console.log('  - Gas Price:', gasPrice ? ethers.utils.formatUnits(gasPrice, 'gwei') + ' gwei' : 'Not available');
-        console.log('  - Max Fee Per Gas:', maxFeePerGas ? ethers.utils.formatUnits(maxFeePerGas, 'gwei') + ' gwei' : 'Not available');
-        console.log('  - Max Priority Fee Per Gas:', maxPriorityFeePerGas ? ethers.utils.formatUnits(maxPriorityFeePerGas, 'gwei') + ' gwei' : 'Not available');
-      } catch (feeErr) {
-        console.log('🔍 Could not get fee data:', feeErr.message);
-      }
-      
-      // Estimate gas for withdraw transaction
-      let estimatedGas;
-      try {
-        estimatedGas = await contract.estimateGas.functions['withdraw(uint256)'](claimNum);
-        console.log('🔍 Gas estimation successful:', estimatedGas.toString());
-        
-        // Add 20% buffer for safety
-        const gasLimit = estimatedGas.mul(120).div(100);
-        console.log('🔍 Gas limit with 20% buffer:', gasLimit.toString());
-        
-      } catch (gasEstimateErr) {
-        console.log('🔍 Gas estimation failed:', gasEstimateErr.message);
-        // Use a reasonable default gas limit for withdraw operations
-        estimatedGas = ethers.BigNumber.from(300000);
-        console.log('🔍 Using default gas limit:', estimatedGas.toString());
-      }
-      
-      // Prepare transaction options with gas strategy
-      const txOptions = {
-        gasLimit: estimatedGas.mul(120).div(100) // 20% buffer
-      };
-      
-      // Add gas pricing based on network support
-      if (maxFeePerGas && maxPriorityFeePerGas) {
-        // EIP-1559 network (Ethereum mainnet, etc.)
-        txOptions.maxFeePerGas = maxFeePerGas.mul(120).div(100); // 20% higher than current
-        txOptions.maxPriorityFeePerGas = maxPriorityFeePerGas.mul(120).div(100); // 20% higher than current
-        console.log('🔍 Using EIP-1559 gas pricing');
-        console.log('  - Max Fee Per Gas:', ethers.utils.formatUnits(txOptions.maxFeePerGas, 'gwei') + ' gwei');
-        console.log('  - Max Priority Fee Per Gas:', ethers.utils.formatUnits(txOptions.maxPriorityFeePerGas, 'gwei') + ' gwei');
-      } else if (gasPrice) {
-        // Legacy network (3DPass, etc.)
-        txOptions.gasPrice = gasPrice.mul(120).div(100); // 20% higher than current
-        console.log('🔍 Using legacy gas pricing');
-        console.log('  - Gas Price:', ethers.utils.formatUnits(txOptions.gasPrice, 'gwei') + ' gwei');
-      } else {
-        // Fallback: use network defaults
-        console.log('🔍 Using network default gas pricing');
-      }
+      // Use MetaMask's default gas estimation for better user experience
+      console.log('🔍 Using MetaMask default gas estimation...');
+      console.log('🔍 This will let MetaMask handle gas pricing and limits automatically');
       
       // Additional debugging for failing claims
       console.log('🔍 Claim details before withdraw:');
@@ -309,28 +301,50 @@ const WithdrawClaim = ({ claim, onWithdrawSuccess, onClose }) => {
         console.log('🔍 Could not perform final contract check:', checkErr.message);
       }
       
-      // Execute withdraw with gas strategy
-      console.log('🔍 Executing withdraw with gas strategy...');
-      console.log('🔍 Transaction options:', txOptions);
+      // Execute withdraw using MetaMask's default gas estimation
+      console.log('🔍 Executing withdraw with MetaMask default gas estimation...');
+      console.log('🔍 Claim number being used:', claimNum.toString());
+      console.log('🔍 Contract address:', contract.address);
+      console.log('🔍 Signer address:', await signer.getAddress());
       
       let withdrawTx;
       try {
-        withdrawTx = await contract.functions['withdraw(uint256)'](claimNum, txOptions);
-        console.log('🔍 Withdraw transaction sent with gas strategy:', withdrawTx.hash);
-      } catch (gasStrategyErr) {
-        console.log('🔍 Gas strategy failed, trying fallback approach:', gasStrategyErr.message);
+        console.log('🔍 Attempting withdraw with MetaMask default gas settings...');
+        // Let MetaMask handle gas estimation and pricing automatically
+        withdrawTx = await contract.functions['withdraw(uint256)'](claimNum);
+        console.log('🔍 Withdraw transaction sent successfully:', withdrawTx.hash);
+      } catch (withdrawErr) {
+        console.log('🔍 Withdraw transaction failed:', withdrawErr.message);
+        console.log('🔍 Error details:', {
+          code: withdrawErr.code,
+          reason: withdrawErr.reason,
+          method: withdrawErr.method,
+          transaction: withdrawErr.transaction
+        });
         
-        // Fallback: try without gas options (original working approach)
-        try {
-          withdrawTx = await contract.functions['withdraw(uint256)'](claimNum);
-          console.log('🔍 Withdraw transaction sent with fallback approach:', withdrawTx.hash);
-        } catch (fallbackErr) {
-          console.log('🔍 Fallback approach failed, trying with minimal gas options:', fallbackErr.message);
-          
-          // Final fallback: try with just gas limit
-          const minimalOptions = { gasLimit: ethers.BigNumber.from(500000) };
-          withdrawTx = await contract.functions['withdraw(uint256)'](claimNum, minimalOptions);
-          console.log('🔍 Withdraw transaction sent with minimal gas options:', withdrawTx.hash);
+        // Handle different types of errors gracefully
+        if (withdrawErr.code === 4001) {
+          // User rejected the transaction
+          console.log('🔍 User rejected the transaction');
+          toast.error('Transaction was cancelled by user');
+          return; // Exit gracefully without throwing error
+        } else if (withdrawErr.code === -32603) {
+          // Internal JSON-RPC error (often insufficient funds)
+          console.log('🔍 Internal JSON-RPC error - likely insufficient funds');
+          toast.error('Insufficient funds for gas fees. Please check your wallet balance.');
+          return; // Exit gracefully without throwing error
+        } else if (withdrawErr.message && withdrawErr.message.includes('insufficient funds')) {
+          console.log('🔍 Insufficient funds error detected');
+          toast.error('Insufficient funds for gas fees. Please check your wallet balance.');
+          return; // Exit gracefully without throwing error
+        } else if (withdrawErr.message && withdrawErr.message.includes('user rejected')) {
+          console.log('🔍 User rejection detected');
+          toast.error('Transaction was cancelled by user');
+          return; // Exit gracefully without throwing error
+        } else {
+          // Other errors - rethrow to be handled by outer catch
+          console.log('🔍 Unexpected error, rethrowing:', withdrawErr.message);
+          throw withdrawErr;
         }
       }
 
@@ -372,6 +386,14 @@ const WithdrawClaim = ({ claim, onWithdrawSuccess, onClose }) => {
       if (onWithdrawSuccess) {
         onWithdrawSuccess(claim.actualClaimNum || claim.claimNum);
       }
+      
+      // Reset guards after successful completion
+      globalExecutionTracker.delete(globalKey);
+      loadingRef.current = false;
+      isProcessingRef.current = false;
+      isExecutingRef.current = false;
+      setLoading(false);
+      setIsProcessing(false);
 
     } catch (err) {
       console.error('❌ Withdraw failed:', err);
@@ -405,10 +427,18 @@ const WithdrawClaim = ({ claim, onWithdrawSuccess, onClose }) => {
       }
       
       toast.error(errorMessage);
-    } finally {
+      
+      // Reset guards after error handling
+      globalExecutionTracker.delete(globalKey);
+      loadingRef.current = false;
+      isProcessingRef.current = false;
+      isExecutingRef.current = false;
       setLoading(false);
+      setIsProcessing(false);
+    } finally {
+      console.log(`🏁 WithdrawClaim execution completed. Execution ID: ${executionId}, Global Key: ${globalKey}`);
     }
-  };
+  }, [signer, claim, lastClickTime, onWithdrawSuccess]);
 
   const getWithdrawStatus = () => {
     if (claim.withdrawn) {
@@ -564,18 +594,23 @@ const WithdrawClaim = ({ claim, onWithdrawSuccess, onClose }) => {
           <div className="flex gap-3">
             <button
               onClick={onClose}
-              disabled={loading}
+              disabled={loading || isProcessing}
               className="flex-1 px-4 py-2 bg-gray-600 text-white rounded-lg hover:bg-gray-500 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
             >
               Cancel
             </button>
             
                                     <button
-                          onClick={handleWithdraw}
-                          disabled={loading || claim.withdrawn || !isExpired || claim.currentOutcome !== 1}
+                          onClick={(e) => {
+                            e.preventDefault();
+                            e.stopPropagation();
+                            console.log('🔘 WithdrawClaim button clicked!');
+                            handleWithdraw();
+                          }}
+                          disabled={loading || isProcessing || claim.withdrawn || !isExpired || claim.currentOutcome !== 1}
                           className="flex-1 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-500 disabled:opacity-50 disabled:cursor-not-allowed transition-colors flex items-center justify-center gap-2"
                         >
-              {loading ? (
+              {loading || isProcessing ? (
                 <>
                   <Loader className="w-4 h-4 animate-spin" />
                   Withdrawing...

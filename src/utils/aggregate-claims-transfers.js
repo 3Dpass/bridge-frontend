@@ -220,6 +220,13 @@ export const aggregateClaimsAndTransfers = (claims, transfers) => {
       txHash: claim.txHash
     });
 
+    // DEBUG: Check if this claim has a txid and log the issue
+    if (!claim.txid) {
+      console.log(`🚨 CLAIM ${claim.claimNum || claim.actualClaimNum} HAS NO TXID! This will cause matching to fail.`);
+      console.log(`🚨 Available fields:`, Object.keys(claim));
+      console.log(`🚨 This claim will be marked as suspicious due to missing txid.`);
+    }
+
     console.log(`🔍 Available transfers for matching:`, transfers.map(t => ({
       eventType: t.eventType,
       fromNetwork: t.fromNetwork,
