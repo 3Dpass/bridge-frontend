@@ -9,6 +9,7 @@ import Withdraw from './Withdraw';
 import WithdrawManagementFee from './WithdrawManagementFee';
 import WithdrawSuccessFee from './WithdrawSuccessFee';
 import AssignNewManager from './AssignNewManager';
+import { IPRECOMPILE_ERC20_ABI } from '../contracts/abi';
 
 const AssistantsList = () => {
   const { getAssistantContractsWithSettings, getAllNetworksWithSettings } = useSettings();
@@ -150,7 +151,15 @@ const AssistantsList = () => {
   }, [getAllNetworksWithSettings, isKnownPrecompile]);
 
   const getForeignTokenBalance = useCallback(async (assistant, contractAddress, tokenAddress, networkKey) => {
+    console.log(`🔍 getForeignTokenBalance called:`, {
+      assistantType: assistant.type,
+      contractAddress,
+      tokenAddress,
+      networkKey
+    });
+    
     if (!tokenAddress || tokenAddress === '0x0000000000000000000000000000000000000000') {
+      console.log(`🔍 No token address provided, returning 0`);
       return '0';
     }
     
@@ -164,6 +173,10 @@ const AssistantsList = () => {
       }
 
       const networkProvider = new ethers.providers.JsonRpcProvider(networkConfig.rpcUrl);
+      console.log(`🔍 Network provider created for ${networkKey}:`, {
+        rpcUrl: networkConfig.rpcUrl,
+        chainId: networkConfig.id
+      });
       
       // For native tokens, check against known native token addresses from settings
       const isNativeToken = Object.values(networks).some(network => {
@@ -193,21 +206,65 @@ const AssistantsList = () => {
       
       // For Import Wrapper assistants, use IPrecompileERC20 interface
       if (assistant.type === 'import_wrapper') {
+        console.log(`🔍 Creating Import Wrapper token contract with IPRECOMPILE_ERC20_ABI:`, {
+          tokenAddress,
+          contractAddress,
+          networkKey,
+          abiLength: IPRECOMPILE_ERC20_ABI.length
+        });
+        
         const tokenContract = new ethers.Contract(
           tokenAddress,
-          [
-            'function balanceOf(address) view returns (uint256)',
-            'function decimals() view returns (uint8)'
-          ],
+          IPRECOMPILE_ERC20_ABI,
           networkProvider
         );
         
+        console.log(`🔍 Getting balance for Import Wrapper assistant...`);
+        
+        // Try to get additional token info for debugging
+        try {
+          const name = await tokenContract.name();
+          const symbol = await tokenContract.symbol();
+          const decimals = await tokenContract.decimals();
+          const totalSupply = await tokenContract.totalSupply();
+          
+          console.log(`🔍 Token info for Import Wrapper:`, {
+            name,
+            symbol,
+            decimals: decimals.toString(),
+            totalSupply: totalSupply.toString(),
+            contractAddress,
+            tokenAddress
+          });
+        } catch (tokenInfoError) {
+          console.warn(`⚠️ Could not get token info:`, tokenInfoError.message);
+        }
+        
         const balance = await tokenContract.balanceOf(contractAddress);
+        
+        // Get the correct decimals for formatting
+        const decimals = await tokenContract.decimals();
+        const formattedBalance = formatBalance(balance, decimals);
+        
+        console.log(`🔍 Import Wrapper balance result:`, {
+          balance: balance.toString(),
+          decimals: decimals.toString(),
+          formatted: formattedBalance,
+          isZero: balance.isZero(),
+          contractAddress,
+          tokenAddress
+        });
         return balance.toString();
       }
       
       // For Import assistants, use regular ERC20 interface
       if (assistant.type === 'import') {
+        console.log(`🔍 Creating Import token contract with ERC20 ABI:`, {
+          tokenAddress,
+          contractAddress,
+          networkKey
+        });
+        
         const tokenContract = new ethers.Contract(
           tokenAddress,
           [
@@ -217,7 +274,12 @@ const AssistantsList = () => {
           networkProvider
         );
         
+        console.log(`🔍 Getting balance for Import assistant...`);
         const balance = await tokenContract.balanceOf(contractAddress);
+        console.log(`🔍 Import balance result:`, {
+          balance: balance.toString(),
+          formatted: formatBalance(balance)
+        });
         return balance.toString();
       }
       
@@ -227,6 +289,55 @@ const AssistantsList = () => {
       return '0';
     }
   }, [getAllNetworksWithSettings, isKnownPrecompile]);
+
+  const getForeignTokenDecimals = useCallback(async (assistant, tokenAddress, networkKey) => {
+    if (!tokenAddress || tokenAddress === '0x0000000000000000000000000000000000000000') {
+      return 18; // Default decimals
+    }
+    
+    try {
+      // Get the network-specific provider
+      const networks = getAllNetworksWithSettings();
+      const networkConfig = networks[networkKey];
+      if (!networkConfig || !networkConfig.rpcUrl) {
+        console.warn(`No RPC URL found for network: ${networkKey}`);
+        return 18; // Default decimals
+      }
+
+      const networkProvider = new ethers.providers.JsonRpcProvider(networkConfig.rpcUrl);
+      
+      // For Import Wrapper assistants, use IPrecompileERC20 interface
+      if (assistant.type === 'import_wrapper') {
+        const tokenContract = new ethers.Contract(
+          tokenAddress,
+          IPRECOMPILE_ERC20_ABI,
+          networkProvider
+        );
+        
+        const decimals = await tokenContract.decimals();
+        return decimals;
+      }
+      
+      // For Import assistants, use regular ERC20 interface
+      if (assistant.type === 'import') {
+        const tokenContract = new ethers.Contract(
+          tokenAddress,
+          [
+            'function decimals() view returns (uint8)'
+          ],
+          networkProvider
+        );
+        
+        const decimals = await tokenContract.decimals();
+        return decimals;
+      }
+      
+      return 18; // Default decimals
+    } catch (error) {
+      console.warn(`Error getting foreign token decimals for ${tokenAddress} on ${networkKey}:`, error.message);
+      return 18; // Default decimals
+    }
+  }, [getAllNetworksWithSettings]);
 
   const getStakeTokenAddress = useCallback((assistant) => {
     // Try to find the stake token address from the bridge configuration
@@ -368,18 +479,54 @@ const AssistantsList = () => {
         // Get foreign token balance for import assistants
         if (assistant.type === 'import' || assistant.type === 'import_wrapper') {
           const foreignTokenAddress = getForeignTokenAddress(assistant);
+          console.log(`🔍 Foreign token address for ${assistant.key}:`, {
+            assistantType: assistant.type,
+            bridgeAddress: assistant.bridgeAddress,
+            foreignTokenAddress,
+            hasForeignTokenAddress: !!foreignTokenAddress,
+            assistantAddress: assistant.address,
+            networkKey: assistantNetworkKey
+          });
+          
           if (foreignTokenAddress) {
+            // For Import Wrapper assistants, the foreign tokens might be held by the bridge, not the assistant
+            const balanceContractAddress = assistant.type === 'import_wrapper' 
+              ? assistant.bridgeAddress  // Bridge holds the foreign tokens for Import Wrapper
+              : assistant.address;       // Assistant holds the foreign tokens for Import
+            
+            console.log(`🔍 Using contract address for balance check:`, {
+              assistantType: assistant.type,
+              balanceContractAddress,
+              assistantAddress: assistant.address,
+              bridgeAddress: assistant.bridgeAddress
+            });
+            
             const foreignTokenBalance = await getForeignTokenBalance(
               assistant,
-              assistant.address, // Assistant contract holds the foreign tokens
+              balanceContractAddress,
               foreignTokenAddress,
               assistantNetworkKey
             );
+            // Get decimals for proper formatting
+            const foreignTokenDecimals = await getForeignTokenDecimals(assistant, foreignTokenAddress, assistantNetworkKey);
+            
+            console.log(`🔍 Foreign token balance for ${assistant.key}:`, {
+              foreignTokenAddress,
+              assistantAddress: assistant.address,
+              balance: foreignTokenBalance,
+              decimals: foreignTokenDecimals,
+              formatted: formatBalance(foreignTokenBalance, foreignTokenDecimals)
+            });
             newForeignTokenBalances[assistant.key] = {
-              foreignTokenBalance
+              foreignTokenBalance,
+              decimals: foreignTokenDecimals
             };
           } else {
-            console.warn(`No foreign token address found for assistant ${assistant.key}`);
+            console.warn(`No foreign token address found for assistant ${assistant.key}`, {
+              assistantType: assistant.type,
+              bridgeAddress: assistant.bridgeAddress,
+              networks: Object.keys(networks)
+            });
             newForeignTokenBalances[assistant.key] = {
               foreignTokenBalance: '0'
             };
@@ -404,7 +551,7 @@ const AssistantsList = () => {
     setBalances(newBalances);
     setShareTokenSupplies(newShareTokenSupplies);
     setForeignTokenBalances(newForeignTokenBalances);
-  }, [assistants, getTokenBalance, getTokenTotalSupply, getStakeTokenAddress, getForeignTokenAddress, getForeignTokenBalance, getAllNetworksWithSettings]);
+  }, [assistants, getTokenBalance, getTokenTotalSupply, getStakeTokenAddress, getForeignTokenAddress, getForeignTokenBalance, getForeignTokenDecimals, getAllNetworksWithSettings]);
 
   useEffect(() => {
     loadAssistants();
@@ -859,7 +1006,7 @@ const AssistantsList = () => {
                   </div>
                   <div className="text-xl font-semibold text-white">
                     {foreignTokenBalances[assistant.key]?.foreignTokenBalance 
-                      ? formatBalance(foreignTokenBalances[assistant.key].foreignTokenBalance)
+                      ? formatBalance(foreignTokenBalances[assistant.key].foreignTokenBalance, foreignTokenBalances[assistant.key].decimals || 18)
                       : '0.000000'
                     }
                   </div>

@@ -1124,7 +1124,9 @@ const Deposit = ({ assistant, onClose, onSuccess }) => {
     }
 
     if (assistant.type === 'import_wrapper' || assistant.type === 'import') {
-      const imageAmountWei = ethers.utils.parseUnits(imageAmount, imageTokenDecimals);
+      // Use consistent decimals from settings for balance check
+      const imageTokenDecimalsForBalance = get3DPassTokenDecimals(imageTokenAddress) || 18;
+      const imageAmountWei = ethers.utils.parseUnits(imageAmount, imageTokenDecimalsForBalance);
       console.log('🔍 Balance check for', assistant.type, 'assistant:', {
         imageAmount,
         imageAmountWei: imageAmountWei.toString(),
@@ -1132,7 +1134,7 @@ const Deposit = ({ assistant, onClose, onSuccess }) => {
         userImageBalanceWei: userImageBalance,
         imageTokenAddress,
         imageTokenSymbol,
-        imageTokenDecimals,
+        imageTokenDecimalsForBalance,
         hasEnoughBalance: imageAmountWei.lte(userImageBalance)
       });
       
@@ -1182,8 +1184,9 @@ const Deposit = ({ assistant, onClose, onSuccess }) => {
 
       let tx;
       
-      // Get the correct decimals for stake token from settings
+      // Get the correct decimals for both tokens from settings (consistent with approval logic)
       const stakeTokenDecimals = get3DPassTokenDecimals(stakeTokenAddress) || 18;
+      const imageTokenDecimalsFromSettings = get3DPassTokenDecimals(imageTokenAddress) || 18;
       
       const amountWei = ethers.utils.parseUnits(amount, stakeTokenDecimals);
       console.log('🔍 Amount details:', {
@@ -1202,7 +1205,8 @@ const Deposit = ({ assistant, onClose, onSuccess }) => {
         setLoading(false);
         return;
       }
-      const imageAmountWei = ethers.utils.parseUnits(imageAmount, imageTokenDecimals);
+      // Use consistent decimals from settings, not state variable
+      const imageAmountWei = ethers.utils.parseUnits(imageAmount, imageTokenDecimalsFromSettings);
       console.log('🔍 ImportWrapperAssistant transaction details:', {
         amountWei: amountWei.toString(),
         imageAmountWei: imageAmountWei.toString(),
@@ -1303,7 +1307,11 @@ const Deposit = ({ assistant, onClose, onSuccess }) => {
           assistantAddress: assistant.address,
           userAddress: await signer.getAddress(),
           gasLimit: txOptions.gasLimit,
-          value: txOptions.value
+          value: txOptions.value,
+          stakeTokenDecimals,
+          imageTokenDecimalsFromSettings,
+          stakeTokenSymbol,
+          imageTokenSymbol
         });
         
         // Debug: Check if we have the right token addresses
@@ -1315,6 +1323,22 @@ const Deposit = ({ assistant, onClose, onSuccess }) => {
           assistantType: assistant.type,
           bridgeAddress: assistant.bridgeAddress
         });
+        
+        // Simulate the transaction first to catch revert reasons
+        console.log('🔍 Simulating transaction to check for revert reasons...');
+        try {
+          await assistantContract.callStatic.buyShares(amountWei, imageAmountWei, txOptions);
+          console.log('✅ Transaction simulation successful');
+        } catch (simulationError) {
+          console.error('❌ Transaction simulation failed:', simulationError);
+          console.error('❌ Simulation error details:', {
+            message: simulationError.message,
+            reason: simulationError.reason,
+            code: simulationError.code,
+            data: simulationError.data
+          });
+          throw new Error(`Transaction would fail: ${simulationError.reason || simulationError.message}`);
+        }
         
         tx = await assistantContract.buyShares(amountWei, imageAmountWei, txOptions);
         
@@ -1346,7 +1370,8 @@ const Deposit = ({ assistant, onClose, onSuccess }) => {
         setLoading(false);
         return;
       }
-      const imageAmountWei = ethers.utils.parseUnits(imageAmount, imageTokenDecimals);
+      // Use consistent decimals from settings, not state variable
+      const imageAmountWei = ethers.utils.parseUnits(imageAmount, imageTokenDecimalsFromSettings);
       console.log('🔍 ImportAssistant transaction details:', {
           amountWei: amountWei.toString(),
         imageAmountWei: imageAmountWei.toString(),
@@ -1380,6 +1405,22 @@ const Deposit = ({ assistant, onClose, onSuccess }) => {
         };
         
         console.log('🚀 Transaction options for Import (test script strategy):', txOptions);
+        
+        // Simulate the transaction first to catch revert reasons
+        console.log('🔍 Simulating Import transaction to check for revert reasons...');
+        try {
+          await assistantContract.callStatic.buyShares(amountWei, imageAmountWei, txOptions);
+          console.log('✅ Import transaction simulation successful');
+        } catch (simulationError) {
+          console.error('❌ Import transaction simulation failed:', simulationError);
+          console.error('❌ Simulation error details:', {
+            message: simulationError.message,
+            reason: simulationError.reason,
+            code: simulationError.code,
+            data: simulationError.data
+          });
+          throw new Error(`Import transaction would fail: ${simulationError.reason || simulationError.message}`);
+        }
         
         tx = await assistantContract.buyShares(amountWei, imageAmountWei, txOptions);
         
@@ -1436,6 +1477,22 @@ const Deposit = ({ assistant, onClose, onSuccess }) => {
         };
         
         console.log('🚀 Transaction options for ExportWrapper (test script strategy):', txOptions);
+        
+        // Simulate the transaction first to catch revert reasons
+        console.log('🔍 Simulating Export transaction to check for revert reasons...');
+        try {
+          await assistantContract.callStatic.buyShares(amountWei, txOptions);
+          console.log('✅ Export transaction simulation successful');
+        } catch (simulationError) {
+          console.error('❌ Export transaction simulation failed:', simulationError);
+          console.error('❌ Simulation error details:', {
+            message: simulationError.message,
+            reason: simulationError.reason,
+            code: simulationError.code,
+            data: simulationError.data
+          });
+          throw new Error(`Export transaction would fail: ${simulationError.reason || simulationError.message}`);
+        }
         
         tx = await assistantContract.buyShares(amountWei, txOptions);
         

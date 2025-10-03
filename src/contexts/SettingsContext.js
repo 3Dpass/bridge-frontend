@@ -617,6 +617,23 @@ export const SettingsProvider = ({ children }) => {
     return true;
   }, []);
 
+  // Validate search depth settings
+  const validateSearchDepth = useCallback((depth, type = 'history') => {
+    if (typeof depth !== 'number' || isNaN(depth)) {
+      return { valid: false, error: `${type} search depth must be a number` };
+    }
+    
+    if (depth < 0.25) {
+      return { valid: false, error: `${type} search depth must be at least 0.25 hours (15 minutes)` };
+    }
+    
+    if (depth > 168) { // 1 week
+      return { valid: false, error: `${type} search depth cannot exceed 168 hours (1 week)` };
+    }
+    
+    return { valid: true };
+  }, []);
+
   // Get token type description
   const getTokenTypeDescription = useCallback((tokenConfig) => {
     if (!tokenConfig) return 'Unknown';
@@ -765,6 +782,24 @@ export const SettingsProvider = ({ children }) => {
     return saveSettings(newSettings);
   }, [settings, saveSettings]);
 
+  // Validate all search depth settings
+  const validateAllSearchDepths = useCallback(() => {
+    const historyDepth = getHistorySearchDepth();
+    const claimDepth = getClaimSearchDepth();
+    
+    const historyValidation = validateSearchDepth(historyDepth, 'History');
+    const claimValidation = validateSearchDepth(claimDepth, 'Claim');
+    
+    const errors = [];
+    if (!historyValidation.valid) errors.push(historyValidation.error);
+    if (!claimValidation.valid) errors.push(claimValidation.error);
+    
+    return {
+      valid: errors.length === 0,
+      errors
+    };
+  }, [getHistorySearchDepth, getClaimSearchDepth, validateSearchDepth]);
+
   useEffect(() => {
     initializeSettings();
   }, [initializeSettings]);
@@ -843,6 +878,10 @@ export const SettingsProvider = ({ children }) => {
     // Token validation utilities
     validateTokenConfig,
     getTokenTypeDescription,
+    
+    // Search depth validation utilities
+    validateSearchDepth,
+    validateAllSearchDepths,
   };
 
   return (

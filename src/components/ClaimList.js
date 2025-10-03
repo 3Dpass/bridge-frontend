@@ -6,7 +6,13 @@ import { NETWORKS } from '../config/networks';
 import { fetchClaimsFromAllNetworks } from '../utils/fetch-claims';
 import { fetchLastTransfers } from '../utils/fetch-last-transfers';
 import { aggregateClaimsAndTransfers } from '../utils/aggregate-claims-transfers';
-import { getCacheStats, clearAllCachedEvents } from '../utils/event-cache';
+import { 
+  fetchClaimsWithFallback, 
+  fetchTransfersWithFallback
+  // testProviderWithRetry, // Available for future use
+  // getProviderHealthWithRetry // Available for future use
+} from '../utils/enhanced-fetch';
+// Cache functionality is handled internally for performance
 import { 
   Clock, 
   CheckCircle, 
@@ -91,13 +97,14 @@ const ClaimList = () => {
   const [loading, setLoading] = useState(false);
   const [isInitialLoad, setIsInitialLoad] = useState(true);
   const [filter, setFilter] = useState('all'); // 'all', 'my', 'suspicious', 'pending'
+  const [retryStatus, setRetryStatus] = useState(null);
   const [currentBlock, setCurrentBlock] = useState(null);
   const [showNewClaim, setShowNewClaim] = useState(false);
   const [selectedTransfer, setSelectedTransfer] = useState(null);
   const [showWithdrawModal, setShowWithdrawModal] = useState(false);
   const [showChallengeModal, setShowChallengeModal] = useState(false);
   const [selectedClaim, setSelectedClaim] = useState(null);
-  const [cacheStats, setCacheStats] = useState(null);
+  // Cache stats removed from UI - cache still works internally for performance
 
   // Network switching functions
   const getRequiredNetwork = useCallback((transfer) => {
@@ -624,12 +631,7 @@ const ClaimList = () => {
     setShowWithdrawModal(true);
   }, [getRequiredNetworkForClaim, checkNetwork, switchToRequiredNetwork, prepareClaimForWithdraw]);
 
-  // Update cache statistics
-  const updateCacheStats = useCallback(() => {
-    const stats = getCacheStats();
-    setCacheStats(stats);
-    console.log('📊 Cache statistics:', stats);
-  }, []);
+  // Cache statistics removed from UI - cache still works internally
 
   // Load claims and transfers from all networks with fraud detection
   const loadClaimsAndTransfers = useCallback(async () => {
@@ -642,27 +644,54 @@ const ClaimList = () => {
     if (isInitialLoad) {
       setLoading(true);
     }
+    
+    // Search depth settings are handled internally by the retry mechanism
+    
     try {
-      // Fetch claims from all networks
-      console.log('🔍 Fetching claims from all networks...');
-      const allClaims = await fetchClaimsFromAllNetworks({
-        getNetworkWithSettings,
-        getBridgeInstancesWithSettings,
-        filter,
-        account,
-        claimSearchDepth: getClaimSearchDepth(),
-        getTransferTokenSymbol,
-        getTokenDecimals
-      });
+      // Fetch claims from all networks with enhanced retry and fallback
+      console.log('🔍 Fetching claims from all networks with enhanced retry...');
+      const allClaims = await fetchClaimsWithFallback(
+        () => fetchClaimsFromAllNetworks({
+          getNetworkWithSettings,
+          getBridgeInstancesWithSettings,
+          filter,
+          account,
+          claimSearchDepth: getClaimSearchDepth(),
+          getTransferTokenSymbol,
+          getTokenDecimals
+        }),
+        getHistorySearchDepth,
+        getClaimSearchDepth,
+        {
+          maxRetries: 3,
+          baseDelay: 1000,
+          enableSearchDepthAwareRetry: true,
+          onRetryStatus: (status) => {
+            setRetryStatus({ ...status, type: 'claims' });
+          }
+        }
+      );
 
-      // Fetch transfers from all networks
+      // Fetch transfers from all networks with enhanced retry and fallback
       const historySearchDepth = getHistorySearchDepth();
-      console.log(`🔍 Fetching transfers from all networks for ${historySearchDepth}h history...`);
-      const allTransfers = await fetchLastTransfers({
-        getNetworkWithSettings,
-        getBridgeInstancesWithSettings,
-        timeframeHours: historySearchDepth
-      });
+      console.log(`🔍 Fetching transfers from all networks for ${historySearchDepth}h history with enhanced retry...`);
+      const allTransfers = await fetchTransfersWithFallback(
+        () => fetchLastTransfers({
+          getNetworkWithSettings,
+          getBridgeInstancesWithSettings,
+          timeframeHours: historySearchDepth
+        }),
+        getHistorySearchDepth,
+        getClaimSearchDepth,
+        {
+          maxRetries: 3,
+          baseDelay: 1000,
+          enableSearchDepthAwareRetry: true,
+          onRetryStatus: (status) => {
+            setRetryStatus({ ...status, type: 'transfers' });
+          }
+        }
+      );
 
       console.log(`🔍 Raw transfers fetched:`, {
         totalTransfers: allTransfers.length,
@@ -895,12 +924,26 @@ const ClaimList = () => {
         fraudDetected: aggregated.fraudDetected
       });
 
-      // Update cache statistics
-      updateCacheStats();
+      // Clear retry status on success
+      setRetryStatus(null);
+
+      // Cache statistics removed from UI - cache still works internally
 
     } catch (error) {
       console.error('Error loading claims and transfers from all networks:', error);
-      toast.error(`Failed to load data: ${error.message}`);
+      
+      // Enhanced error handling with retry and search depth information
+      if (error.message?.includes('Search depth limit too restrictive')) {
+        toast.error(`Search depth too restrictive: ${error.message}. Please increase search depth in settings.`);
+      } else if (error.message?.includes('429') || error.message?.includes('rate limit')) {
+        toast.error(`Rate limit exceeded. Retrying with fallback providers...`);
+      } else if (error.message?.includes('Circuit breaker is OPEN')) {
+        toast.error(`Provider temporarily unavailable. Using fallback providers...`);
+      } else if (error.message?.includes('All providers failed')) {
+        toast.error(`All RPC providers failed. Please check your network connection and RPC settings.`);
+      } else {
+        toast.error(`Failed to load data: ${error.message}`);
+      }
     } finally {
       setLoading(false);
       // Mark that initial load is complete
@@ -908,7 +951,7 @@ const ClaimList = () => {
         setIsInitialLoad(false);
       }
     }
-  }, [account, currentBlock, getNetworkWithSettings, getBridgeInstancesWithSettings, filter, getTransferTokenSymbol, getTokenDecimals, getHistorySearchDepth, getClaimSearchDepth, isInitialLoad, updateCacheStats]);
+  }, [account, currentBlock, getNetworkWithSettings, getBridgeInstancesWithSettings, filter, getTransferTokenSymbol, getTokenDecimals, getHistorySearchDepth, getClaimSearchDepth, isInitialLoad]);
 
 
 
@@ -1096,26 +1139,32 @@ const ClaimList = () => {
             
           </div>
           
-          {/* Cache Statistics */}
-          {cacheStats && cacheStats.totalEntries > 0 && (
-            <div className="flex items-center gap-2 text-xs text-secondary-400">
-              <span>💾 Cache: {cacheStats.totalEntries} entries</span>
-              <button
-                onClick={() => {
-                  clearAllCachedEvents();
-                  updateCacheStats();
-                  toast.success('Cache cleared');
-                }}
-                className="text-warning-400 hover:text-warning-300 transition-colors"
-                title="Clear event cache"
-              >
-                Clear
-              </button>
-            </div>
-          )}
           
         </div>
       </div>
+
+      {/* Retry Status - Only show when actively retrying */}
+      {retryStatus && (
+        <div className="mb-4 p-3 bg-dark-800 rounded-lg border border-dark-700">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-2 text-sm">
+              <span className="text-secondary-400">Retry Status:</span>
+              <span className="text-yellow-400">
+                {retryStatus.type} - Attempt {retryStatus.attempt}/{retryStatus.maxAttempts}
+              </span>
+              {retryStatus.delay && (
+                <span className="text-secondary-400">
+                  (Next retry in {Math.round(retryStatus.delay / 1000)}s)
+                </span>
+              )}
+            </div>
+            <div className="flex items-center gap-2">
+              <div className="w-2 h-2 bg-yellow-500 rounded-full animate-pulse"></div>
+              <span className="text-xs text-yellow-400">Retrying...</span>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Loading State */}
       {loading && (
