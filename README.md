@@ -198,41 +198,16 @@ src/
 
 ### Styling
 
-The app uses Tailwind CSS with custom components:
-
-- **Custom Colors**: Dark theme with primary, accent, and utility colors
-- **Components**: Pre-built button, input, and card components
-- **Animations**: Framer Motion for smooth transitions
-- **Responsive**: Mobile-first responsive design
+The app uses Tailwind CSS with custom components.
 
 ## Security Considerations
 
 - **MetaMask Only**: Only MetaMask is supported for security
 - **Network Validation**: All networks are validated before use
-- **Address Validation**: All addresses are validated using ethers.js
-- **Amount Validation**: All amounts are validated and checked against balances
-- **Stake Protection**: Stakes protect against fraudulent transfers
+- **Address Validation**: All addresses are validated using 
+ethers.js
+- **Smart Contracts**: The contracts are open source and available for review ([evm v1.1](/src/contracts/evm), [evm v1-substrate](/src/contracts/evm_substrate))
 
-## Troubleshooting
-
-### Common Issues
-
-1. **MetaMask Not Detected**
-   - Ensure MetaMask is installed and unlocked
-   - Refresh the page and try again
-
-2. **Network Not Supported**
-   - Add the network to MetaMask manually
-   - Check network configuration in `networks.js`
-
-3. **Insufficient Balance**
-   - Check your token balance
-   - Remember to account for gas fees and stake requirements
-
-4. **Transaction Fails**
-   - Check gas settings in MetaMask
-   - Ensure sufficient balance for gas fees
-   - Verify network connection
 
 ### Debug Mode
 
@@ -254,18 +229,5 @@ localStorage.setItem('debug', 'true');
 
 This project is licensed under the MIT License.
 
-## Support
-
-For support and questions:
-
-- Check the troubleshooting section
-- Review the documentation
-- Open an issue on GitHub
-
-## Roadmap
-
-- [ ] Advanced settings panel
-- [ ] Multi-language support
-- [ ] Dark/light theme toggle
-- [ ] Mobile app version
-- [ ] Additional network support 
+## Responsibility disclaimer
+This is an open source free software. Use it on your own risk. 
