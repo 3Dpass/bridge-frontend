@@ -230,4 +230,4 @@ localStorage.setItem('debug', 'true');
 This project is licensed under the MIT License.
 
 ## Responsibility disclaimer
-This is an open source free software. Use it on your own risk. 
+This is an open source free software. Use it at your own risk. 

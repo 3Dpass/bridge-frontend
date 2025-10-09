@@ -102,7 +102,7 @@ function App() {
                   {
                     step: '1',
                     title: 'Initiate Transfer',
-                    description: 'Select source and destination, offer 2-3% fee to the bridge nodes.',
+                    description: 'Select source and destination. Offer 2-3% fee to the bridge nodes, if you would like them to speed up your transfer.',
                   },
                   {
                     step: '2',
@@ -116,12 +116,12 @@ function App() {
                         Counterstake consensus
                       </a>
                     ),
-                    description: 'Nodes are to claim valid transfers and challenge fraudulent ones.',
+                    description: 'Nodes are to claim valid transfers and challenge fraudulent ones. You can also claim yourself, if the nodes refused to assist.',
                   },
                   {
                     step: '3',
                     title: 'Receive Tokens',
-                    description: 'Receive your tokens on destination chain.',
+                    description: 'Receive your tokens on the destination chain. For self-claimed transfers it is required to wait for the challenging period to expire and then withdraw.',
                   },
                 ].map((item, index) => (
                   <motion.div
@@ -151,6 +151,11 @@ function App() {
           <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
             <div className="text-center space-y-4">
               <div className="flex items-center justify-center space-x-6">
+               <span
+                  className="text-secondary-400 text-xs hover:text-white transition-colors"
+                  >
+                  This is an open-source free software. Use it at your own risk.
+                </span>
                 <a 
                   href="https://counterstake.org" 
                   className="text-secondary-400 text-sm hover:text-white transition-colors"
