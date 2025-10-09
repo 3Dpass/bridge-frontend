@@ -91,7 +91,7 @@ const getFieldMatchStatus = (claim, field) => {
 
 const ClaimList = () => {
   const { account, network, getNetworkWithSettings } = useWeb3();
-  const { getBridgeInstancesWithSettings, getHistorySearchDepth, getClaimSearchDepth } = useSettings();
+  const { getBridgeInstancesWithSettings, getHistorySearchDepth, getClaimSearchDepth, get3DPassTokenDecimalsDisplayMultiplier } = useSettings();
   const [claims, setClaims] = useState([]);
   const [aggregatedData, setAggregatedData] = useState(null);
   const [loading, setLoading] = useState(false);
@@ -291,8 +291,9 @@ const ClaimList = () => {
 
 
 
+
   // All useCallback hooks must be at the top level
-  const formatAmount = useCallback((amount, decimals = 18) => {
+  const formatAmount = useCallback((amount, decimals = 18, tokenAddress = null) => {
     try {
       console.log(`🔍 formatAmount input:`, {
         amount,
@@ -332,6 +333,21 @@ const ClaimList = () => {
       const rawValue = parseFloat(ethers.utils.formatUnits(amountString, decimals));
       console.log(`🔍 formatAmount: rawValue after formatUnits: ${rawValue}`);
       
+      // Check if this is a P3D token and apply decimalsDisplayMultiplier
+      if (tokenAddress) {
+        const decimalsDisplayMultiplier = get3DPassTokenDecimalsDisplayMultiplier(tokenAddress);
+        if (decimalsDisplayMultiplier) {
+          // Apply the multiplier: 0.000001 * 1000000 = 1.0
+          const multipliedNumber = rawValue * decimalsDisplayMultiplier;
+          console.log(`🔍 P3D multiplier applied:`, {
+            originalNumber: rawValue,
+            multiplier: decimalsDisplayMultiplier,
+            result: multipliedNumber
+          });
+          return multipliedNumber.toFixed(6).replace(/\.?0+$/, '') || '0';
+        }
+      }
+      
       // Determine appropriate decimal places dynamically based on the value
       let decimalPlaces;
       
@@ -368,7 +384,7 @@ const ClaimList = () => {
       console.error('Error formatting amount:', amount, error);
       return '0.000000';
     }
-  }, []);
+  }, [get3DPassTokenDecimalsDisplayMultiplier]);
 
   const getTransferTokenSymbol = useCallback((claim) => {
     // First, try to use the token symbol from bridge settings (most accurate)
@@ -482,6 +498,33 @@ const ClaimList = () => {
     }
     return 'Unknown';
   }, [network?.symbol, getNetworkWithSettings]);
+
+  const getStakeTokenAddress = useCallback((claim) => {
+    // Get stake token symbol first
+    const stakeTokenSymbol = getStakeTokenSymbol(claim);
+    
+    // Try to get address from current network tokens first
+    const networkConfig = getNetworkWithSettings(network?.symbol);
+    if (networkConfig && networkConfig.tokens) {
+      const token = networkConfig.tokens[stakeTokenSymbol];
+      if (token && token.address) {
+        return token.address;
+      }
+    }
+    
+    // Try to get address from other networks
+    for (const networkKey of Object.keys(NETWORKS)) {
+      const network = NETWORKS[networkKey];
+      if (network.tokens && network.tokens[stakeTokenSymbol]) {
+        const token = network.tokens[stakeTokenSymbol];
+        if (token && token.address) {
+          return token.address;
+        }
+      }
+    }
+    
+    return null;
+  }, [network?.symbol, getNetworkWithSettings, getStakeTokenSymbol]);
 
   const getStakeTokenDecimals = useCallback((claim) => {
     // Get stake token symbol first
@@ -1825,12 +1868,14 @@ const ClaimList = () => {
                         <span className="text-white ml-2 font-medium">
                           {(() => {
                             const stakeDecimals = getStakeTokenDecimals(claim);
-                            const formatted = formatAmount(claim.yesStake, stakeDecimals);
+                            const stakeTokenAddress = getStakeTokenAddress(claim);
+                            const formatted = formatAmount(claim.yesStake, stakeDecimals, stakeTokenAddress);
                             console.log(`🔍 YES Stake formatting for claim:`, {
                               rawStake: claim.yesStake?.toString(),
                               rawStakeType: typeof claim.yesStake,
                               rawStakeHasToNumber: typeof claim.yesStake?.toNumber === 'function',
                               stakeTokenSymbol: getStakeTokenSymbol(claim),
+                              stakeTokenAddress,
                               stakeDecimals,
                               formatted
                             });
@@ -1844,12 +1889,14 @@ const ClaimList = () => {
                         <span className="text-white ml-2 font-medium">
                           {(() => {
                             const stakeDecimals = getStakeTokenDecimals(claim);
-                            const formatted = formatAmount(claim.noStake, stakeDecimals);
+                            const stakeTokenAddress = getStakeTokenAddress(claim);
+                            const formatted = formatAmount(claim.noStake, stakeDecimals, stakeTokenAddress);
                             console.log(`🔍 NO Stake formatting for claim:`, {
                               rawStake: claim.noStake?.toString(),
                               rawStakeType: typeof claim.noStake,
                               rawStakeHasToNumber: typeof claim.noStake?.toNumber === 'function',
                               stakeTokenSymbol: getStakeTokenSymbol(claim),
+                              stakeTokenAddress,
                               stakeDecimals,
                               formatted
                             });

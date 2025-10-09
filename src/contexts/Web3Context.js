@@ -251,11 +251,27 @@ export const Web3Provider = ({ children }) => {
     loadSettings();
   }, [loadSettings]);
 
+  // Check if current network matches required network
+  const checkNetwork = useCallback((requiredNetwork) => {
+    if (!network || !requiredNetwork) return false;
+    return network.id === requiredNetwork.id;
+  }, [network]);
+
+  // Switch to required network
+  const switchToRequiredNetwork = useCallback(async (requiredNetwork) => {
+    if (!requiredNetwork) {
+      setError('No network specified');
+      return false;
+    }
+    
+    return await switchNetwork(requiredNetwork.id);
+  }, []);
+
   // Switch network
   const switchNetwork = async (networkId) => {
     if (!window.ethereum || !window.ethereum.isMetaMask) {
       setError('MetaMask is not installed or not available');
-      return;
+      return false;
     }
 
     try {
@@ -267,6 +283,7 @@ export const Web3Provider = ({ children }) => {
       // Update network state
       const newNetwork = getNetworkById(networkId);
       setNetwork(newNetwork);
+      return true;
       
     } catch (switchError) {
       // This error code indicates that the chain has not been added to MetaMask
@@ -274,7 +291,7 @@ export const Web3Provider = ({ children }) => {
         const targetNetwork = getNetworkById(networkId);
         if (!targetNetwork) {
           setError('Unsupported network');
-          return;
+          return false;
         }
 
         try {
@@ -291,12 +308,15 @@ export const Web3Provider = ({ children }) => {
           
           // Update network state
           setNetwork(targetNetwork);
+          return true;
           
         } catch (addError) {
           setError('Failed to add network to MetaMask');
+          return false;
         }
       } else {
         setError('Failed to switch network');
+        return false;
       }
     }
   };
@@ -364,6 +384,8 @@ export const Web3Provider = ({ children }) => {
     connect,
     disconnect,
     switchNetwork,
+    checkNetwork,
+    switchToRequiredNetwork,
     
     // Utilities
     formatAddress: (address) => {

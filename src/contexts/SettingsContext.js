@@ -1,5 +1,5 @@
 import React, { createContext, useContext, useState, useEffect, useCallback } from 'react';
-import { NETWORKS, getBridgeInstances, getAssistantContracts, P3D_PRECOMPILE_ADDRESS } from '../config/networks';
+import { NETWORKS, getBridgeInstances, P3D_PRECOMPILE_ADDRESS } from '../config/networks';
 
 const SettingsContext = createContext();
 

@@ -855,7 +855,7 @@ const Withdraw = ({ assistant, onClose, onSuccess }) => {
       setIsProcessing(false);
       isExecutingRef.current = false;
     }
-  }, [account, signer, amount, userShareBalance, assistant, getRequiredNetwork, checkNetwork, switchToRequiredNetwork, getAssistantABI, onSuccess, lastClickTime, loading, isProcessing]);
+  }, [account, signer, amount, userShareBalance, assistant, getRequiredNetwork, checkNetwork, switchToRequiredNetwork, getAssistantABI, onSuccess, lastClickTime, loading, isProcessing, getAllNetworksWithSettings, getTokenDecimalsFromSettings]);
 
 
   const handleMaxAmount = () => {

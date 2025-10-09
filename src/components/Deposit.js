@@ -179,6 +179,100 @@ const Deposit = ({ assistant, onClose, onSuccess }) => {
     }
   }, [getAllNetworksWithSettings]);
 
+  // Convert from display amount (with multiplier) to actual amount (for contract)
+  const convertDisplayToActual = useCallback((displayAmount, decimals, tokenAddress) => {
+    try {
+      if (!displayAmount || parseFloat(displayAmount) === 0) return '0';
+      
+      const num = parseFloat(displayAmount);
+      
+      // Check if this is a P3D token and remove the multiplier
+      if (tokenAddress) {
+        const decimalsDisplayMultiplier = get3DPassTokenDecimalsDisplayMultiplier(tokenAddress);
+        if (decimalsDisplayMultiplier) {
+          // Remove the multiplier: 1.0 / 1000000 = 0.000001
+          const actualNumber = num / decimalsDisplayMultiplier;
+          return actualNumber.toString();
+        }
+      }
+      
+      return displayAmount;
+    } catch (error) {
+      return '0';
+    }
+  }, [get3DPassTokenDecimalsDisplayMultiplier]);
+
+  // Convert from actual amount (from contract) to display amount (with multiplier)
+  const convertActualToDisplay = useCallback((actualAmount, decimals, tokenAddress) => {
+    try {
+      if (!actualAmount || parseFloat(actualAmount) === 0) return '0';
+      
+      const num = parseFloat(actualAmount);
+      
+      // Check if this is a P3D token and apply the multiplier
+      if (tokenAddress) {
+        const decimalsDisplayMultiplier = get3DPassTokenDecimalsDisplayMultiplier(tokenAddress);
+        if (decimalsDisplayMultiplier) {
+          // Apply the multiplier: 0.000001 * 1000000 = 1.0
+          const displayNumber = num * decimalsDisplayMultiplier;
+          return displayNumber.toFixed(6).replace(/\.?0+$/, '') || '0';
+        }
+      }
+      
+      return actualAmount;
+    } catch (error) {
+      return '0';
+    }
+  }, [get3DPassTokenDecimalsDisplayMultiplier]);
+
+  const formatBalance = useCallback((balance, decimals = 18, tokenAddress = null) => {
+    try {
+      const formatted = ethers.utils.formatUnits(balance, decimals);
+      const number = parseFloat(formatted);
+      
+      // Check if this is a P3D token and apply decimalsDisplayMultiplier
+      if (tokenAddress) {
+        const decimalsDisplayMultiplier = get3DPassTokenDecimalsDisplayMultiplier(tokenAddress);
+        if (decimalsDisplayMultiplier) {
+          // Apply the multiplier: 0.000001 * 1000000 = 1.0
+          const multipliedNumber = number * decimalsDisplayMultiplier;
+          return multipliedNumber.toFixed(6).replace(/\.?0+$/, '') || '0';
+        }
+      }
+      
+      // Dynamic decimal adjustment based on number magnitude
+      let displayDecimals;
+      if (number === 0) {
+        displayDecimals = 2;
+      } else if (number < 0.000001) {
+        displayDecimals = 12;
+      } else if (number < 0.00001) {
+        displayDecimals = 10;
+      } else if (number < 0.0001) {
+        displayDecimals = 8;
+      } else if (number < 0.001) {
+        displayDecimals = 6;
+      } else if (number < 0.01) {
+        displayDecimals = 4;
+      } else if (number < 1) {
+        displayDecimals = 3;
+      } else if (number < 100) {
+        displayDecimals = 2;
+      } else {
+        displayDecimals = 2;
+      }
+      
+      // Cap decimals to not exceed the token's actual decimals
+      const maxDisplayDecimals = Math.min(displayDecimals, decimals);
+      
+      const cleanNumber = parseFloat(formatted);
+      return cleanNumber.toFixed(maxDisplayDecimals).replace(/\.?0+$/, '') || '0';
+    } catch (error) {
+      console.error('Error formatting balance:', error);
+      return '0';
+    }
+  }, [get3DPassTokenDecimalsDisplayMultiplier]);
+
   // Get stake token address and symbol
   const stakeTokenAddress = getStakeTokenAddress(assistant);
   const stakeTokenSymbol = getStakeTokenSymbol(assistant);
@@ -235,7 +329,7 @@ const Deposit = ({ assistant, onClose, onSuccess }) => {
         formattedImageBalance: formatBalance(userImageBalance)
       });
     }
-  }, [assistant.key, assistant.type, assistant.bridgeAddress, imageTokenAddress, imageTokenSymbol, userImageBalance]);
+  }, [assistant.key, assistant.type, assistant.bridgeAddress, imageTokenAddress, imageTokenSymbol, userImageBalance, formatBalance]);
 
   // Get the required network for this assistant
   const getRequiredNetwork = useCallback(() => {
@@ -791,7 +885,7 @@ const Deposit = ({ assistant, onClose, onSuccess }) => {
     } finally {
       setIsCheckingApproval(false);
     }
-  }, [stakeTokenAddress, amount, imageAmount, assistant.address, assistant.type, account, signer, createTokenContract, checkNetwork, checkBatchApprovalNeeded]);
+  }, [stakeTokenAddress, amount, imageAmount, assistant.address, assistant.type, account, signer, createTokenContract, checkNetwork, checkBatchApprovalNeeded, convertActualToDisplay, convertDisplayToActual]);
 
   // Handle approval
   const handleApprove = async () => {
@@ -1061,7 +1155,7 @@ const Deposit = ({ assistant, onClose, onSuccess }) => {
     } finally {
       console.log('🔍 loadUserBalances completed');
     }
-  }, [account, provider, stakeTokenAddress, imageTokenAddress, assistant.type, assistant.bridgeAddress, getAllNetworksWithSettings, get3DPassTokenDecimals, network?.chainId, network?.id]);
+  }, [account, provider, stakeTokenAddress, imageTokenAddress, assistant.type, assistant.bridgeAddress, getAllNetworksWithSettings, get3DPassTokenDecimals, network?.chainId, network?.id, assistant.key, getTokenDecimalsFromSettings]);
 
   // Load balances when component mounts
   React.useEffect(() => {
@@ -1145,98 +1239,6 @@ const Deposit = ({ assistant, onClose, onSuccess }) => {
     checkApproval();
   }, [signer, stakeTokenAddress, amount, imageAmount, assistant.type, checkApprovalNeeded]);
 
-  // Convert from display amount (with multiplier) to actual amount (for contract)
-  const convertDisplayToActual = (displayAmount, decimals, tokenAddress) => {
-    try {
-      if (!displayAmount || parseFloat(displayAmount) === 0) return '0';
-      
-      const num = parseFloat(displayAmount);
-      
-      // Check if this is a P3D token and remove the multiplier
-      if (tokenAddress) {
-        const decimalsDisplayMultiplier = get3DPassTokenDecimalsDisplayMultiplier(tokenAddress);
-        if (decimalsDisplayMultiplier) {
-          // Remove the multiplier: 1.0 / 1000000 = 0.000001
-          const actualNumber = num / decimalsDisplayMultiplier;
-          return actualNumber.toString();
-        }
-      }
-      
-      return displayAmount;
-    } catch (error) {
-      return '0';
-    }
-  };
-
-  // Convert from actual amount (from contract) to display amount (with multiplier)
-  const convertActualToDisplay = (actualAmount, decimals, tokenAddress) => {
-    try {
-      if (!actualAmount || parseFloat(actualAmount) === 0) return '0';
-      
-      const num = parseFloat(actualAmount);
-      
-      // Check if this is a P3D token and apply the multiplier
-      if (tokenAddress) {
-        const decimalsDisplayMultiplier = get3DPassTokenDecimalsDisplayMultiplier(tokenAddress);
-        if (decimalsDisplayMultiplier) {
-          // Apply the multiplier: 0.000001 * 1000000 = 1.0
-          const displayNumber = num * decimalsDisplayMultiplier;
-          return displayNumber.toFixed(6).replace(/\.?0+$/, '') || '0';
-        }
-      }
-      
-      return actualAmount;
-    } catch (error) {
-      return '0';
-    }
-  };
-
-  const formatBalance = (balance, decimals = 18, tokenAddress = null) => {
-    try {
-      const formatted = ethers.utils.formatUnits(balance, decimals);
-      const num = parseFloat(formatted);
-      
-      // Check if this is a P3D token and apply decimalsDisplayMultiplier
-      if (tokenAddress) {
-        const decimalsDisplayMultiplier = get3DPassTokenDecimalsDisplayMultiplier(tokenAddress);
-        if (decimalsDisplayMultiplier) {
-          // Apply the multiplier: 0.000001 * 1000000 = 1.0
-          const multipliedNumber = num * decimalsDisplayMultiplier;
-          return multipliedNumber.toFixed(6).replace(/\.?0+$/, '') || '0';
-        }
-      }
-      
-      // Handle zero or very small numbers
-      if (num === 0) return '0';
-      
-      // Cap decimals to token's actual decimals and max 12
-      const maxDisplayDecimals = Math.min(12, decimals);
-      
-      // Dynamic decimal adjustment based on number magnitude
-      let displayDecimals;
-      if (num < 0.000001) {
-        displayDecimals = maxDisplayDecimals; // Show full precision for very small numbers
-      } else if (num < 0.0001) {
-        displayDecimals = Math.min(8, maxDisplayDecimals);
-      } else if (num < 0.01) {
-        displayDecimals = Math.min(6, maxDisplayDecimals);
-      } else if (num < 1) {
-        displayDecimals = Math.min(4, maxDisplayDecimals);
-      } else if (num < 100) {
-        displayDecimals = Math.min(3, maxDisplayDecimals);
-      } else if (num < 10000) {
-        displayDecimals = Math.min(2, maxDisplayDecimals);
-      } else {
-        displayDecimals = Math.min(1, maxDisplayDecimals);
-      }
-      
-      // Format and remove trailing zeros
-      const cleanNumber = parseFloat(formatted);
-      return cleanNumber.toFixed(displayDecimals).replace(/\.?0+$/, '') || '0';
-    } catch (error) {
-      return '0';
-    }
-  };
 
   const handleDeposit = async () => {
     console.log('🚀 handleDeposit called!');

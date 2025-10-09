@@ -202,6 +202,66 @@ const AssistantsList = () => {
     }
   }, [getAllNetworksWithSettings]);
 
+  const formatBalance = useCallback((balance, decimals = 18, tokenAddress = null) => {
+    try {
+      const formatted = ethers.utils.formatUnits(balance, decimals);
+      const number = parseFloat(formatted);
+      
+      // Check if this is a P3D token and apply decimalsDisplayMultiplier
+      if (tokenAddress) {
+        const decimalsDisplayMultiplier = get3DPassTokenDecimalsDisplayMultiplier(tokenAddress);
+        console.log(`🔍 formatBalance P3D check:`, {
+          tokenAddress,
+          decimalsDisplayMultiplier,
+          originalNumber: number,
+          hasMultiplier: !!decimalsDisplayMultiplier
+        });
+        if (decimalsDisplayMultiplier) {
+          // Apply the multiplier: 0.000001 * 1000000 = 1.0
+          const multipliedNumber = number * decimalsDisplayMultiplier;
+          console.log(`🔍 P3D multiplier applied:`, {
+            originalNumber: number,
+            multiplier: decimalsDisplayMultiplier,
+            result: multipliedNumber
+          });
+          return multipliedNumber.toFixed(6).replace(/\.?0+$/, '') || '0';
+        }
+      }
+      
+      // Cap the displayed decimals to not exceed the token's actual decimals
+      const maxTokenDecimals = Math.min(12, decimals);
+      
+      // Dynamic decimal adjustment based on number magnitude
+      let displayDecimals;
+      if (number === 0) {
+        displayDecimals = 6; // Show 6 decimals for zero
+      } else if (number < 0.000001) {
+        displayDecimals = maxTokenDecimals; // Show full precision for very small numbers
+      } else if (number < 0.0001) {
+        displayDecimals = Math.min(10, maxTokenDecimals); // Show up to 10 decimals
+      } else if (number < 0.01) {
+        displayDecimals = Math.min(8, maxTokenDecimals); // Show up to 8 decimals
+      } else if (number < 1) {
+        displayDecimals = Math.min(6, maxTokenDecimals); // Show up to 6 decimals
+      } else if (number < 100) {
+        displayDecimals = Math.min(4, maxTokenDecimals); // Show up to 4 decimals
+      } else if (number < 10000) {
+        displayDecimals = Math.min(2, maxTokenDecimals); // Show up to 2 decimals
+      } else {
+        displayDecimals = 0; // Show no decimals for large numbers
+      }
+      
+      // Format with calculated decimals and remove trailing zeros
+      const formattedNumber = number.toFixed(displayDecimals);
+      // Convert back to number and then to string to remove trailing zeros
+      // but ensure we don't get scientific notation for very small numbers
+      const cleanNumber = parseFloat(formattedNumber);
+      return cleanNumber.toFixed(displayDecimals).replace(/\.?0+$/, '') || '0';
+    } catch (error) {
+      return '0.000000';
+    }
+  }, [get3DPassTokenDecimalsDisplayMultiplier]);
+
   const getForeignTokenBalance = useCallback(async (assistant, contractAddress, tokenAddress, networkKey) => {
     console.log(`🔍 getForeignTokenBalance called:`, {
       assistantType: assistant.type,
@@ -340,7 +400,7 @@ const AssistantsList = () => {
       console.warn(`Error getting foreign token balance for ${tokenAddress} on ${networkKey}:`, error.message);
       return '0';
     }
-  }, [getAllNetworksWithSettings, isKnownPrecompile]);
+  }, [getAllNetworksWithSettings, isKnownPrecompile, formatBalance]);
 
   const getForeignTokenDecimals = useCallback(async (assistant, tokenAddress, networkKey) => {
     if (!tokenAddress || tokenAddress === '0x0000000000000000000000000000000000000000') {
@@ -784,7 +844,7 @@ const AssistantsList = () => {
       foreignTokenBalancesCount: Object.keys(newForeignTokenBalances).length,
       timestamp: new Date().toISOString()
     });
-  }, [assistants, getTokenBalance, getTokenTotalSupply, getStakeTokenAddress, getForeignTokenAddress, getForeignTokenBalance, getForeignTokenDecimals, getAssistantFees, getAssistantManager, validateAssistantState, getTokenDecimalsFromSettings, getAllNetworksWithSettings, get3DPassTokenDecimalsDisplayMultiplier]);
+  }, [assistants, getTokenBalance, getTokenTotalSupply, getStakeTokenAddress, getForeignTokenAddress, getForeignTokenBalance, getForeignTokenDecimals, getAssistantFees, getAssistantManager, validateAssistantState, getTokenDecimalsFromSettings, getAllNetworksWithSettings, formatBalance]);
 
   useEffect(() => {
     loadAssistants();
@@ -796,65 +856,6 @@ const AssistantsList = () => {
     }
   }, [assistants, loadBalances]);
 
-  const formatBalance = (balance, decimals = 18, tokenAddress = null) => {
-    try {
-      const formatted = ethers.utils.formatUnits(balance, decimals);
-      const number = parseFloat(formatted);
-      
-      // Check if this is a P3D token and apply decimalsDisplayMultiplier
-      if (tokenAddress) {
-        const decimalsDisplayMultiplier = get3DPassTokenDecimalsDisplayMultiplier(tokenAddress);
-        console.log(`🔍 formatBalance P3D check:`, {
-          tokenAddress,
-          decimalsDisplayMultiplier,
-          originalNumber: number,
-          hasMultiplier: !!decimalsDisplayMultiplier
-        });
-        if (decimalsDisplayMultiplier) {
-          // Apply the multiplier: 0.000001 * 1000000 = 1.0
-          const multipliedNumber = number * decimalsDisplayMultiplier;
-          console.log(`🔍 P3D multiplier applied:`, {
-            originalNumber: number,
-            multiplier: decimalsDisplayMultiplier,
-            result: multipliedNumber
-          });
-          return multipliedNumber.toFixed(6).replace(/\.?0+$/, '') || '0';
-        }
-      }
-      
-      // Cap the displayed decimals to not exceed the token's actual decimals
-      const maxTokenDecimals = Math.min(12, decimals);
-      
-      // Dynamic decimal adjustment based on number magnitude
-      let displayDecimals;
-      if (number === 0) {
-        displayDecimals = 6; // Show 6 decimals for zero
-      } else if (number < 0.000001) {
-        displayDecimals = maxTokenDecimals; // Show full precision for very small numbers
-      } else if (number < 0.0001) {
-        displayDecimals = Math.min(10, maxTokenDecimals); // Show up to 10 decimals
-      } else if (number < 0.01) {
-        displayDecimals = Math.min(8, maxTokenDecimals); // Show up to 8 decimals
-      } else if (number < 1) {
-        displayDecimals = Math.min(6, maxTokenDecimals); // Show up to 6 decimals
-      } else if (number < 100) {
-        displayDecimals = Math.min(4, maxTokenDecimals); // Show up to 4 decimals
-      } else if (number < 10000) {
-        displayDecimals = Math.min(2, maxTokenDecimals); // Show up to 2 decimals
-      } else {
-        displayDecimals = 0; // Show no decimals for large numbers
-      }
-      
-      // Format with calculated decimals and remove trailing zeros
-      const formattedNumber = number.toFixed(displayDecimals);
-      // Convert back to number and then to string to remove trailing zeros
-      // but ensure we don't get scientific notation for very small numbers
-      const cleanNumber = parseFloat(formattedNumber);
-      return cleanNumber.toFixed(displayDecimals).replace(/\.?0+$/, '') || '0';
-    } catch (error) {
-      return '0.000000';
-    }
-  };
 
   const getTokenSymbol = useCallback((assistant) => {
     // Try to find the stake token symbol from the bridge configuration
