@@ -15,7 +15,7 @@ import {
 const Deposit = ({ assistant, onClose, onSuccess }) => {
   console.log('🎯 Deposit component rendered for assistant:', assistant.address);
   const { account, provider, signer, network } = useWeb3();
-  const { getAllNetworksWithSettings, get3DPassTokenDecimals } = useSettings();
+  const { getAllNetworksWithSettings, get3DPassTokenDecimals, get3DPassTokenDecimalsDisplayMultiplier } = useSettings();
   const [amount, setAmount] = useState('');
   const [imageAmount, setImageAmount] = useState(''); // For ImportWrapper assistants
   const [loading, setLoading] = useState(false);
@@ -144,10 +144,55 @@ const Deposit = ({ assistant, onClose, onSuccess }) => {
     return 'Unknown';
   }, [getAllNetworksWithSettings]);
 
+  // Get token decimals from settings
+  const getTokenDecimalsFromSettings = useCallback((tokenAddress) => {
+    if (!tokenAddress || tokenAddress === '0x0000000000000000000000000000000000000000') {
+      return 18; // Default decimals
+    }
+    try {
+      const networks = getAllNetworksWithSettings();
+      // Check if it's a native token first
+      for (const network of Object.values(networks)) {
+        if (network.tokens) {
+          for (const token of Object.values(network.tokens)) {
+            if (token.isNative && token.address.toLowerCase() === tokenAddress.toLowerCase()) {
+              return token.decimals || 18;
+            }
+          }
+        }
+      }
+      // Check all networks for the token
+      for (const network of Object.values(networks)) {
+        if (network.tokens) {
+          for (const token of Object.values(network.tokens)) {
+            if (token.address.toLowerCase() === tokenAddress.toLowerCase()) {
+              return token.decimals || 18;
+            }
+          }
+        }
+      }
+      console.warn(`Token decimals not found in settings for: ${tokenAddress}`);
+      return 18; // Default decimals
+    } catch (error) {
+      console.warn(`Error getting token decimals from settings for ${tokenAddress}:`, error.message);
+      return 18; // Default decimals
+    }
+  }, [getAllNetworksWithSettings]);
+
   // Get stake token address and symbol
   const stakeTokenAddress = getStakeTokenAddress(assistant);
   const stakeTokenSymbol = getStakeTokenSymbol(assistant);
   const imageTokenSymbol = getImageTokenSymbol(assistant);
+  
+  // Debug logging for stake token resolution
+  console.log('🔍 Deposit component stake token info:', {
+    assistantKey: assistant.key,
+    assistantType: assistant.type,
+    bridgeAddress: assistant.bridgeAddress,
+    stakeTokenAddress,
+    stakeTokenSymbol,
+    hasStakeTokenAddress: !!stakeTokenAddress
+  });
   
   // Debug logging for Import Wrapper assistants
   if (assistant.type === 'import_wrapper') {
@@ -488,14 +533,18 @@ const Deposit = ({ assistant, onClose, onSuccess }) => {
       setRequiredAmount(`${actualStakeAmount} ${stakeTokenSymbol}\n${actualImageAmount} ${imageTokenSymbol}`);
       setCurrentAllowance(`${formattedStakeCurrent} ${stakeTokenSymbol}\n${formattedImageCurrent} ${imageTokenSymbol}`);
       
-      // Check if approval is needed for both tokens (always check against large approval amounts)
-      const needsStakeApproval = stakeAllowance.lt(maxApprovalAmount);
-      const needsImageApproval = imageAllowance.lt(maxImageApprovalAmount);
+      // Check if approval is needed for both tokens
+      // Consider approved if allowance is greater than 100K tokens (practical threshold)
+      const practicalApprovalThreshold = ethers.utils.parseUnits('100000', stakeDecimals);
+      const practicalImageApprovalThreshold = ethers.utils.parseUnits('100000', imageDecimals);
+      
+      const needsStakeApproval = stakeAllowance.lt(practicalApprovalThreshold);
+      const needsImageApproval = imageAllowance.lt(practicalImageApprovalThreshold);
       const needsApproval = needsStakeApproval || needsImageApproval;
       
       console.log('🔍 Batch approval check completed:', {
-        maxApprovalAmount: maxApprovalAmount.toString(),
-        maxImageApprovalAmount: maxImageApprovalAmount.toString(),
+        practicalApprovalThreshold: practicalApprovalThreshold.toString(),
+        practicalImageApprovalThreshold: practicalImageApprovalThreshold.toString(),
         stakeAllowance: stakeAllowance.toString(),
         imageAllowance: imageAllowance.toString(),
         needsStakeApproval,
@@ -710,19 +759,23 @@ const Deposit = ({ assistant, onClose, onSuccess }) => {
       setIsCheckingApproval(true);
       const tokenContract = createTokenContract(stakeTokenAddress);
       const actualDecimals = await tokenContract.decimals();
-      const amountWei = ethers.utils.parseUnits(amount, actualDecimals);
+      
+      // Convert display amount to actual amount for approval check
+      const actualAmount = convertDisplayToActual(amount, actualDecimals, stakeTokenAddress);
+      const amountWei = ethers.utils.parseUnits(actualAmount, actualDecimals);
       const allowance = await tokenContract.allowance(account, assistant.address);
       
-      // Store the values for display
-      const formattedRequired = ethers.utils.formatUnits(amountWei, actualDecimals);
-      const formattedCurrent = ethers.utils.formatUnits(allowance, actualDecimals);
+      // Store the values for display (convert back to display format)
+      const formattedRequired = convertActualToDisplay(ethers.utils.formatUnits(amountWei, actualDecimals), actualDecimals, stakeTokenAddress);
+      const formattedCurrent = convertActualToDisplay(ethers.utils.formatUnits(allowance, actualDecimals), actualDecimals, stakeTokenAddress);
       
       setRequiredAmount(formattedRequired);
       setCurrentAllowance(formattedCurrent);
       
       const needsApproval = allowance.lt(amountWei);
       console.log('🔍 Approval check completed:', {
-        amount,
+        displayAmount: amount,
+        actualAmount,
         actualDecimals,
         amountWei: amountWei.toString(),
         allowance: allowance.toString(),
@@ -765,7 +818,10 @@ const Deposit = ({ assistant, onClose, onSuccess }) => {
     try {
       const tokenContract = createTokenContract(stakeTokenAddress);
       const actualDecimals = await tokenContract.decimals();
-      const amountWei = ethers.utils.parseUnits(amount, actualDecimals);
+      
+      // Convert display amount to actual amount for approval
+      const actualAmount = convertDisplayToActual(amount, actualDecimals, stakeTokenAddress);
+      const amountWei = ethers.utils.parseUnits(actualAmount, actualDecimals);
       
       console.log('🔐 Approving assistant to spend tokens...');
       const approveTx = await tokenContract.approve(assistant.address, amountWei, { 
@@ -834,7 +890,12 @@ const Deposit = ({ assistant, onClose, onSuccess }) => {
       
       // Load stake token balance
       if (stakeTokenAddress) {
-        console.log('🔍 Loading stake token balance for:', stakeTokenAddress);
+        console.log('🔍 Loading stake token balance for:', {
+          stakeTokenAddress,
+          account,
+          assistantType: assistant.type,
+          bridgeAddress: assistant.bridgeAddress
+        });
         const networks = getAllNetworksWithSettings();
         const isNativeToken = Object.values(networks).some(network => {
           if (network.tokens) {
@@ -847,6 +908,10 @@ const Deposit = ({ assistant, onClose, onSuccess }) => {
 
         if (isNativeToken) {
           const balance = await provider.getBalance(account);
+          console.log('🔍 Native token balance loaded:', {
+            balance: balance.toString(),
+            formatted: ethers.utils.formatUnits(balance, 18)
+          });
           setUserBalance(balance.toString());
         } else {
           const tokenABI = [
@@ -860,8 +925,27 @@ const Deposit = ({ assistant, onClose, onSuccess }) => {
             provider
           );
           const balance = await tokenContract.balanceOf(account);
+          
+          // Get decimals from settings instead of contract
+          const tokenDecimals = getTokenDecimalsFromSettings(stakeTokenAddress);
+          
+          console.log('🔍 ERC20 token balance loaded:', {
+            balance: balance.toString(),
+            formatted: ethers.utils.formatUnits(balance, tokenDecimals),
+            tokenAddress: stakeTokenAddress,
+            account,
+            tokenDecimals
+          });
           setUserBalance(balance.toString());
         }
+      } else {
+        console.log('⚠️ No stake token address found for assistant:', {
+          assistantKey: assistant.key,
+          assistantType: assistant.type,
+          bridgeAddress: assistant.bridgeAddress,
+          stakeTokenAddress
+        });
+        setUserBalance('0');
       }
 
       // Load image token balance for ImportWrapper assistants
@@ -1061,12 +1145,96 @@ const Deposit = ({ assistant, onClose, onSuccess }) => {
     checkApproval();
   }, [signer, stakeTokenAddress, amount, imageAmount, assistant.type, checkApprovalNeeded]);
 
-  const formatBalance = (balance, decimals = 18) => {
+  // Convert from display amount (with multiplier) to actual amount (for contract)
+  const convertDisplayToActual = (displayAmount, decimals, tokenAddress) => {
+    try {
+      if (!displayAmount || parseFloat(displayAmount) === 0) return '0';
+      
+      const num = parseFloat(displayAmount);
+      
+      // Check if this is a P3D token and remove the multiplier
+      if (tokenAddress) {
+        const decimalsDisplayMultiplier = get3DPassTokenDecimalsDisplayMultiplier(tokenAddress);
+        if (decimalsDisplayMultiplier) {
+          // Remove the multiplier: 1.0 / 1000000 = 0.000001
+          const actualNumber = num / decimalsDisplayMultiplier;
+          return actualNumber.toString();
+        }
+      }
+      
+      return displayAmount;
+    } catch (error) {
+      return '0';
+    }
+  };
+
+  // Convert from actual amount (from contract) to display amount (with multiplier)
+  const convertActualToDisplay = (actualAmount, decimals, tokenAddress) => {
+    try {
+      if (!actualAmount || parseFloat(actualAmount) === 0) return '0';
+      
+      const num = parseFloat(actualAmount);
+      
+      // Check if this is a P3D token and apply the multiplier
+      if (tokenAddress) {
+        const decimalsDisplayMultiplier = get3DPassTokenDecimalsDisplayMultiplier(tokenAddress);
+        if (decimalsDisplayMultiplier) {
+          // Apply the multiplier: 0.000001 * 1000000 = 1.0
+          const displayNumber = num * decimalsDisplayMultiplier;
+          return displayNumber.toFixed(6).replace(/\.?0+$/, '') || '0';
+        }
+      }
+      
+      return actualAmount;
+    } catch (error) {
+      return '0';
+    }
+  };
+
+  const formatBalance = (balance, decimals = 18, tokenAddress = null) => {
     try {
       const formatted = ethers.utils.formatUnits(balance, decimals);
-      return parseFloat(formatted).toFixed(6);
+      const num = parseFloat(formatted);
+      
+      // Check if this is a P3D token and apply decimalsDisplayMultiplier
+      if (tokenAddress) {
+        const decimalsDisplayMultiplier = get3DPassTokenDecimalsDisplayMultiplier(tokenAddress);
+        if (decimalsDisplayMultiplier) {
+          // Apply the multiplier: 0.000001 * 1000000 = 1.0
+          const multipliedNumber = num * decimalsDisplayMultiplier;
+          return multipliedNumber.toFixed(6).replace(/\.?0+$/, '') || '0';
+        }
+      }
+      
+      // Handle zero or very small numbers
+      if (num === 0) return '0';
+      
+      // Cap decimals to token's actual decimals and max 12
+      const maxDisplayDecimals = Math.min(12, decimals);
+      
+      // Dynamic decimal adjustment based on number magnitude
+      let displayDecimals;
+      if (num < 0.000001) {
+        displayDecimals = maxDisplayDecimals; // Show full precision for very small numbers
+      } else if (num < 0.0001) {
+        displayDecimals = Math.min(8, maxDisplayDecimals);
+      } else if (num < 0.01) {
+        displayDecimals = Math.min(6, maxDisplayDecimals);
+      } else if (num < 1) {
+        displayDecimals = Math.min(4, maxDisplayDecimals);
+      } else if (num < 100) {
+        displayDecimals = Math.min(3, maxDisplayDecimals);
+      } else if (num < 10000) {
+        displayDecimals = Math.min(2, maxDisplayDecimals);
+      } else {
+        displayDecimals = Math.min(1, maxDisplayDecimals);
+      }
+      
+      // Format and remove trailing zeros
+      const cleanNumber = parseFloat(formatted);
+      return cleanNumber.toFixed(displayDecimals).replace(/\.?0+$/, '') || '0';
     } catch (error) {
-      return '0.000000';
+      return '0';
     }
   };
 
@@ -1116,17 +1284,37 @@ const Deposit = ({ assistant, onClose, onSuccess }) => {
       await new Promise(resolve => setTimeout(resolve, 1000));
     }
 
-    // Now check balances after ensuring we're on the correct network
-    const amountWei = ethers.utils.parseUnits(amount, 18);
+    // Convert display amounts to actual amounts for contract calls
+    const tokenDecimals = getTokenDecimalsFromSettings(stakeTokenAddress);
+    const actualAmount = convertDisplayToActual(amount, tokenDecimals, stakeTokenAddress);
+    const amountWei = ethers.utils.parseUnits(actualAmount, tokenDecimals);
+    
+    console.log('🔍 Amount conversion for deposit:', {
+      displayAmount: amount,
+      actualAmount,
+      amountWei: amountWei.toString(),
+      tokenDecimals,
+      stakeTokenAddress
+    });
+    
     if (amountWei.gt(userBalance)) {
       toast.error('Insufficient balance');
       return;
     }
 
     if (assistant.type === 'import_wrapper' || assistant.type === 'import') {
-      // Use consistent decimals from settings for balance check
+      // Convert image amount from display to actual
       const imageTokenDecimalsForBalance = get3DPassTokenDecimals(imageTokenAddress) || 18;
-      const imageAmountWei = ethers.utils.parseUnits(imageAmount, imageTokenDecimalsForBalance);
+      const actualImageAmount = convertDisplayToActual(imageAmount, imageTokenDecimalsForBalance, imageTokenAddress);
+      const imageAmountWei = ethers.utils.parseUnits(actualImageAmount, imageTokenDecimalsForBalance);
+      
+      console.log('🔍 Image amount conversion for deposit:', {
+        displayImageAmount: imageAmount,
+        actualImageAmount,
+        imageAmountWei: imageAmountWei.toString(),
+        imageTokenDecimals: imageTokenDecimalsForBalance,
+        imageTokenAddress
+      });
       console.log('🔍 Balance check for', assistant.type, 'assistant:', {
         imageAmount,
         imageAmountWei: imageAmountWei.toString(),
@@ -1188,7 +1376,8 @@ const Deposit = ({ assistant, onClose, onSuccess }) => {
       const stakeTokenDecimals = get3DPassTokenDecimals(stakeTokenAddress) || 18;
       const imageTokenDecimalsFromSettings = get3DPassTokenDecimals(imageTokenAddress) || 18;
       
-      const amountWei = ethers.utils.parseUnits(amount, stakeTokenDecimals);
+      // Use the already converted amounts from above
+      // amountWei and imageAmountWei are already calculated with proper conversion
       console.log('🔍 Amount details:', {
         amount,
         amountWei: amountWei.toString(),
@@ -1574,11 +1763,13 @@ const Deposit = ({ assistant, onClose, onSuccess }) => {
   };
 
   const handleMaxAmount = () => {
-    setAmount(formatBalance(userBalance));
+    const tokenDecimals = getTokenDecimalsFromSettings(stakeTokenAddress);
+    const displayAmount = formatBalance(userBalance, tokenDecimals, stakeTokenAddress);
+    setAmount(displayAmount);
   };
 
   const handleMaxImageAmount = () => {
-    setImageAmount(formatBalance(userImageBalance, imageTokenDecimals));
+    setImageAmount(formatBalance(userImageBalance, imageTokenDecimals, imageTokenAddress));
   };
 
   const renderStep = () => {
@@ -1750,7 +1941,7 @@ const Deposit = ({ assistant, onClose, onSuccess }) => {
                   <span>Processing Deposit...</span>
                 </div>
               ) : (
-                <span>Deposit {amount} {stakeTokenSymbol}</span>
+                <span>Deposit {stakeTokenSymbol} and {imageTokenSymbol}</span>
               )}
             </button>
           </div>
@@ -1818,7 +2009,7 @@ const Deposit = ({ assistant, onClose, onSuccess }) => {
                   </button>
                 </div>
                 <p className="text-xs text-secondary-500 mt-1">
-                  Balance: {formatBalance(userBalance)} {stakeTokenSymbol}
+                  Balance: {formatBalance(userBalance, getTokenDecimalsFromSettings(stakeTokenAddress), stakeTokenAddress)} {stakeTokenSymbol}
                 </p>
               </div>
 
@@ -1843,28 +2034,9 @@ const Deposit = ({ assistant, onClose, onSuccess }) => {
                       Max
                     </button>
                   </div>
-                  <div className="flex items-center justify-between mt-1">
-                    <p className="text-xs text-secondary-500">
-                      Balance: {formatBalance(userImageBalance, imageTokenDecimals)} {imageTokenSymbol || 'wUSDT'}
-                    </p>
-                    <button
-                      onClick={() => {
-                        console.log('🔄 Manual balance refresh triggered');
-                        console.log('🔍 Current state before refresh:', {
-                          imageTokenAddress,
-                          imageTokenSymbol,
-                          userImageBalance,
-                          account,
-                          assistantType: assistant.type,
-                          bridgeAddress: assistant.bridgeAddress
-                        });
-                        loadUserBalances();
-                      }}
-                      className="text-xs text-primary-400 hover:text-primary-300 underline"
-                    >
-                      Refresh
-                    </button>
-                  </div>
+                  <p className="text-xs text-secondary-500 mt-1">
+                    Balance: {formatBalance(userImageBalance, imageTokenDecimals, imageTokenAddress)} {imageTokenSymbol || 'wUSDT'}
+                  </p>
                 </div>
               )}
             </>

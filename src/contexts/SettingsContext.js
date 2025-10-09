@@ -317,6 +317,48 @@ export const SettingsProvider = ({ children }) => {
     });
   }, []);
 
+  // Update manager address for an assistant
+  const updateAssistantManager = useCallback((assistantAddress, newManagerAddress) => {
+    setSettings(prev => {
+      const newSettings = { ...prev };
+      
+      // Find the network and assistant that contains this assistant address
+      for (const networkKey in newSettings) {
+        const networkSettings = newSettings[networkKey];
+        if (networkSettings?.assistants) {
+          for (const assistantKey in networkSettings.assistants) {
+            const assistant = networkSettings.assistants[assistantKey];
+            if (assistant.address === assistantAddress) {
+              // Update the manager address
+              newSettings[networkKey] = {
+                ...networkSettings,
+                assistants: {
+                  ...networkSettings.assistants,
+                  [assistantKey]: {
+                    ...assistant,
+                    managerAddress: newManagerAddress
+                  }
+                },
+                customAssistants: true
+              };
+              
+              // Save to localStorage
+              try {
+                localStorage.setItem('bridgeSettings', JSON.stringify(newSettings));
+              } catch (error) {
+                console.error('Error saving updated manager address to localStorage:', error);
+              }
+              
+              return newSettings;
+            }
+          }
+        }
+      }
+      
+      return prev;
+    });
+  }, []);
+
   // Reset settings to defaults
   const resetSettings = useCallback(() => {
     try {
@@ -465,13 +507,65 @@ export const SettingsProvider = ({ children }) => {
 
   // Get assistant contracts with custom settings applied and structure compatibility
   const getAssistantContractsWithSettings = useCallback(() => {
-    const customAssistantContracts = { ...getAssistantContracts() };
+    const customAssistantContracts = {};
+    const seenAddresses = new Set();
     
-    // Add custom assistants from each network's settings
+    // First, add default assistants from network configuration
+    Object.entries(NETWORKS).forEach(([networkKey, network]) => {
+      if (network.assistants) {
+        Object.entries(network.assistants).forEach(([assistantKey, assistant]) => {
+          if (assistant && assistant.address && assistant.bridgeAddress) {
+            customAssistantContracts[assistantKey] = {
+              ...assistant,
+              networkKey: networkKey
+            };
+            seenAddresses.add(assistant.address.toLowerCase());
+          }
+        });
+      }
+    });
+    
+    // Then, override with custom assistants from settings (this will replace duplicates)
     Object.entries(settings).forEach(([networkKey, networkSettings]) => {
       if (networkSettings?.assistants) {
-        Object.assign(customAssistantContracts, networkSettings.assistants);
+        Object.entries(networkSettings.assistants).forEach(([assistantKey, assistant]) => {
+          // Only add if it's a valid assistant with required fields
+          if (assistant && assistant.address && assistant.bridgeAddress) {
+            const addressLower = assistant.address.toLowerCase();
+            
+            // If we've seen this address before, replace the existing entry
+            if (seenAddresses.has(addressLower)) {
+              // Find and remove the existing entry with this address
+              Object.keys(customAssistantContracts).forEach(key => {
+                if (customAssistantContracts[key].address.toLowerCase() === addressLower) {
+                  delete customAssistantContracts[key];
+                }
+              });
+            }
+            
+            // Add the assistant with network information preserved
+            customAssistantContracts[assistantKey] = {
+              ...assistant,
+              networkKey: networkKey // The network where this assistant is defined
+            };
+            seenAddresses.add(addressLower);
+          }
+        });
       }
+    });
+
+    console.log('🔍 getAssistantContractsWithSettings result:', {
+      totalAssistants: Object.keys(customAssistantContracts).length,
+      assistants: Object.keys(customAssistantContracts),
+      seenAddresses: Array.from(seenAddresses),
+      assistantDetails: Object.entries(customAssistantContracts).map(([key, assistant]) => ({
+        key,
+        address: assistant.address,
+        type: assistant.type,
+        bridgeAddress: assistant.bridgeAddress,
+        description: assistant.description,
+        networkKey: assistant.networkKey
+      }))
     });
 
     return customAssistantContracts;
@@ -656,6 +750,12 @@ export const SettingsProvider = ({ children }) => {
     return token ? token.decimals : null;
   }, [get3DPassTokenByAddress]);
 
+  // Get 3DPass token decimals display multiplier
+  const get3DPassTokenDecimalsDisplayMultiplier = useCallback((tokenAddress) => {
+    const token = get3DPassTokenByAddress(tokenAddress);
+    return token ? token.decimalsDisplayMultiplier : null;
+  }, [get3DPassTokenByAddress]);
+
   // Get all 3DPass tokens
   const getAll3DPassTokens = useCallback(() => {
     const network = getNetworkWithSettings('THREEDPASS');
@@ -825,6 +925,7 @@ export const SettingsProvider = ({ children }) => {
     removeCustomBridgeInstanceForNetwork,
     addCustomAssistantContractForNetwork,
     removeCustomAssistantContractForNetwork,
+    updateAssistantManager,
     resetSettings,
     resetNetworkSettings,
     
@@ -871,6 +972,7 @@ export const SettingsProvider = ({ children }) => {
     get3DPassTokenBySymbol,
     get3DPassTokenAssetId,
     get3DPassTokenDecimals,
+    get3DPassTokenDecimalsDisplayMultiplier,
     getAll3DPassTokens,
     getAll3DPassTokenAddresses,
     getAll3DPassTokenSymbols,

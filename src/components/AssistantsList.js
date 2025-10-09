@@ -12,13 +12,17 @@ import AssignNewManager from './AssignNewManager';
 import { IPRECOMPILE_ERC20_ABI } from '../contracts/abi';
 
 const AssistantsList = () => {
-  const { getAssistantContractsWithSettings, getAllNetworksWithSettings } = useSettings();
+  const { getAssistantContractsWithSettings, getAllNetworksWithSettings, get3DPassTokenDecimalsDisplayMultiplier } = useSettings();
   const { account } = useWeb3();
   const [assistants, setAssistants] = useState([]);
   const [loading, setLoading] = useState(true);
   const [balances, setBalances] = useState({});
   const [shareTokenSupplies, setShareTokenSupplies] = useState({});
   const [foreignTokenBalances, setForeignTokenBalances] = useState({});
+  const [assistantFees, setAssistantFees] = useState({});
+  const [assistantManagers, setAssistantManagers] = useState({});
+  const [assistantValidation, setAssistantValidation] = useState({});
+  const [showInvalidAssistants, setShowInvalidAssistants] = useState(false);
   const [copiedAddress, setCopiedAddress] = useState(null);
   const [selectedAssistant, setSelectedAssistant] = useState(null);
   const [showDepositDialog, setShowDepositDialog] = useState(false);
@@ -149,6 +153,54 @@ const AssistantsList = () => {
       return '0';
     }
   }, [getAllNetworksWithSettings, isKnownPrecompile]);
+
+  const getTokenDecimalsFromSettings = useCallback((tokenAddress, networkKey) => {
+    if (!tokenAddress || tokenAddress === '0x0000000000000000000000000000000000000000') {
+      return 18; // Default decimals
+    }
+    
+    try {
+      const networks = getAllNetworksWithSettings();
+      
+      // Check if it's a native token first
+      for (const network of Object.values(networks)) {
+        if (network.tokens) {
+          for (const token of Object.values(network.tokens)) {
+            if (token.isNative && token.address.toLowerCase() === tokenAddress.toLowerCase()) {
+              return token.decimals || 18;
+            }
+          }
+        }
+      }
+      
+      // Check if it's a regular token in the network
+      const networkConfig = networks[networkKey];
+      if (networkConfig && networkConfig.tokens) {
+        for (const token of Object.values(networkConfig.tokens)) {
+          if (token.address.toLowerCase() === tokenAddress.toLowerCase()) {
+            return token.decimals || 18;
+          }
+        }
+      }
+      
+      // Check all networks for the token
+      for (const network of Object.values(networks)) {
+        if (network.tokens) {
+          for (const token of Object.values(network.tokens)) {
+            if (token.address.toLowerCase() === tokenAddress.toLowerCase()) {
+              return token.decimals || 18;
+            }
+          }
+        }
+      }
+      
+      console.warn(`Token decimals not found in settings for: ${tokenAddress} on ${networkKey}`);
+      return 18; // Default decimals
+    } catch (error) {
+      console.warn(`Error getting token decimals from settings for ${tokenAddress}:`, error.message);
+      return 18; // Default decimals
+    }
+  }, [getAllNetworksWithSettings]);
 
   const getForeignTokenBalance = useCallback(async (assistant, contractAddress, tokenAddress, networkKey) => {
     console.log(`🔍 getForeignTokenBalance called:`, {
@@ -339,6 +391,135 @@ const AssistantsList = () => {
     }
   }, [getAllNetworksWithSettings]);
 
+  const getAssistantFees = useCallback(async (assistant, networkKey) => {
+    try {
+      // Get the network-specific provider
+      const networks = getAllNetworksWithSettings();
+      const networkConfig = networks[networkKey];
+      if (!networkConfig || !networkConfig.rpcUrl) {
+        console.warn(`No RPC URL found for network: ${networkKey}`);
+        return { managementFee: 0, successFee: 0, swapFee: 0 };
+      }
+
+      const networkProvider = new ethers.providers.JsonRpcProvider(networkConfig.rpcUrl);
+      
+      // Create contract instance with fee-related functions
+      const assistantContract = new ethers.Contract(
+        assistant.address,
+        [
+          'function management_fee10000() view returns (uint16)',
+          'function success_fee10000() view returns (uint16)',
+          'function swap_fee10000() view returns (uint16)'
+        ],
+        networkProvider
+      );
+      
+      const [managementFee10000, successFee10000, swapFee10000] = await Promise.all([
+        assistantContract.management_fee10000().catch(() => 0),
+        assistantContract.success_fee10000().catch(() => 0),
+        assistantContract.swap_fee10000().catch(() => 0)
+      ]);
+      
+      // Convert from basis points (10000 = 100%) to percentage
+      const managementFee = (managementFee10000 / 100).toFixed(2);
+      const successFee = (successFee10000 / 100).toFixed(2);
+      const swapFee = (swapFee10000 / 100).toFixed(2);
+      
+      console.log(`🔍 Fees for ${assistant.key}:`, {
+        managementFee,
+        successFee,
+        swapFee,
+        managementFee10000,
+        successFee10000,
+        swapFee10000
+      });
+      
+      return { managementFee, successFee, swapFee };
+    } catch (error) {
+      console.warn(`Error getting fees for ${assistant.key}:`, error.message);
+      return { managementFee: 0, successFee: 0, swapFee: 0 };
+    }
+  }, [getAllNetworksWithSettings]);
+
+  const getAssistantManager = useCallback(async (assistant, networkKey) => {
+    try {
+      // Get the network-specific provider
+      const networks = getAllNetworksWithSettings();
+      const networkConfig = networks[networkKey];
+      if (!networkConfig || !networkConfig.rpcUrl) {
+        console.warn(`No RPC URL found for network: ${networkKey}`);
+        return null;
+      }
+
+      const networkProvider = new ethers.providers.JsonRpcProvider(networkConfig.rpcUrl);
+      
+      // Create contract instance with manager function
+      const assistantContract = new ethers.Contract(
+        assistant.address,
+        [
+          'function managerAddress() view returns (address)'
+        ],
+        networkProvider
+      );
+      
+      const managerAddress = await assistantContract.managerAddress();
+      
+      console.log(`🔍 Manager for ${assistant.key}:`, {
+        managerAddress,
+        isZero: managerAddress === '0x0000000000000000000000000000000000000000'
+      });
+      
+      // Return null if manager address is zero address
+      return managerAddress === '0x0000000000000000000000000000000000000000' ? null : managerAddress;
+    } catch (error) {
+      console.warn(`Error getting manager for ${assistant.key}:`, error.message);
+      return null;
+    }
+  }, [getAllNetworksWithSettings]);
+
+  const validateAssistantState = useCallback((stakeTokenBalance, shareTokenSupply) => {
+    try {
+      const stakeBalance = ethers.BigNumber.from(stakeTokenBalance || '0');
+      const shareSupply = ethers.BigNumber.from(shareTokenSupply || '0');
+      
+      // Assistant is invalid if: Stake Token Balance > 0 AND Share Token Supply = 0
+      const isValid = !(stakeBalance.gt(0) && shareSupply.eq(0));
+      
+      console.log(`🔍 Assistant validation:`, {
+        stakeBalance: stakeBalance.toString(),
+        shareSupply: shareSupply.toString(),
+        isValid,
+        reason: isValid ? 'Valid state' : 'Invalid: Has stake tokens but no share tokens'
+      });
+      
+      return isValid;
+    } catch (error) {
+      console.warn('Error validating assistant state:', error);
+      return true; // Default to valid if validation fails
+    }
+  }, []);
+
+  // Filter assistants based on validation status
+  const getFilteredAssistants = useCallback(() => {
+    if (showInvalidAssistants) {
+      return assistants; // Show all assistants
+    }
+    
+    // Filter out invalid assistants (but show loading/unknown status)
+    return assistants.filter(assistant => {
+      const isValid = assistantValidation[assistant.key];
+      return isValid !== false; // Show valid assistants and those with undefined status (loading)
+    });
+  }, [assistants, assistantValidation, showInvalidAssistants]);
+
+  // Count invalid assistants
+  const getInvalidAssistantsCount = useCallback(() => {
+    return assistants.filter(assistant => {
+      const isValid = assistantValidation[assistant.key];
+      return isValid === false;
+    }).length;
+  }, [assistants, assistantValidation]);
+
   const getStakeTokenAddress = useCallback((assistant) => {
     // Try to find the stake token address from the bridge configuration
     const networks = getAllNetworksWithSettings();
@@ -360,10 +541,17 @@ const AssistantsList = () => {
       const networks = getAllNetworksWithSettings();
       
       const assistantsList = Object.entries(assistantContracts).map(([key, assistant]) => {
-        // Find the network this assistant belongs to
-        const network = Object.values(networks).find(net => 
-          net.assistants && net.assistants[key]
-        );
+        // Get network information from the preserved networkKey
+        const network = assistant.networkKey ? networks[assistant.networkKey] : null;
+        
+        console.log(`🔍 Network detection for assistant ${key}:`, {
+          assistantKey: key,
+          assistantAddress: assistant.address,
+          bridgeAddress: assistant.bridgeAddress,
+          networkKey: assistant.networkKey,
+          foundNetwork: network?.name || 'Unknown',
+          networkSymbol: network?.symbol || 'Unknown'
+        });
         
         return {
           key,
@@ -412,11 +600,17 @@ const AssistantsList = () => {
   }, [getAllNetworksWithSettings]);
 
   const loadBalances = useCallback(async () => {
-    console.log('🔍 Loading balances for all networks...');
+    console.log('🔍 Loading balances for all networks...', {
+      assistantsCount: assistants.length,
+      timestamp: new Date().toISOString()
+    });
 
     const newBalances = {};
     const newShareTokenSupplies = {};
     const newForeignTokenBalances = {};
+    const newAssistantFees = {};
+    const newAssistantManagers = {};
+    const newAssistantValidation = {};
     
     const networks = getAllNetworksWithSettings();
 
@@ -438,14 +632,16 @@ const AssistantsList = () => {
           continue;
         }
 
-        // Determine which network this assistant belongs to
-        const assistantNetworkKey = Object.keys(networks).find(networkKey => {
-          const network = networks[networkKey];
-          return network.assistants && network.assistants[assistant.key];
-        });
+        // Get the network key from the assistant (preserved from settings)
+        const assistantNetworkKey = assistant.networkKey;
 
         if (!assistantNetworkKey) {
-          console.warn(`Could not determine network for assistant ${assistant.key}`);
+          console.warn(`No network key found for assistant ${assistant.key}`, {
+            assistantKey: assistant.key,
+            assistantAddress: assistant.address,
+            bridgeAddress: assistant.bridgeAddress,
+            availableNetworks: Object.keys(networks)
+          });
           continue;
         }
 
@@ -460,23 +656,45 @@ const AssistantsList = () => {
             assistantNetworkKey
           );
           
+          // Get stake token decimals from settings
+          const stakeTokenDecimals = getTokenDecimalsFromSettings(stakeTokenAddress, assistantNetworkKey);
+          
           newBalances[assistant.key] = {
-            stakeTokenBalance
+            stakeTokenBalance,
+            stakeTokenDecimals
           };
         } else {
           console.warn(`No stake token address found for assistant ${assistant.key}`);
           newBalances[assistant.key] = {
-            stakeTokenBalance: '0'
+            stakeTokenBalance: '0',
+            stakeTokenDecimals: 18
           };
         }
         
         // Get share token total supply instead of balance
         const shareTokenTotalSupply = await getTokenTotalSupply(assistant.address, assistantNetworkKey);
+        // Get share token decimals from settings
+        const shareTokenDecimals = getTokenDecimalsFromSettings(assistant.address, assistantNetworkKey);
         newShareTokenSupplies[assistant.key] = {
-          shareTokenTotalSupply
+          shareTokenTotalSupply,
+          shareTokenDecimals
         };
 
-        // Get foreign token balance for import assistants
+        // Get assistant fees
+        const fees = await getAssistantFees(assistant, assistantNetworkKey);
+        newAssistantFees[assistant.key] = fees;
+
+        // Get assistant manager
+        const managerAddress = await getAssistantManager(assistant, assistantNetworkKey);
+        newAssistantManagers[assistant.key] = managerAddress;
+
+        // Validate assistant state
+        const stakeTokenBalance = newBalances[assistant.key]?.stakeTokenBalance || '0';
+        const shareTokenSupply = newShareTokenSupplies[assistant.key]?.shareTokenTotalSupply || '0';
+        const isValid = validateAssistantState(stakeTokenBalance, shareTokenSupply);
+        newAssistantValidation[assistant.key] = isValid;
+
+        // Get foreign token balance for import assistants only
         if (assistant.type === 'import' || assistant.type === 'import_wrapper') {
           const foreignTokenAddress = getForeignTokenAddress(assistant);
           console.log(`🔍 Foreign token address for ${assistant.key}:`, {
@@ -489,10 +707,8 @@ const AssistantsList = () => {
           });
           
           if (foreignTokenAddress) {
-            // For Import Wrapper assistants, the foreign tokens might be held by the bridge, not the assistant
-            const balanceContractAddress = assistant.type === 'import_wrapper' 
-              ? assistant.bridgeAddress  // Bridge holds the foreign tokens for Import Wrapper
-              : assistant.address;       // Assistant holds the foreign tokens for Import
+            // For all assistant types, fetch foreign token balance from the assistant address
+            const balanceContractAddress = assistant.address;
             
             console.log(`🔍 Using contract address for balance check:`, {
               assistantType: assistant.type,
@@ -540,6 +756,13 @@ const AssistantsList = () => {
         newShareTokenSupplies[assistant.key] = {
           shareTokenTotalSupply: '0'
         };
+        newAssistantFees[assistant.key] = {
+          managementFee: '0.00',
+          successFee: '0.00',
+          swapFee: '0.00'
+        };
+        newAssistantManagers[assistant.key] = null;
+        newAssistantValidation[assistant.key] = true; // Default to valid on error
         if (assistant.type === 'import' || assistant.type === 'import_wrapper') {
           newForeignTokenBalances[assistant.key] = {
             foreignTokenBalance: '0'
@@ -551,7 +774,17 @@ const AssistantsList = () => {
     setBalances(newBalances);
     setShareTokenSupplies(newShareTokenSupplies);
     setForeignTokenBalances(newForeignTokenBalances);
-  }, [assistants, getTokenBalance, getTokenTotalSupply, getStakeTokenAddress, getForeignTokenAddress, getForeignTokenBalance, getForeignTokenDecimals, getAllNetworksWithSettings]);
+    setAssistantFees(newAssistantFees);
+    setAssistantManagers(newAssistantManagers);
+    setAssistantValidation(newAssistantValidation);
+    
+    console.log('✅ Balance loading completed:', {
+      balancesCount: Object.keys(newBalances).length,
+      shareTokenSuppliesCount: Object.keys(newShareTokenSupplies).length,
+      foreignTokenBalancesCount: Object.keys(newForeignTokenBalances).length,
+      timestamp: new Date().toISOString()
+    });
+  }, [assistants, getTokenBalance, getTokenTotalSupply, getStakeTokenAddress, getForeignTokenAddress, getForeignTokenBalance, getForeignTokenDecimals, getAssistantFees, getAssistantManager, validateAssistantState, getTokenDecimalsFromSettings, getAllNetworksWithSettings, get3DPassTokenDecimalsDisplayMultiplier]);
 
   useEffect(() => {
     loadAssistants();
@@ -563,10 +796,61 @@ const AssistantsList = () => {
     }
   }, [assistants, loadBalances]);
 
-  const formatBalance = (balance, decimals = 18) => {
+  const formatBalance = (balance, decimals = 18, tokenAddress = null) => {
     try {
       const formatted = ethers.utils.formatUnits(balance, decimals);
-      return parseFloat(formatted).toFixed(6);
+      const number = parseFloat(formatted);
+      
+      // Check if this is a P3D token and apply decimalsDisplayMultiplier
+      if (tokenAddress) {
+        const decimalsDisplayMultiplier = get3DPassTokenDecimalsDisplayMultiplier(tokenAddress);
+        console.log(`🔍 formatBalance P3D check:`, {
+          tokenAddress,
+          decimalsDisplayMultiplier,
+          originalNumber: number,
+          hasMultiplier: !!decimalsDisplayMultiplier
+        });
+        if (decimalsDisplayMultiplier) {
+          // Apply the multiplier: 0.000001 * 1000000 = 1.0
+          const multipliedNumber = number * decimalsDisplayMultiplier;
+          console.log(`🔍 P3D multiplier applied:`, {
+            originalNumber: number,
+            multiplier: decimalsDisplayMultiplier,
+            result: multipliedNumber
+          });
+          return multipliedNumber.toFixed(6).replace(/\.?0+$/, '') || '0';
+        }
+      }
+      
+      // Cap the displayed decimals to not exceed the token's actual decimals
+      const maxTokenDecimals = Math.min(12, decimals);
+      
+      // Dynamic decimal adjustment based on number magnitude
+      let displayDecimals;
+      if (number === 0) {
+        displayDecimals = 6; // Show 6 decimals for zero
+      } else if (number < 0.000001) {
+        displayDecimals = maxTokenDecimals; // Show full precision for very small numbers
+      } else if (number < 0.0001) {
+        displayDecimals = Math.min(10, maxTokenDecimals); // Show up to 10 decimals
+      } else if (number < 0.01) {
+        displayDecimals = Math.min(8, maxTokenDecimals); // Show up to 8 decimals
+      } else if (number < 1) {
+        displayDecimals = Math.min(6, maxTokenDecimals); // Show up to 6 decimals
+      } else if (number < 100) {
+        displayDecimals = Math.min(4, maxTokenDecimals); // Show up to 4 decimals
+      } else if (number < 10000) {
+        displayDecimals = Math.min(2, maxTokenDecimals); // Show up to 2 decimals
+      } else {
+        displayDecimals = 0; // Show no decimals for large numbers
+      }
+      
+      // Format with calculated decimals and remove trailing zeros
+      const formattedNumber = number.toFixed(displayDecimals);
+      // Convert back to number and then to string to remove trailing zeros
+      // but ensure we don't get scientific notation for very small numbers
+      const cleanNumber = parseFloat(formattedNumber);
+      return cleanNumber.toFixed(displayDecimals).replace(/\.?0+$/, '') || '0';
     } catch (error) {
       return '0.000000';
     }
@@ -873,10 +1157,13 @@ const AssistantsList = () => {
     );
   }
 
+  const filteredAssistants = getFilteredAssistants();
+  const invalidCount = getInvalidAssistantsCount();
+
   return (
     <div className="space-y-6">
       <div className="grid gap-6">
-        {assistants.map((assistant, index) => (
+        {filteredAssistants.map((assistant, index) => (
           <motion.div
             key={assistant.key}
             initial={{ opacity: 0, y: 20 }}
@@ -885,6 +1172,7 @@ const AssistantsList = () => {
             className="card p-6"
           >
             <div className="flex items-start justify-between mb-4">
+              <div className="flex items-start gap-3">
               <div>
                 <h3 className="text-lg font-semibold text-white mb-1">
                   {assistant.description || assistant.key}
@@ -892,6 +1180,27 @@ const AssistantsList = () => {
                 <p className="text-secondary-400 text-sm">
                   {assistant.network} • {assistant.type}
                 </p>
+                </div>
+                {/* Validation Status Indicator */}
+                <div className="flex-shrink-0 mt-1">
+                  {assistantValidation[assistant.key] === undefined ? (
+                    <div className="flex items-center gap-1 text-secondary-400" title="Validating state...">
+                      <div className="w-4 h-4 border-2 border-secondary-400 border-t-transparent rounded-full animate-spin"></div>
+                    </div>
+                  ) : assistantValidation[assistant.key] ? (
+                    <div className="flex items-center gap-1 text-green-400" title="Valid state">
+                      <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 20 20">
+                        <path fillRule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clipRule="evenodd" />
+                      </svg>
+                    </div>
+                  ) : (
+                    <div className="flex items-center gap-1 text-red-400" title="Invalid state: Has stake tokens but no share tokens">
+                      <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 20 20">
+                        <path fillRule="evenodd" d="M4.293 4.293a1 1 0 011.414 0L10 8.586l4.293-4.293a1 1 0 111.414 1.414L11.414 10l4.293 4.293a1 1 0 01-1.414 1.414L10 11.414l-4.293 4.293a1 1 0 01-1.414-1.414L8.586 10 4.293 5.707a1 1 0 010-1.414z" clipRule="evenodd" />
+                      </svg>
+                    </div>
+                  )}
+                </div>
               </div>
               <div className="text-right">
                 <div className="text-xs text-secondary-500 mb-1">Contract</div>
@@ -933,7 +1242,7 @@ const AssistantsList = () => {
                 </div>
                 <div className="text-xl font-semibold text-white">
                   {balances[assistant.key]?.stakeTokenBalance 
-                    ? formatBalance(balances[assistant.key].stakeTokenBalance)
+                    ? formatBalance(balances[assistant.key].stakeTokenBalance, balances[assistant.key].stakeTokenDecimals || 18, assistant.stakeTokenAddress || getStakeTokenAddress(assistant))
                     : '0.000000'
                   }
                 </div>
@@ -942,14 +1251,19 @@ const AssistantsList = () => {
               {/* Share Token Total Supply */}
               <div className="bg-dark-800 rounded-lg p-4">
                 <div className="flex items-center justify-between mb-2">
-                  <span className="text-sm text-secondary-400">Share Token Total Supply</span>
+                  <span className="text-sm text-secondary-400">Share Token Supply</span>
                   <span className="text-xs text-secondary-500">
                     {assistant.shareSymbol || 'Shares'}
                   </span>
                 </div>
-                <div className="text-xl font-semibold text-white">
+                <div className={`text-xl font-semibold ${
+                  assistantValidation[assistant.key] === false && 
+                  shareTokenSupplies[assistant.key]?.shareTokenTotalSupply === '0' 
+                    ? 'text-red-400' 
+                    : 'text-white'
+                }`}>
                   {shareTokenSupplies[assistant.key]?.shareTokenTotalSupply 
-                    ? formatBalance(shareTokenSupplies[assistant.key].shareTokenTotalSupply)
+                    ? formatBalance(shareTokenSupplies[assistant.key].shareTokenTotalSupply, shareTokenSupplies[assistant.key].shareTokenDecimals || 18, assistant.address)
                     : '0.000000'
                   }
                 </div>
@@ -966,7 +1280,7 @@ const AssistantsList = () => {
                   </div>
                   <div className="text-xl font-semibold text-white">
                     {foreignTokenBalances[assistant.key]?.foreignTokenBalance 
-                      ? formatBalance(foreignTokenBalances[assistant.key].foreignTokenBalance, foreignTokenBalances[assistant.key].decimals || 18)
+                      ? formatBalance(foreignTokenBalances[assistant.key].foreignTokenBalance, foreignTokenBalances[assistant.key].decimals || 18, getForeignTokenAddress(assistant))
                       : '0.000000'
                     }
                   </div>
@@ -974,54 +1288,80 @@ const AssistantsList = () => {
               )}
             </div>
 
+            {/* Fee Information */}
             <div className="mt-4 pt-4 border-t border-dark-700">
-              <div className="text-xs text-secondary-500 mb-1">Bridge</div>
-              <div className="flex items-center gap-2">
-                <div className="text-sm text-secondary-300 font-mono">
-                  {assistant.bridgeAddress?.slice(0, 6)}...{assistant.bridgeAddress?.slice(-4)}
+              <div className="grid grid-cols-3 gap-4">
+                <div className="text-center">
+                  <div className="text-xs text-secondary-400 mb-1">Management Fee</div>
+                  <div className="text-sm font-semibold text-white">
+                    {assistantFees[assistant.key]?.managementFee || '0.00'}%
+                  </div>
                 </div>
-                <button
-                  onClick={() => copyToClipboard(assistant.bridgeAddress, 'Bridge contract address')}
-                  className="p-1 hover:bg-dark-700 rounded transition-colors"
-                  title="Copy bridge address"
-                >
-                  {copiedAddress === assistant.bridgeAddress ? (
-                    <svg className="w-4 h-4 text-green-500" fill="currentColor" viewBox="0 0 20 20">
-                      <path fillRule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clipRule="evenodd" />
-                    </svg>
-                  ) : (
-                    <svg className="w-4 h-4 text-secondary-400 hover:text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
-                    </svg>
-                  )}
-                </button>
+                <div className="text-center">
+                  <div className="text-xs text-secondary-400 mb-1">Success Fee</div>
+                  <div className="text-sm font-semibold text-white">
+                    {assistantFees[assistant.key]?.successFee || '0.00'}%
+                  </div>
+                </div>
+                <div className="text-center">
+                  <div className="text-xs text-secondary-400 mb-1">Swap Fee</div>
+                  <div className="text-sm font-semibold text-white">
+                    {assistantFees[assistant.key]?.swapFee || '0.00'}%
+                  </div>
+                </div>
               </div>
-              
-              {assistant.managerAddress && (
-                <>
-                  <div className="text-xs text-secondary-500 mb-1 mt-3">Manager</div>
-                  <div className="flex items-center gap-2">
-                    <div className="text-sm text-secondary-300 font-mono">
-                      {assistant.managerAddress.slice(0, 6)}...{assistant.managerAddress.slice(-4)}
+            </div>
+
+            <div className="mt-4 pt-4 border-t border-dark-700">
+              <div className="flex items-center gap-6">
+                {/* Bridge Address */}
+                <div className="flex items-center gap-2">
+                  <span className="text-xs text-secondary-400">Bridge:</span>
+                  <div className="text-sm text-secondary-300 font-mono">
+                    {assistant.bridgeAddress?.slice(0, 6)}...{assistant.bridgeAddress?.slice(-4)}
                     </div>
                     <button
-                      onClick={() => copyToClipboard(assistant.managerAddress, 'Manager address')}
+                    onClick={() => copyToClipboard(assistant.bridgeAddress, 'Bridge contract address')}
                       className="p-1 hover:bg-dark-700 rounded transition-colors"
-                      title="Copy manager address"
+                    title="Copy bridge address"
                     >
-                      {copiedAddress === assistant.managerAddress ? (
-                        <svg className="w-4 h-4 text-green-500" fill="currentColor" viewBox="0 0 20 20">
+                    {copiedAddress === assistant.bridgeAddress ? (
+                      <svg className="w-4 h-4 text-green-500" fill="currentColor" viewBox="0 0 20 20">
                           <path fillRule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clipRule="evenodd" />
                         </svg>
                       ) : (
-                        <svg className="w-4 h-4 text-secondary-400 hover:text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <svg className="w-4 h-4 text-secondary-400 hover:text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
                         </svg>
                       )}
                     </button>
+            </div>
+
+                {/* Manager Address */}
+                {assistantManagers[assistant.key] && (
+                <div className="flex items-center gap-2">
+                    <span className="text-xs text-secondary-400">Manager:</span>
+                  <div className="text-sm text-secondary-300 font-mono">
+                      {assistantManagers[assistant.key].slice(0, 6)}...{assistantManagers[assistant.key].slice(-4)}
                   </div>
-                </>
-              )}
+                  <button
+                      onClick={() => copyToClipboard(assistantManagers[assistant.key], 'Manager address')}
+                    className="p-1 hover:bg-dark-700 rounded transition-colors"
+                    title="Copy manager address"
+                  >
+                      {copiedAddress === assistantManagers[assistant.key] ? (
+                      <svg className="w-4 h-4 text-green-500" fill="currentColor" viewBox="0 0 20 20">
+                        <path fillRule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clipRule="evenodd" />
+                      </svg>
+                    ) : (
+                      <svg className="w-4 h-4 text-secondary-400 hover:text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
+                      </svg>
+                    )}
+                  </button>
+              </div>
+            )}
+              </div>
             </div>
 
             {/* Action Buttons */}
@@ -1029,20 +1369,30 @@ const AssistantsList = () => {
               <div className="flex gap-3">
                 <button
                   onClick={() => handleDeposit(assistant)}
-                  className="flex-1 bg-primary-600 hover:bg-primary-700 text-white py-2 px-4 rounded-md text-sm font-medium transition-colors"
+                  disabled={assistantValidation[assistant.key] === false}
+                  className={`flex-1 py-2 px-4 rounded-md text-sm font-medium transition-colors ${
+                    assistantValidation[assistant.key] === false
+                      ? 'bg-gray-600 text-gray-400 cursor-not-allowed'
+                      : 'bg-primary-600 hover:bg-primary-700 text-white'
+                  }`}
                 >
                   Deposit
                 </button>
                 <button
                   onClick={() => handleWithdraw(assistant)}
-                  className="flex-1 bg-secondary-600 hover:bg-secondary-700 text-white py-2 px-4 rounded-md text-sm font-medium transition-colors"
+                  disabled={assistantValidation[assistant.key] === false}
+                  className={`flex-1 py-2 px-4 rounded-md text-sm font-medium transition-colors ${
+                    assistantValidation[assistant.key] === false
+                      ? 'bg-gray-600 text-gray-400 cursor-not-allowed'
+                      : 'bg-secondary-600 hover:bg-secondary-700 text-white'
+                  }`}
                 >
                   Withdraw
                 </button>
               </div>
               
               {/* Manager Buttons - Only show if user is the manager */}
-              {assistant.managerAddress && account && assistant.managerAddress.toLowerCase() === account.toLowerCase() && (
+              {assistantManagers[assistant.key] && account && assistantManagers[assistant.key].toLowerCase() === account.toLowerCase() && (
                 <div className="mt-3 pt-3 border-t border-dark-600">
                   <div className="text-xs text-secondary-500 mb-2">Manager Actions</div>
                   <div className="grid grid-cols-1 gap-2">
@@ -1074,13 +1424,42 @@ const AssistantsList = () => {
         ))}
       </div>
 
+      {/* Show Invalid Assistants Toggle */}
+      {invalidCount > 0 && (
+        <div className="flex justify-center pt-4">
+          <button
+            onClick={() => setShowInvalidAssistants(!showInvalidAssistants)}
+            className="flex items-center gap-2 px-4 py-2 bg-dark-700 hover:bg-dark-600 text-secondary-300 hover:text-white rounded-md text-sm font-medium transition-colors"
+          >
+            {showInvalidAssistants ? (
+              <>
+                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 15l7-7 7 7" />
+                </svg>
+                Hide Invalid Assistants
+              </>
+            ) : (
+              <>
+                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                </svg>
+                Show Invalid Assistants ({invalidCount})
+              </>
+            )}
+          </button>
+        </div>
+      )}
+
       {/* Dialogs */}
       {showDepositDialog && selectedAssistant && (
         <Deposit
           assistant={selectedAssistant}
           onClose={handleCloseDialogs}
-          onSuccess={() => {
+          onSuccess={async () => {
             handleCloseDialogs();
+            // Wait a moment for blockchain state to update
+            await new Promise(resolve => setTimeout(resolve, 2000));
+            console.log('🔄 Refreshing balances after successful deposit...');
             loadBalances(); // Refresh balances after successful deposit
           }}
         />
@@ -1090,8 +1469,11 @@ const AssistantsList = () => {
         <Withdraw
           assistant={selectedAssistant}
           onClose={handleCloseDialogs}
-          onSuccess={() => {
+          onSuccess={async () => {
             handleCloseDialogs();
+            // Wait a moment for blockchain state to update
+            await new Promise(resolve => setTimeout(resolve, 2000));
+            console.log('🔄 Refreshing balances after successful withdraw...');
             loadBalances(); // Refresh balances after successful withdraw
           }}
         />
@@ -1101,8 +1483,11 @@ const AssistantsList = () => {
         <WithdrawManagementFee
           assistant={selectedAssistant}
           onClose={handleCloseDialogs}
-          onSuccess={() => {
+          onSuccess={async () => {
             handleCloseDialogs();
+            // Wait a moment for blockchain state to update
+            await new Promise(resolve => setTimeout(resolve, 2000));
+            console.log('🔄 Refreshing balances after successful management fee withdrawal...');
             loadBalances(); // Refresh balances after successful fee withdrawal
           }}
         />
@@ -1112,8 +1497,11 @@ const AssistantsList = () => {
         <WithdrawSuccessFee
           assistant={selectedAssistant}
           onClose={handleCloseDialogs}
-          onSuccess={() => {
+          onSuccess={async () => {
             handleCloseDialogs();
+            // Wait a moment for blockchain state to update
+            await new Promise(resolve => setTimeout(resolve, 2000));
+            console.log('🔄 Refreshing balances after successful success fee withdrawal...');
             loadBalances(); // Refresh balances after successful fee withdrawal
           }}
         />

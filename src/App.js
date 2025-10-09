@@ -102,7 +102,7 @@ function App() {
                   {
                     step: '1',
                     title: 'Initiate Transfer',
-                    description: 'Select source and destination. Offer 2-3% fee to the bridge nodes, if you would like them to speed up your transfer.',
+                    description: 'Select the source and destination. Offer 2-3% fee to the bridge nodes, if you would like them to speed up your transfer.',
                   },
                   {
                     step: '2',
@@ -116,12 +116,12 @@ function App() {
                         Counterstake consensus
                       </a>
                     ),
-                    description: 'Nodes are to claim valid transfers and challenge fraudulent ones. You can also claim yourself, if the nodes refused to assist.',
+                    description: 'Nodes are to claim valid transfers and challenge fraudulent ones on the destination chain. You can also claim yourself, if the nodes refused to assist.',
                   },
                   {
                     step: '3',
                     title: 'Receive Tokens',
-                    description: 'Receive your tokens on the destination chain. For self-claimed transfers it is required to wait for the challenging period to expire and then withdraw.',
+                    description: 'Receive your tokens on the destination chain. For self-claimed transfers you have to wait for the challenging period to expire before withdrawing.',
                   },
                 ].map((item, index) => (
                   <motion.div
@@ -152,7 +152,7 @@ function App() {
             <div className="text-center space-y-4">
               <div className="flex items-center justify-center space-x-6">
                <span
-                  className="text-secondary-400 text-xs hover:text-white transition-colors"
+                  className="text-secondary-400 text-xs transition-colors"
                   >
                   This is an open-source free software. Use it at your own risk.
                 </span>

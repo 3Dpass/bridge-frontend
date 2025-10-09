@@ -389,22 +389,75 @@ const Withdraw = ({ assistant, onClose, onSuccess }) => {
     }
   }, [getRequiredNetwork, network]);
 
+  // Get token decimals from settings
+  const getTokenDecimalsFromSettings = useCallback((tokenAddress) => {
+    if (!tokenAddress || tokenAddress === '0x0000000000000000000000000000000000000000') {
+      return 18; // Default decimals
+    }
+    try {
+      const networks = getAllNetworksWithSettings();
+      // Check if it's a native token first
+      for (const network of Object.values(networks)) {
+        if (network.tokens) {
+          for (const token of Object.values(network.tokens)) {
+            if (token.isNative && token.address.toLowerCase() === tokenAddress.toLowerCase()) {
+              return token.decimals || 18;
+            }
+          }
+        }
+      }
+      // Check all networks for the token
+      for (const network of Object.values(networks)) {
+        if (network.tokens) {
+          for (const token of Object.values(network.tokens)) {
+            if (token.address.toLowerCase() === tokenAddress.toLowerCase()) {
+              return token.decimals || 18;
+            }
+          }
+        }
+      }
+      console.warn(`Token decimals not found in settings for: ${tokenAddress}`);
+      return 18; // Default decimals
+    } catch (error) {
+      console.warn(`Error getting token decimals from settings for ${tokenAddress}:`, error.message);
+      return 18; // Default decimals
+    }
+  }, [getAllNetworksWithSettings]);
+
   // Load user share token balance
   const loadUserShareBalance = useCallback(async () => {
     if (!account || !provider) return;
 
     try {
+      console.log('🔍 Loading user share balance:', {
+        assistantAddress: assistant.address,
+        account,
+        assistantType: assistant.type
+      });
+      
       const shareTokenContract = new ethers.Contract(
         assistant.address, // Share tokens are typically the assistant contract itself
         ['function balanceOf(address) view returns (uint256)'],
         provider
       );
       const balance = await shareTokenContract.balanceOf(account);
+      
+      // Get share token decimals from settings
+      const shareTokenDecimals = getTokenDecimalsFromSettings(assistant.address);
+      
+      console.log('🔍 Share token balance loaded:', {
+        balance: balance.toString(),
+        formatted: ethers.utils.formatUnits(balance, shareTokenDecimals),
+        shareTokenDecimals,
+        assistantAddress: assistant.address
+      });
+      
       setUserShareBalance(balance.toString());
     } catch (error) {
       console.error('Error loading user share balance:', error);
+      setUserShareBalance('0');
     }
-  }, [account, provider, assistant.address]);
+  }, [account, provider, assistant.address, assistant.type, getTokenDecimalsFromSettings]);
 
   // Initialize network detection and step management
   useEffect(() => {
@@ -478,12 +531,52 @@ const Withdraw = ({ assistant, onClose, onSuccess }) => {
     }
   }, [account, step, getRequiredNetwork, checkNetwork, assistant.address]);
 
+  // Debug state changes
+  useEffect(() => {
+    console.log('🔍 Withdraw component state changed:', {
+      loading,
+      isProcessing,
+      amount,
+      isExecutingRef: isExecutingRef.current,
+      step,
+      userShareBalance
+    });
+  }, [loading, isProcessing, amount, step, userShareBalance]);
+
   const formatBalance = (balance, decimals = 18) => {
     try {
       const formatted = ethers.utils.formatUnits(balance, decimals);
-      return parseFloat(formatted).toFixed(6);
+      const num = parseFloat(formatted);
+      
+      // Handle zero or very small numbers
+      if (num === 0) return '0';
+      
+      // Cap decimals to token's actual decimals and max 12
+      const maxDisplayDecimals = Math.min(12, decimals);
+      
+      // Dynamic decimal adjustment based on number magnitude
+      let displayDecimals;
+      if (num < 0.000001) {
+        displayDecimals = maxDisplayDecimals; // Show full precision for very small numbers
+      } else if (num < 0.0001) {
+        displayDecimals = Math.min(8, maxDisplayDecimals);
+      } else if (num < 0.01) {
+        displayDecimals = Math.min(6, maxDisplayDecimals);
+      } else if (num < 1) {
+        displayDecimals = Math.min(4, maxDisplayDecimals);
+      } else if (num < 100) {
+        displayDecimals = Math.min(3, maxDisplayDecimals);
+      } else if (num < 10000) {
+        displayDecimals = Math.min(2, maxDisplayDecimals);
+      } else {
+        displayDecimals = Math.min(1, maxDisplayDecimals);
+      }
+      
+      // Format and remove trailing zeros
+      const cleanNumber = parseFloat(formatted);
+      return cleanNumber.toFixed(displayDecimals).replace(/\.?0+$/, '') || '0';
     } catch (error) {
-      return '0.000000';
+      return '0';
     }
   };
 
@@ -570,7 +663,8 @@ const Withdraw = ({ assistant, onClose, onSuccess }) => {
 
       if (shouldProceed) {
         // Now check balances after ensuring we're on the correct network
-        const amountWei = ethers.utils.parseUnits(amount, 18);
+        const shareTokenDecimals = getTokenDecimalsFromSettings(assistant.address);
+        const amountWei = ethers.utils.parseUnits(amount, shareTokenDecimals);
         if (amountWei.gt(userShareBalance)) {
           toast.error('Insufficient share token balance');
           shouldProceed = false;
@@ -578,10 +672,14 @@ const Withdraw = ({ assistant, onClose, onSuccess }) => {
       }
 
       if (shouldProceed) {
+        const shareTokenDecimals = getTokenDecimalsFromSettings(assistant.address);
+        const amountWei = ethers.utils.parseUnits(amount, shareTokenDecimals);
+        
         console.log('🔍 Creating contract instance with:', {
           assistantAddress: assistant.address,
           signerAddress: await signer.getAddress(),
-          amountWei: ethers.utils.parseUnits(amount, 18).toString(),
+          amountWei: amountWei.toString(),
+          shareTokenDecimals,
           network: (await signer.provider.getNetwork()).name
         });
         
@@ -591,9 +689,119 @@ const Withdraw = ({ assistant, onClose, onSuccess }) => {
           signer
         );
 
-        const amountWei = ethers.utils.parseUnits(amount, 18);
+        // Verify the contract is properly connected and has the redeemShares method
+        console.log('🔍 Contract connection details:', {
+          contractAddress: assistantContract.address,
+          hasRedeemShares: typeof assistantContract.redeemShares === 'function',
+          signerAddress: await assistantContract.signer.getAddress()
+        });
+        
+        // Verify the user has sufficient balance
+        const currentBalance = await assistantContract.balanceOf(account);
+        console.log('🔍 Balance verification before transaction:', {
+          userBalance: currentBalance.toString(),
+          requestedAmount: amountWei.toString(),
+          hasSufficientBalance: currentBalance.gte(amountWei),
+          shareTokenDecimals
+        });
+        
+        if (currentBalance.lt(amountWei)) {
+          throw new Error(`Insufficient balance. Have ${currentBalance.toString()}, need ${amountWei.toString()}`);
+        }
+
+        // For Import Wrapper assistants, check if there are any additional requirements
+        if (assistant.type === 'import_wrapper') {
+          console.log('🔍 Import Wrapper assistant specific checks...');
+          
+          // Check if the assistant has any stake tokens available for redemption
+          try {
+            // Get the bridge address from the assistant
+            const bridgeAddress = await assistantContract.bridgeAddress();
+            console.log('🔍 Import Wrapper bridge address:', bridgeAddress);
+            
+            // Check if there are any stake tokens in the assistant
+            const networks = getAllNetworksWithSettings();
+            let stakeTokenAddress = null;
+            
+            // Find the stake token address for this bridge
+            for (const network of Object.values(networks)) {
+              if (network.bridges) {
+                for (const bridge of Object.values(network.bridges)) {
+                  if (bridge.address === bridgeAddress) {
+                    stakeTokenAddress = bridge.stakeTokenAddress;
+                    break;
+                  }
+                }
+              }
+            }
+            
+            if (stakeTokenAddress) {
+              console.log('🔍 Import Wrapper stake token address:', stakeTokenAddress);
+              
+              // Check assistant's stake token balance
+              const stakeTokenContract = new ethers.Contract(
+                stakeTokenAddress,
+                ['function balanceOf(address) view returns (uint256)'],
+                signer.provider
+              );
+              const assistantStakeBalance = await stakeTokenContract.balanceOf(assistant.address);
+              console.log('🔍 Import Wrapper assistant stake token balance:', {
+                balance: assistantStakeBalance.toString(),
+                formatted: ethers.utils.formatUnits(assistantStakeBalance, getTokenDecimalsFromSettings(stakeTokenAddress))
+              });
+              
+              if (assistantStakeBalance.eq(0)) {
+                console.warn('⚠️ Import Wrapper assistant has no stake tokens available for redemption');
+              }
+            }
+          } catch (bridgeError) {
+            console.warn('⚠️ Could not check Import Wrapper bridge details:', bridgeError.message);
+          }
+        }
+
         console.log('🔍 Calling redeemShares with amount:', amountWei.toString());
-        const tx = await assistantContract.redeemShares(amountWei);
+        
+        // Check network state and gas price
+        try {
+          const network = await signer.provider.getNetwork();
+          const gasPrice = await signer.provider.getGasPrice();
+          console.log('🔍 Network state before transaction:', {
+            networkName: network.name,
+            chainId: network.chainId,
+            gasPrice: gasPrice.toString()
+          });
+        } catch (networkError) {
+          console.warn('⚠️ Could not get network state:', networkError.message);
+        }
+        
+        // Simulate the transaction first to catch revert reasons
+        console.log('🔍 Simulating redeemShares transaction to check for revert reasons...');
+        try {
+          await assistantContract.callStatic.redeemShares(amountWei);
+          console.log('✅ Transaction simulation successful');
+        } catch (simulationError) {
+          console.error('❌ Transaction simulation failed:', simulationError);
+          console.error('❌ Simulation error details:', {
+            message: simulationError.message,
+            reason: simulationError.reason,
+            code: simulationError.code,
+            data: simulationError.data
+          });
+          throw new Error(`Transaction would fail: ${simulationError.reason || simulationError.message}`);
+        }
+        
+        // Try to estimate gas for the transaction
+        try {
+          const gasEstimate = await assistantContract.estimateGas.redeemShares(amountWei);
+          console.log('🔍 Gas estimate:', gasEstimate.toString());
+        } catch (gasError) {
+          console.warn('⚠️ Gas estimation failed:', gasError.message);
+        }
+        
+        // Try with higher gas limit since simulation passed but real transaction failed
+        const tx = await assistantContract.redeemShares(amountWei, {
+          gasLimit: 2000000 // Higher gas limit for Import Wrapper assistants
+        });
         console.log('🔍 Transaction sent:', tx.hash);
 
         toast.success('Transaction submitted! Waiting for confirmation...');
@@ -604,12 +812,27 @@ const Withdraw = ({ assistant, onClose, onSuccess }) => {
       }
     } catch (error) {
       console.error('Withdraw error:', error);
+      console.error('Error details:', {
+        code: error.code,
+        message: error.message,
+        reason: error.reason,
+        data: error.data,
+        stack: error.stack
+      });
       
       // Handle different types of errors gracefully
       if (error.code === 'ACTION_REJECTED' || error.message?.includes('User denied')) {
         toast.error('Transaction was cancelled by user');
       } else if (error.code === 'INSUFFICIENT_FUNDS') {
         toast.error('Insufficient funds for transaction');
+      } else if (error.code === -32603) {
+        // Internal JSON-RPC error - usually indicates a contract revert
+        console.error('❌ Internal JSON-RPC error detected. This usually means the contract call reverted.');
+        if (error.message?.includes('Internal JSON-RPC error')) {
+          toast.error('Transaction failed. The contract may have reverted. Check console for details.');
+        } else {
+          toast.error('Internal RPC error. Please try again or check your inputs.');
+        }
       } else if (error.message?.includes('gas')) {
         toast.error('Transaction failed due to gas issues. Please try again.');
       } else if (error.message?.includes('revert')) {
@@ -636,7 +859,8 @@ const Withdraw = ({ assistant, onClose, onSuccess }) => {
 
 
   const handleMaxAmount = () => {
-    setAmount(formatBalance(userShareBalance));
+    const shareTokenDecimals = getTokenDecimalsFromSettings(assistant.address);
+    setAmount(formatBalance(userShareBalance, shareTokenDecimals));
   };
 
   const renderStep = () => {
@@ -687,7 +911,7 @@ const Withdraw = ({ assistant, onClose, onSuccess }) => {
                 </button>
               </div>
               <p className="text-xs text-secondary-500 mt-1">
-                Balance: {formatBalance(userShareBalance)} {assistant.shareSymbol || 'Shares'}
+                Balance: {formatBalance(userShareBalance, getTokenDecimalsFromSettings(assistant.address))} {assistant.shareSymbol || 'Shares'}
               </p>
             </div>
 
@@ -698,6 +922,7 @@ const Withdraw = ({ assistant, onClose, onSuccess }) => {
               </p>
             </div>
 
+
             {/* Action Buttons */}
             <div className="flex gap-3 pt-4">
               <button
@@ -707,11 +932,26 @@ const Withdraw = ({ assistant, onClose, onSuccess }) => {
                 Cancel
               </button>
               <button
-                onClick={handleWithdraw}
-                disabled={loading || isProcessing || !amount || isExecutingRef.current}
+                onClick={() => {
+                  console.log('🔍 Withdraw button clicked. Current state:', {
+                    loading,
+                    isProcessing,
+                    amount,
+                    hasAmount: !!amount,
+                    isExecutingRef: isExecutingRef.current,
+                    disabled: loading || isProcessing || !amount || isExecutingRef.current
+                  });
+                  handleWithdraw();
+                }}
+                disabled={loading || isProcessing || !amount || parseFloat(amount) <= 0 || isExecutingRef.current}
                 className="flex-1 bg-secondary-600 hover:bg-secondary-700 disabled:bg-dark-600 disabled:cursor-not-allowed text-white py-2 px-4 rounded-md text-sm font-medium transition-colors"
               >
-                {loading || isProcessing ? 'Processing...' : 'Withdraw'}
+                {loading || isProcessing ? (
+                  <div className="flex items-center justify-center space-x-2">
+                    <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
+                    <span>Processing...</span>
+                  </div>
+                ) : 'Withdraw'}
               </button>
             </div>
           </div>

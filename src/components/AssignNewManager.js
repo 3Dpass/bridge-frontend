@@ -7,7 +7,7 @@ import { motion } from 'framer-motion';
 
 const AssignNewManager = ({ assistant, onClose, onSuccess }) => {
   const { signer } = useWeb3();
-  const { getAllNetworksWithSettings } = useSettings();
+  const { getAllNetworksWithSettings, updateAssistantManager } = useSettings();
   const [newManagerAddress, setNewManagerAddress] = useState('');
   const [loading, setLoading] = useState(false);
 
@@ -103,6 +103,19 @@ const AssignNewManager = ({ assistant, onClose, onSuccess }) => {
       const receipt = await tx.wait();
       
       if (receipt.status === 1) {
+        // Update the manager address in settings
+        try {
+          updateAssistantManager(assistant.address, newManagerAddress);
+          console.log('✅ Manager address updated in settings:', {
+            assistantAddress: assistant.address,
+            newManagerAddress: newManagerAddress,
+            timestamp: new Date().toISOString()
+          });
+        } catch (settingsError) {
+          console.error('❌ Error updating manager address in settings:', settingsError);
+          // Don't fail the transaction if settings update fails
+        }
+        
         toast.success('New manager assigned successfully!', { id: 'assign-manager' });
         onSuccess();
       } else {
@@ -152,7 +165,7 @@ const AssignNewManager = ({ assistant, onClose, onSuccess }) => {
     } finally {
       setLoading(false);
     }
-  }, [newManagerAddress, assistant, signer, getRequiredNetwork, onSuccess]);
+  }, [newManagerAddress, assistant, signer, getRequiredNetwork, updateAssistantManager, onSuccess]);
 
   const handleClose = useCallback(() => {
     if (!loading) {

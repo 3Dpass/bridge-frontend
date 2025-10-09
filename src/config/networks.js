@@ -145,6 +145,7 @@ export const NETWORKS = {
       name: 'P3D',
       symbol: 'P3D',
       decimals: 18,
+      decimalsDisplayMultiplier: 1000000,
     },
     contracts: {
       // Updated contract addresses from bridge-setup-test.log and deploy-counterstake.log
@@ -168,6 +169,7 @@ export const NETWORKS = {
         isPrecompile: true,
         isNative: true,
         standard: 'ERC20',
+        decimalsDisplayMultiplier: 1000000,
       },
       wUSDT: {
         address: '0xfBFBfbFA000000000000000000000000000000de',
@@ -183,6 +185,15 @@ export const NETWORKS = {
         symbol: 'USDTIA',
         decimals: 18,
         name: 'USDT import assistant shares on 3dpass',
+        isPrecompile: false,
+        isNative: false,
+        standard: 'ERC20',
+      },
+      WUSDTA: {
+        address: '0x6F7c9FFa2250E7119B44e3496B6f6b37736035F8',
+        symbol: 'WUSDTA',
+        decimals: 18,
+        name: 'WUSDT import assistant shares on 3dpass',
         isPrecompile: false,
         isNative: false,
         standard: 'ERC20',
@@ -217,7 +228,16 @@ export const NETWORKS = {
         description: 'USDT Import Wrapper Assistant',
         shareSymbol: 'USDTIA',
         shareName: 'USDT import assistant shares on 3dpass',
-        managerAddress: '0x3Ae555701bB7D2a4Aa9084069A32883a0b6EE14F'
+        managerAddress: '0x067Fac51f31Dc80263D55f9980DF1358357DC10d'
+      },
+      WUSDT_IMPORT_ASSISTANT: {
+        address: '0x6F7c9FFa2250E7119B44e3496B6f6b37736035F8',
+        type: 'import_wrapper',
+        bridgeAddress: '0x00D5f00250434e76711e8127A37c6f84dBbDAA4C',
+        description: 'WUSDT Import Wrapper Assistant',
+        shareSymbol: 'WUSDTA',
+        shareName: 'WUSDT import assistant',
+        managerAddress: '0x067Fac51f31Dc80263D55f9980DF1358357DC10d'
       }
     }
   }
