@@ -455,7 +455,7 @@ const AssistantsList = () => {
         const stakeTokenAddress = assistant.stakeTokenAddress || getStakeTokenAddress(assistant);
         if (stakeTokenAddress) {
           const stakeTokenBalance = await getTokenBalance(
-            assistant.bridgeAddress, 
+            assistant.address, 
             stakeTokenAddress,
             assistantNetworkKey
           );
@@ -937,26 +937,6 @@ const AssistantsList = () => {
                     : '0.000000'
                   }
                 </div>
-                <div className="flex items-center justify-between mt-1">
-                  <div className="text-xs text-secondary-500">
-                    Bridge: {assistant.bridgeAddress?.slice(0, 6)}...{assistant.bridgeAddress?.slice(-4)}
-                  </div>
-                  <button
-                    onClick={() => copyToClipboard(assistant.bridgeAddress, 'Bridge contract address')}
-                    className="p-1 hover:bg-dark-700 rounded transition-colors"
-                    title="Copy bridge address"
-                  >
-                    {copiedAddress === assistant.bridgeAddress ? (
-                      <svg className="w-3 h-3 text-green-500" fill="currentColor" viewBox="0 0 20 20">
-                        <path fillRule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clipRule="evenodd" />
-                      </svg>
-                    ) : (
-                      <svg className="w-3 h-3 text-secondary-400 hover:text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
-                      </svg>
-                    )}
-                  </button>
-                </div>
               </div>
 
               {/* Share Token Total Supply */}
@@ -972,26 +952,6 @@ const AssistantsList = () => {
                     ? formatBalance(shareTokenSupplies[assistant.key].shareTokenTotalSupply)
                     : '0.000000'
                   }
-                </div>
-                <div className="flex items-center justify-between mt-1">
-                  <div className="text-xs text-secondary-500">
-                    Assistant: {assistant.address?.slice(0, 6)}...{assistant.address?.slice(-4)}
-                  </div>
-                  <button
-                    onClick={() => copyToClipboard(assistant.address, 'Assistant contract address')}
-                    className="p-1 hover:bg-dark-700 rounded transition-colors"
-                    title="Copy assistant address"
-                  >
-                    {copiedAddress === assistant.address ? (
-                      <svg className="w-3 h-3 text-green-500" fill="currentColor" viewBox="0 0 20 20">
-                        <path fillRule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clipRule="evenodd" />
-                      </svg>
-                    ) : (
-                      <svg className="w-3 h-3 text-secondary-400 hover:text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
-                      </svg>
-                    )}
-                  </button>
                 </div>
               </div>
 
@@ -1010,55 +970,59 @@ const AssistantsList = () => {
                       : '0.000000'
                     }
                   </div>
-                  <div className="flex items-center justify-between mt-1">
-                    <div className="text-xs text-secondary-500">
-                      Assistant: {assistant.address?.slice(0, 6)}...{assistant.address?.slice(-4)}
+                </div>
+              )}
+            </div>
+
+            <div className="mt-4 pt-4 border-t border-dark-700">
+              <div className="text-xs text-secondary-500 mb-1">Bridge</div>
+              <div className="flex items-center gap-2">
+                <div className="text-sm text-secondary-300 font-mono">
+                  {assistant.bridgeAddress?.slice(0, 6)}...{assistant.bridgeAddress?.slice(-4)}
+                </div>
+                <button
+                  onClick={() => copyToClipboard(assistant.bridgeAddress, 'Bridge contract address')}
+                  className="p-1 hover:bg-dark-700 rounded transition-colors"
+                  title="Copy bridge address"
+                >
+                  {copiedAddress === assistant.bridgeAddress ? (
+                    <svg className="w-4 h-4 text-green-500" fill="currentColor" viewBox="0 0 20 20">
+                      <path fillRule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clipRule="evenodd" />
+                    </svg>
+                  ) : (
+                    <svg className="w-4 h-4 text-secondary-400 hover:text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
+                    </svg>
+                  )}
+                </button>
+              </div>
+              
+              {assistant.managerAddress && (
+                <>
+                  <div className="text-xs text-secondary-500 mb-1 mt-3">Manager</div>
+                  <div className="flex items-center gap-2">
+                    <div className="text-sm text-secondary-300 font-mono">
+                      {assistant.managerAddress.slice(0, 6)}...{assistant.managerAddress.slice(-4)}
                     </div>
                     <button
-                      onClick={() => copyToClipboard(assistant.address, 'Assistant contract address')}
+                      onClick={() => copyToClipboard(assistant.managerAddress, 'Manager address')}
                       className="p-1 hover:bg-dark-700 rounded transition-colors"
-                      title="Copy assistant address"
+                      title="Copy manager address"
                     >
-                      {copiedAddress === assistant.address ? (
-                        <svg className="w-3 h-3 text-green-500" fill="currentColor" viewBox="0 0 20 20">
+                      {copiedAddress === assistant.managerAddress ? (
+                        <svg className="w-4 h-4 text-green-500" fill="currentColor" viewBox="0 0 20 20">
                           <path fillRule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clipRule="evenodd" />
                         </svg>
                       ) : (
-                        <svg className="w-3 h-3 text-secondary-400 hover:text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <svg className="w-4 h-4 text-secondary-400 hover:text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
                         </svg>
                       )}
                     </button>
                   </div>
-                </div>
+                </>
               )}
             </div>
-
-            {assistant.managerAddress && (
-              <div className="mt-4 pt-4 border-t border-dark-700">
-                <div className="text-xs text-secondary-500 mb-1">Manager</div>
-                <div className="flex items-center gap-2">
-                  <div className="text-sm text-secondary-300 font-mono">
-                    {assistant.managerAddress.slice(0, 6)}...{assistant.managerAddress.slice(-4)}
-                  </div>
-                  <button
-                    onClick={() => copyToClipboard(assistant.managerAddress, 'Manager address')}
-                    className="p-1 hover:bg-dark-700 rounded transition-colors"
-                    title="Copy manager address"
-                  >
-                    {copiedAddress === assistant.managerAddress ? (
-                      <svg className="w-4 h-4 text-green-500" fill="currentColor" viewBox="0 0 20 20">
-                        <path fillRule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clipRule="evenodd" />
-                      </svg>
-                    ) : (
-                      <svg className="w-4 h-4 text-secondary-400 hover:text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
-                      </svg>
-                    )}
-                  </button>
-                </div>
-              </div>
-            )}
 
             {/* Action Buttons */}
             <div className="mt-4 pt-4 border-t border-dark-700">
