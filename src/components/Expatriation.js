@@ -13,6 +13,11 @@ const toChecksumAddress = (address) => {
   }
 };
 
+// Get maximum allowance value (2^256 - 1)
+const getMaxAllowance = () => {
+  return ethers.constants.MaxUint256;
+};
+
 const Expatriation = ({ 
   bridgeInstance, 
   formData, 
@@ -28,6 +33,8 @@ const Expatriation = ({
   const [currentAllowance, setCurrentAllowance] = useState('0');
   const [requiredAmount, setRequiredAmount] = useState('0');
   const [isCheckingApproval, setIsCheckingApproval] = useState(true);
+  const [useMaxAllowance, setUseMaxAllowance] = useState(false);
+  const [isRevoking, setIsRevoking] = useState(false);
 
   // Helper function to parse and categorize errors
   const parseError = (error) => {
@@ -45,6 +52,32 @@ const Expatriation = ({
         message: 'You cancelled the transaction. No changes were made.',
         canRetry: true,
         isUserError: true
+      };
+    }
+    
+    // Transaction replaced/repriced (user adjusted gas)
+    if (errorMessage.includes('transaction was replaced') ||
+        error.code === 'TRANSACTION_REPLACED') {
+      return {
+        type: 'transaction_replaced',
+        title: 'Transaction Repriced',
+        message: 'Your wallet automatically adjusted the gas price for faster confirmation. The transaction was successful.',
+        canRetry: false,
+        isUserError: false,
+        isSuccess: true
+      };
+    }
+    
+    // Transaction hash issues (specific to your problem)
+    if (errorMessage.includes('Transaction does not have a transaction hash') ||
+        errorMessage.includes('there was a problem') ||
+        error.code === -32603) {
+      return {
+        type: 'transaction_hash_error',
+        title: 'Transaction Submission Failed',
+        message: 'The transaction could not be submitted properly. This often happens with allowance increases.',
+        canRetry: true,
+        isUserError: false
       };
     }
     
@@ -174,10 +207,20 @@ const Expatriation = ({
       const allowance = await tokenContract.allowance(await signer.getAddress(), bridgeInstance.address);
       
       // Store the values for display
-      setRequiredAmount(ethers.utils.formatUnits(amount, actualDecimals));
-      setCurrentAllowance(ethers.utils.formatUnits(allowance, actualDecimals));
+      if (allowance.eq(getMaxAllowance())) {
+        setCurrentAllowance('∞ (MAX)');
+      } else {
+        setCurrentAllowance(ethers.utils.formatUnits(allowance, actualDecimals));
+      }
+      setRequiredAmount(useMaxAllowance ? '∞ (MAX)' : ethers.utils.formatUnits(amount, actualDecimals));
       
-      const needsApproval = allowance.lt(amount);
+      // Check if approval is needed
+      let needsApproval;
+      if (useMaxAllowance) {
+        needsApproval = !allowance.eq(getMaxAllowance());
+      } else {
+        needsApproval = allowance.lt(amount);
+      }
       console.log('🔍 Approval check:', {
         required: ethers.utils.formatUnits(amount, actualDecimals),
         current: ethers.utils.formatUnits(allowance, actualDecimals),
@@ -210,14 +253,14 @@ const Expatriation = ({
     } finally {
       setIsCheckingApproval(false);
     }
-  }, [sourceToken.address, formData.amount, bridgeInstance.address, signer, createExportContract, createTokenContract]);
+  }, [sourceToken.address, formData.amount, bridgeInstance.address, signer, createExportContract, createTokenContract, useMaxAllowance]);
 
-  // Handle approval
-  const handleApprove = async () => {
+  // Handle approval with retry mechanism and proper allowance handling
+  const handleApprove = async (retryCount = 0) => {
     setIsLoading(true);
     
     try {
-      console.log('🔍 Starting approval process...');
+      console.log('🔍 Starting approval process...', retryCount > 0 ? `(Retry ${retryCount})` : '');
       console.log('📋 Approval details:', {
         tokenAddress: sourceToken.address,
         bridgeAddress: bridgeInstance.address,
@@ -241,34 +284,109 @@ const Expatriation = ({
       const tokenDecimals = await tokenContract.decimals();
       const amount = ethers.utils.parseUnits(formData.amount, tokenDecimals);
       
+      // Determine approval amount based on user preference
+      const approvalAmount = useMaxAllowance ? getMaxAllowance() : amount;
+      
       console.log('💰 Parsed amount for approval:', ethers.utils.formatUnits(amount, tokenDecimals));
+      console.log('🔐 Approval amount:', useMaxAllowance ? 'MAX (∞)' : ethers.utils.formatUnits(approvalAmount, tokenDecimals));
       
       // Check current allowance
       const currentAllowanceBN = await tokenContract.allowance(await signer.getAddress(), bridgeInstance.address);
       console.log('📊 Current allowance:', ethers.utils.formatUnits(currentAllowanceBN, tokenDecimals));
       
-      if (currentAllowanceBN.gte(amount)) {
+      // For max allowance, check if it's already set to max
+      if (useMaxAllowance && currentAllowanceBN.eq(getMaxAllowance())) {
+        console.log('✅ Maximum allowance already set');
+        setStep('approved');
+        setIsLoading(false);
+        return;
+      }
+      
+      // For specific amount, check if current allowance is sufficient
+      if (!useMaxAllowance && currentAllowanceBN.gte(amount)) {
         console.log('✅ Sufficient allowance already exists');
         setStep('approved');
         setIsLoading(false);
         return;
       }
 
+      // For allowance increases, we need to handle this more carefully
+      const hasExistingAllowance = currentAllowanceBN.gt(0);
+      console.log('🔍 Has existing allowance:', hasExistingAllowance);
+
       console.log('🔐 Approving bridge to spend tokens...');
-      const approveTx = await tokenContract.approve(bridgeInstance.address, amount, { 
-        gasLimit: 100000 
-      });
       
-      console.log('⏳ Waiting for approval transaction confirmation...');
-      const receipt = await approveTx.wait();
+      // Use different gas strategies based on whether this is an increase or new approval
+      const gasOptions = hasExistingAllowance ? {
+        gasLimit: 150000, // Higher gas limit for allowance increases
+        gasPrice: undefined, // Let the provider estimate
+      } : {
+        gasLimit: 100000, // Standard gas limit for new approvals
+        gasPrice: undefined,
+      };
+
+      // First, try to estimate gas to ensure the transaction is valid
+      let gasEstimate;
+      try {
+        gasEstimate = await tokenContract.estimateGas.approve(bridgeInstance.address, amount);
+        console.log('⛽ Gas estimate:', gasEstimate.toString());
+        // Add 20% buffer to gas estimate
+        gasOptions.gasLimit = gasEstimate.mul(120).div(100);
+      } catch (gasError) {
+        console.warn('⚠️ Gas estimation failed, using fallback:', gasError);
+        // If gas estimation fails, use a higher fallback
+        gasOptions.gasLimit = hasExistingAllowance ? 200000 : 150000;
+      }
+
+      console.log('⛽ Using gas limit:', gasOptions.gasLimit.toString());
+
+      // For allowance increases, we might need to reset to 0 first
+      if (hasExistingAllowance && retryCount === 0) {
+        console.log('🔄 Attempting two-step approval (reset then approve)...');
+        try {
+          // Step 1: Reset allowance to 0
+          console.log('🔄 Step 1: Resetting allowance to 0...');
+          const resetTx = await tokenContract.approve(bridgeInstance.address, 0, {
+            gasLimit: 100000
+          });
+          await resetTx.wait();
+          console.log('✅ Allowance reset successful');
+          
+          // Step 2: Set new allowance
+          console.log('🔄 Step 2: Setting new allowance...');
+          const approveTx = await tokenContract.approve(bridgeInstance.address, approvalAmount, gasOptions);
+          
+          console.log('⏳ Waiting for approval transaction confirmation...');
+          const receipt = await approveTx.wait();
+          
+          console.log('✅ Approval transaction confirmed:', receipt.transactionHash);
+          setApprovalTxHash(receipt.transactionHash);
+          
+        } catch (twoStepError) {
+          console.warn('⚠️ Two-step approval failed, trying direct approval:', twoStepError);
+          // Fall through to direct approval
+          throw twoStepError;
+        }
+      } else {
+        // Direct approval (either new approval or retry)
+        const approveTx = await tokenContract.approve(bridgeInstance.address, approvalAmount, gasOptions);
+        
+        console.log('⏳ Waiting for approval transaction confirmation...');
+        const receipt = await approveTx.wait();
+        
+        console.log('✅ Approval transaction confirmed:', receipt.transactionHash);
+        setApprovalTxHash(receipt.transactionHash);
+      }
       
-      console.log('✅ Approval transaction confirmed:', receipt.transactionHash);
-      setApprovalTxHash(receipt.transactionHash);
       // Refresh allowance display using actual decimals
       try {
         const updatedAllowance = await tokenContract.allowance(await signer.getAddress(), bridgeInstance.address);
-        setCurrentAllowance(ethers.utils.formatUnits(updatedAllowance, tokenDecimals));
-        setRequiredAmount(ethers.utils.formatUnits(amount, tokenDecimals));
+        if (updatedAllowance.eq(getMaxAllowance())) {
+          setCurrentAllowance('∞ (MAX)');
+        } else {
+          setCurrentAllowance(ethers.utils.formatUnits(updatedAllowance, tokenDecimals));
+        }
+        setRequiredAmount(useMaxAllowance ? '∞ (MAX)' : ethers.utils.formatUnits(amount, tokenDecimals));
       } catch (e) {
         console.warn('⚠️ Could not refresh allowance after approval:', e);
       }
@@ -276,15 +394,122 @@ const Expatriation = ({
       
     } catch (error) {
       console.error('❌ Approval failed:', error);
+      
       const errorInfo = parseError(error);
       
-      // Show toast notification
+      // Handle transaction replacement as success
+      if (errorInfo.type === 'transaction_replaced') {
+        console.log('✅ Transaction was repriced and successful');
+        
+        // Try to get the replacement transaction hash
+        let replacementTxHash = '';
+        if (error.replacement && error.replacement.hash) {
+          replacementTxHash = error.replacement.hash;
+          setApprovalTxHash(replacementTxHash);
+        }
+        
+        // Refresh allowance display
+        try {
+          const exportContract = createExportContract();
+          let settings;
+          try {
+            settings = await exportContract.settings();
+          } catch (e) {
+            console.warn('⚠️ Could not fetch bridge settings:', e);
+          }
+          const tokenContract = createTokenContract(settings?.tokenAddress || sourceToken.address);
+          const tokenDecimals = await tokenContract.decimals();
+          const updatedAllowance = await tokenContract.allowance(await signer.getAddress(), bridgeInstance.address);
+          if (updatedAllowance.eq(getMaxAllowance())) {
+            setCurrentAllowance('∞ (MAX)');
+          } else {
+            setCurrentAllowance(ethers.utils.formatUnits(updatedAllowance, tokenDecimals));
+          }
+          setRequiredAmount(useMaxAllowance ? '∞ (MAX)' : ethers.utils.formatUnits(ethers.utils.parseUnits(formData.amount, tokenDecimals), tokenDecimals));
+        } catch (e) {
+          console.warn('⚠️ Could not refresh allowance after repriced transaction:', e);
+        }
+        
+        setStep('approved');
+        
+        // Show success notification
+        toast.success(
+          <div>
+            <h3 className="text-success-400 font-medium">Approval Successful</h3>
+            <p className="text-success-300 text-sm mt-1">
+              Your wallet automatically adjusted the gas price. The approval was successful.
+            </p>
+            {replacementTxHash && (
+              <p className="text-success-300 text-xs mt-2 font-mono">
+                TX: {replacementTxHash.slice(0, 10)}...{replacementTxHash.slice(-8)}
+              </p>
+            )}
+          </div>,
+          {
+            duration: 6000,
+            style: {
+              background: '#065f46',
+              border: '1px solid #047857',
+              color: '#fff',
+              padding: '16px',
+              borderRadius: '8px',
+            },
+          }
+        );
+        
+        return;
+      }
+      
+      // Check if this is a retryable error and we haven't exceeded retry limit
+      const errorMessage = error.message || error.toString();
+      const isRetryableError = (
+        errorMessage.includes('Transaction does not have a transaction hash') ||
+        errorMessage.includes('there was a problem') ||
+        errorMessage.includes('network') ||
+        errorMessage.includes('timeout') ||
+        error.code === -32603
+      );
+      
+      if (isRetryableError && retryCount < 2) {
+        console.log(`🔄 Retrying approval (attempt ${retryCount + 1}/2)...`);
+        
+        // Show retry notification
+        toast.error(
+          <div>
+            <h3 className="text-warning-400 font-medium">Transaction Failed - Retrying</h3>
+            <p className="text-warning-300 text-sm mt-1">
+              The approval transaction failed. Retrying with different parameters... (Attempt {retryCount + 1}/2)
+            </p>
+          </div>,
+          {
+            duration: 4000,
+            style: {
+              background: '#92400e',
+              border: '1px solid #f59e0b',
+              color: '#fff',
+              padding: '16px',
+              borderRadius: '8px',
+            },
+          }
+        );
+        
+        // Wait a bit before retrying
+        await new Promise(resolve => setTimeout(resolve, 2000));
+        
+        // Retry with different approach
+        return handleApprove(retryCount + 1);
+      }
+      
+      // Show final error notification
       toast.error(
         <div>
           <h3 className="text-error-400 font-medium">{errorInfo.title}</h3>
           <p className="text-error-300 text-sm mt-1">{errorInfo.message}</p>
           {errorInfo.type === 'user_rejection' && (
             <p className="text-error-200 text-xs mt-2">💡 You can try again by clicking the approve button.</p>
+          )}
+          {isRetryableError && retryCount >= 2 && (
+            <p className="text-error-200 text-xs mt-2">💡 Multiple retry attempts failed. Try refreshing the page or switching networks.</p>
           )}
         </div>,
         {
@@ -534,6 +759,135 @@ const Expatriation = ({
     }
   }, [signer, sourceToken, bridgeInstance, checkApprovalNeeded]);
 
+  // Handle revoke allowance
+  const handleRevokeAllowance = async () => {
+    setIsRevoking(true);
+    
+    try {
+      console.log('🔄 Starting allowance revocation...');
+      
+      const exportContract = createExportContract();
+      let settings;
+      try {
+        settings = await exportContract.settings();
+      } catch (e) {
+        console.warn('⚠️ Could not fetch bridge settings:', e);
+      }
+      const bridgeTokenAddress = settings?.tokenAddress || sourceToken.address;
+      
+      const tokenContract = createTokenContract(bridgeTokenAddress);
+      
+      console.log('🔐 Revoking allowance (setting to 0)...');
+      const revokeTx = await tokenContract.approve(bridgeInstance.address, 0, { 
+        gasLimit: 100000 
+      });
+      
+      console.log('⏳ Waiting for revocation transaction confirmation...');
+      const receipt = await revokeTx.wait();
+      
+      console.log('✅ Allowance revoked successfully:', receipt.transactionHash);
+      
+      // Refresh allowance display
+      try {
+        const updatedAllowance = await tokenContract.allowance(await signer.getAddress(), bridgeInstance.address);
+        setCurrentAllowance(ethers.utils.formatUnits(updatedAllowance, await tokenContract.decimals()));
+        setRequiredAmount(ethers.utils.formatUnits(ethers.utils.parseUnits(formData.amount, await tokenContract.decimals()), await tokenContract.decimals()));
+      } catch (e) {
+        console.warn('⚠️ Could not refresh allowance after revocation:', e);
+      }
+      
+      // Show success notification
+      toast.success(
+        <div>
+          <h3 className="text-success-400 font-medium">Allowance Revoked</h3>
+          <p className="text-success-300 text-sm mt-1">
+            The bridge contract can no longer spend your {sourceToken.symbol} tokens.
+          </p>
+        </div>,
+        {
+          duration: 6000,
+          style: {
+            background: '#065f46',
+            border: '1px solid #047857',
+            color: '#fff',
+            padding: '16px',
+            borderRadius: '8px',
+          },
+        }
+      );
+      
+    } catch (error) {
+      console.error('❌ Allowance revocation failed:', error);
+      const errorInfo = parseError(error);
+      
+      // Handle transaction replacement as success
+      if (errorInfo.type === 'transaction_replaced') {
+        console.log('✅ Revoke transaction was repriced and successful');
+        
+        // Refresh allowance display
+        try {
+          const exportContract = createExportContract();
+          let settings;
+          try {
+            settings = await exportContract.settings();
+          } catch (e) {
+            console.warn('⚠️ Could not fetch bridge settings:', e);
+          }
+          const tokenContract = createTokenContract(settings?.tokenAddress || sourceToken.address);
+          const updatedAllowance = await tokenContract.allowance(await signer.getAddress(), bridgeInstance.address);
+          setCurrentAllowance(ethers.utils.formatUnits(updatedAllowance, await tokenContract.decimals()));
+        } catch (e) {
+          console.warn('⚠️ Could not refresh allowance after repriced revoke transaction:', e);
+        }
+        
+        // Show success notification
+        toast.success(
+          <div>
+            <h3 className="text-success-400 font-medium">Allowance Revoked</h3>
+            <p className="text-success-300 text-sm mt-1">
+              Your wallet automatically adjusted the gas price. The allowance was successfully revoked.
+            </p>
+          </div>,
+          {
+            duration: 6000,
+            style: {
+              background: '#065f46',
+              border: '1px solid #047857',
+              color: '#fff',
+              padding: '16px',
+              borderRadius: '8px',
+            },
+          }
+        );
+        
+        return;
+      }
+      
+      // Show error notification
+      toast.error(
+        <div>
+          <h3 className="text-error-400 font-medium">{errorInfo.title}</h3>
+          <p className="text-error-300 text-sm mt-1">{errorInfo.message}</p>
+          {errorInfo.type === 'user_rejection' && (
+            <p className="text-error-200 text-xs mt-2">💡 You can try again by clicking the revoke button.</p>
+          )}
+        </div>,
+        {
+          duration: 6000,
+          style: {
+            background: '#7f1d1d',
+            border: '1px solid #dc2626',
+            color: '#fff',
+            padding: '16px',
+            borderRadius: '8px',
+          },
+        }
+      );
+    } finally {
+      setIsRevoking(false);
+    }
+  };
+
   const renderStep = () => {
     switch (step) {
       case 'approve':
@@ -549,24 +903,46 @@ const Expatriation = ({
                 <div className="flex-1">
                   <h3 className="text-warning-400 font-medium">Approval Required</h3>
                   <p className="text-warning-300 text-sm mt-1">
-                    You need to approve the bridge contract to spend your {sourceToken.symbol} tokens before initiating the transfer.
+                    Approve the bridge contract to spend your {sourceToken.symbol} tokens before initiating the transfer.
                   </p>
                   
                   {!isCheckingApproval && (
-                    <div className="mt-3 space-y-2">
-                      <div className="flex justify-between text-sm">
-                        <span className="text-warning-300">Required amount:</span>
-                        <span className="text-warning-400 font-medium">{requiredAmount} {sourceToken.symbol}</span>
-                      </div>
-                      <div className="flex justify-between text-sm">
-                        <span className="text-warning-300">Current allowance:</span>
-                        <span className="text-warning-400 font-medium">{currentAllowance} {sourceToken.symbol}</span>
-                      </div>
-                      {parseFloat(currentAllowance) > 0 && (
-                        <div className="text-xs text-warning-300 mt-1">
-                          You have an existing allowance, but it's insufficient for this transfer.
+                    <div className="mt-3 space-y-3">
+                      <div className="space-y-2">
+                        <div className="flex justify-between text-sm">
+                          <span className="text-warning-300">Required amount:</span>
+                          <span className="text-warning-400 font-medium">{requiredAmount} {sourceToken.symbol}</span>
                         </div>
-                      )}
+                        <div className="flex justify-between text-sm">
+                          <span className="text-warning-300">Current allowance:</span>
+                          <span className="text-warning-400 font-medium">{currentAllowance} {sourceToken.symbol}</span>
+                        </div>
+                        {parseFloat(currentAllowance) > 0 && currentAllowance !== '∞ (MAX)' && (
+                          <div className="text-xs text-warning-300 mt-1">
+                            You have an existing allowance, but it's insufficient for this transfer.
+                          </div>
+                        )}
+                      </div>
+                      
+                      {/* Max Allowance Option */}
+                      <div className="border-t border-warning-700 pt-3">
+                        <label className="flex items-center space-x-3 cursor-pointer">
+                          <input
+                            type="checkbox"
+                            checked={useMaxAllowance}
+                            onChange={(e) => setUseMaxAllowance(e.target.checked)}
+                            className="w-4 h-4 text-warning-400 bg-warning-900 border-warning-600 rounded focus:ring-warning-500 focus:ring-2"
+                          />
+                          <div className="flex-1">
+                            <span className="text-warning-300 text-sm font-medium">
+                              Set maximum allowance (∞)
+                            </span>
+                            <p className="text-warning-400 text-xs mt-1">
+                              Approve unlimited spending to avoid future approval transactions.
+                            </p>
+                          </div>
+                        </label>
+                      </div>
                     </div>
                   )}
                 </div>
@@ -591,11 +967,33 @@ const Expatriation = ({
                   </div>
                 ) : (
                   <div className="flex items-center justify-center space-x-2">
-                    <span>Approve {sourceToken.symbol}</span>
+                    <span>
+                      {useMaxAllowance ? `Approve ∞ ${sourceToken.symbol}` : `Approve ${sourceToken.symbol}`}
+                    </span>
                     <ArrowRight className="w-5 h-5" />
                   </div>
                 )}
               </button>
+              
+              {/* Revoke Allowance Button - Show if there's any existing allowance */}
+              {!isCheckingApproval && currentAllowance !== '0' && (
+                <button
+                  onClick={handleRevokeAllowance}
+                  disabled={isRevoking}
+                  className="w-full btn-secondary py-2 text-sm font-medium disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  {isRevoking ? (
+                    <div className="flex items-center justify-center space-x-2">
+                      <Loader className="w-4 h-4 animate-spin" />
+                      <span>Revoking Allowance...</span>
+                    </div>
+                  ) : (
+                    <div className="flex items-center justify-center space-x-2">
+                      <span>Revoke Allowance</span>
+                    </div>
+                  )}
+                </button>
+              )}
               
               <button
                 onClick={async () => {
@@ -621,6 +1019,7 @@ const Expatriation = ({
         );
 
       case 'approved':
+        console.log('🔍 Approved step rendering:', { currentAllowance, step });
         return (
           <motion.div
             initial={{ opacity: 0, y: 20 }}
@@ -645,6 +1044,11 @@ const Expatriation = ({
                       <span className="text-success-300">Required for transfer:</span>
                       <span className="text-success-400 font-medium">{requiredAmount} {sourceToken.symbol}</span>
                     </div>
+                    {currentAllowance === '∞ (MAX)' && (
+                      <div className="text-xs text-success-300 mt-2 p-2 bg-success-800/30 rounded border border-success-700">
+                        ✅ Maximum allowance set - no future approvals needed for this token
+                      </div>
+                    )}
                   </div>
                   
                   {approvalTxHash && (
@@ -656,23 +1060,45 @@ const Expatriation = ({
               </div>
             </div>
             
-            <button
-              onClick={handleTransfer}
-              disabled={isLoading}
-              className="w-full btn-primary py-3 text-lg font-medium disabled:opacity-50 disabled:cursor-not-allowed"
-            >
-              {isLoading ? (
-                <div className="flex items-center justify-center space-x-2">
-                  <Loader className="w-5 h-5 animate-spin" />
-                  <span>Initiating Transfer...</span>
-                </div>
-              ) : (
-                <div className="flex items-center justify-center space-x-2">
-                  <span>Initiate Transfer</span>
-                  <ArrowRight className="w-5 h-5" />
-                </div>
+            <div className="space-y-3">
+              <button
+                onClick={handleTransfer}
+                disabled={isLoading}
+                className="w-full btn-primary py-3 text-lg font-medium disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                {isLoading ? (
+                  <div className="flex items-center justify-center space-x-2">
+                    <Loader className="w-5 h-5 animate-spin" />
+                    <span>Initiating Transfer...</span>
+                  </div>
+                ) : (
+                  <div className="flex items-center justify-center space-x-2">
+                    <span>Initiate Transfer</span>
+                    <ArrowRight className="w-5 h-5" />
+                  </div>
+                )}
+              </button>
+              
+              {/* Revoke Allowance Button - Show if there's any allowance */}
+              {currentAllowance !== '0' && (
+                <button
+                  onClick={handleRevokeAllowance}
+                  disabled={isRevoking}
+                  className="w-full btn-secondary py-2 text-sm font-medium disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  {isRevoking ? (
+                    <div className="flex items-center justify-center space-x-2">
+                      <Loader className="w-4 h-4 animate-spin" />
+                      <span>Revoking Allowance...</span>
+                    </div>
+                  ) : (
+                    <div className="flex items-center justify-center space-x-2">
+                      <span>Revoke Allowance</span>
+                    </div>
+                  )}
+                </button>
               )}
-            </button>
+            </div>
           </motion.div>
         );
 

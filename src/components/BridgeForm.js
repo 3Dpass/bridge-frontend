@@ -1084,11 +1084,6 @@ const BridgeForm = () => {
                   </option>
                 ))}
               </select>
-              {formData.sourceToken && balances[formData.sourceToken] && (
-                <p className="text-secondary-400 text-sm mt-1">
-                  Balance: {Number(balances[formData.sourceToken]).toFixed(12)} {formData.sourceToken}
-                </p>
-              )}
               {errors.sourceToken && (
                 <p className="text-error-400 text-sm mt-1">{errors.sourceToken}</p>
               )}
@@ -1195,6 +1190,11 @@ const BridgeForm = () => {
                   </div>
                 )}
               </div>
+              {formData.sourceToken && balances[formData.sourceToken] && (
+                <p className="text-secondary-400 text-sm mt-1">
+                  Balance: {parseFloat(balances[formData.sourceToken]).toString()} {formData.sourceToken}
+                </p>
+              )}
               {errors.amount && (
                 <p className="text-error-400 text-sm mt-1">{errors.amount}</p>
               )}
