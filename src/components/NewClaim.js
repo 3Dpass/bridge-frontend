@@ -67,6 +67,27 @@ const getStakeTokenDecimals = (networkId) => {
   return 18; // Default fallback
 };
 
+// Helper function to get display multiplier for stake token
+const getStakeTokenDisplayMultiplier = (networkId) => {
+  const networkConfig = getNetworkConfig(networkId);
+  if (!networkConfig) return 1; // Default fallback
+  
+  // For 3DPass, P3D has display multiplier
+  if (networkId === NETWORKS.THREEDPASS.id) {
+    return networkConfig.nativeCurrency?.decimalsDisplayMultiplier || 1;
+  }
+  
+  return 1; // Default fallback for other networks
+};
+
+// Helper function to format stake token amount for display
+const formatStakeTokenForDisplay = (amount, networkId) => {
+  const multiplier = getStakeTokenDisplayMultiplier(networkId);
+  const numericAmount = parseFloat(amount);
+  if (isNaN(numericAmount)) return amount;
+  return (numericAmount * multiplier).toString();
+};
+
 const NewClaim = ({ isOpen, onClose, selectedToken = null, selectedTransfer = null, onClaimSubmitted = null }) => {
   const { account, provider, network, isConnected, signer } = useWeb3();
   const { getBridgeInstancesWithSettings, getNetworkWithSettings } = useSettings();
@@ -1418,10 +1439,10 @@ const NewClaim = ({ isOpen, onClose, selectedToken = null, selectedTransfer = nu
                                   ? 'text-red-400' 
                                   : 'text-white'
                               }`}>
-                                {isLoadingStakeBalance ? 'Loading...' : stakeTokenBalance}
+                                {isLoadingStakeBalance ? 'Loading...' : formatStakeTokenForDisplay(stakeTokenBalance, network?.id)}
                                 {!isLoadingStakeBalance && parseFloat(stakeTokenBalance) < parseFloat(requiredStake) && (
                                   <span className="text-xs text-red-400 ml-1">
-                                    (Insufficient for stake: {requiredStake})
+                                    (Insufficient for stake: {formatStakeTokenForDisplay(requiredStake, network?.id)})
                                   </span>
                                 )}
                               </p>
@@ -1464,7 +1485,7 @@ const NewClaim = ({ isOpen, onClose, selectedToken = null, selectedTransfer = nu
                     <div>
                       <p className="text-secondary-400">Required Stake</p>
                       <p className="font-medium text-white">
-                        {requiredStake} {selectedBridge?.stakeTokenSymbol || 'stake'}
+                        {formatStakeTokenForDisplay(requiredStake, network?.id)} {selectedBridge?.stakeTokenSymbol || 'stake'}
                         {formData.amount && (
                           <span className="text-xs text-secondary-400 ml-1">
                             (for {formData.amount} {tokenMetadata?.symbol})
@@ -1715,16 +1736,15 @@ const NewClaim = ({ isOpen, onClose, selectedToken = null, selectedTransfer = nu
                   </div>
                   
                   <p className="text-sm text-secondary-400 mb-4">
-                    The bridge needs permission to spend your {selectedBridge?.stakeTokenSymbol || 'stake'} tokens for staking. 
-                    Current {selectedBridge?.stakeTokenSymbol || 'stake'} allowance: {allowance} {selectedBridge?.stakeTokenSymbol || 'stake'}
+                    The bridge needs permission to spend your {selectedBridge?.stakeTokenSymbol || 'stake'} tokens for staking.
                   </p>
                   
                   <div className="bg-warning-900/20 border border-warning-700 rounded-lg p-3 mb-4">
                     <p className="text-sm text-warning-200">
-                      <strong>Required:</strong> {requiredStake} {selectedBridge?.stakeTokenSymbol || 'stake'} for staking
+                      <strong>Required:</strong> {formatStakeTokenForDisplay(requiredStake, network?.id)} {selectedBridge?.stakeTokenSymbol || 'stake'} for staking
                     </p>
                     <p className="text-sm text-warning-200">
-                      <strong>Your Balance:</strong> {stakeTokenBalance} {selectedBridge?.stakeTokenSymbol || 'stake'}
+                      <strong>Current allowance:</strong> {formatStakeTokenForDisplay(allowance, network?.id)} {selectedBridge?.stakeTokenSymbol || 'stake'}
                     </p>
                   </div>
                   
@@ -1760,11 +1780,11 @@ const NewClaim = ({ isOpen, onClose, selectedToken = null, selectedTransfer = nu
                     <div className="space-y-2">
                       <div className="flex justify-between">
                         <span className="text-success-300 text-sm">Current allowance:</span>
-                        <span className="text-success-400 font-medium text-sm">{allowance} {selectedBridge?.stakeTokenSymbol || 'stake'}</span>
+                        <span className="text-success-400 font-medium text-sm">{formatStakeTokenForDisplay(allowance, network?.id)} {selectedBridge?.stakeTokenSymbol || 'stake'}</span>
                       </div>
                       <div className="flex justify-between">
                         <span className="text-success-300 text-sm">Required for staking:</span>
-                        <span className="text-success-400 font-medium text-sm">{requiredStake} {selectedBridge?.stakeTokenSymbol || 'stake'}</span>
+                        <span className="text-success-400 font-medium text-sm">{formatStakeTokenForDisplay(requiredStake, network?.id)} {selectedBridge?.stakeTokenSymbol || 'stake'}</span>
                       </div>
                     </div>
                   </div>
