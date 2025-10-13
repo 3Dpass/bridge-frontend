@@ -19,7 +19,10 @@ import {
   Loader2,
   Info,
   ExternalLink,
-  Coins
+  Coins,
+  ChevronDown,
+  ChevronUp,
+  Copy
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { ethers } from 'ethers';
@@ -88,6 +91,22 @@ const formatStakeTokenForDisplay = (amount, networkId) => {
   return (numericAmount * multiplier).toString();
 };
 
+// Helper function to check if this is a third-party claim
+const checkThirdPartyClaim = (account, recipientAddress, reward) => {
+  if (!account || !recipientAddress) return false;
+  
+  // Third-party claim condition: signer != recipient AND reward > 0
+  const isDifferentRecipient = account.toLowerCase() !== recipientAddress.toLowerCase();
+  const hasReward = parseFloat(reward || '0') > 0;
+  
+  return isDifferentRecipient && hasReward;
+};
+
+// Get maximum allowance value (2^256 - 1)
+const getMaxAllowance = () => {
+  return ethers.constants.MaxUint256;
+};
+
 const NewClaim = ({ isOpen, onClose, selectedToken = null, selectedTransfer = null, onClaimSubmitted = null }) => {
   const { account, provider, network, isConnected, signer } = useWeb3();
   const { getBridgeInstancesWithSettings, getNetworkWithSettings } = useSettings();
@@ -115,6 +134,10 @@ const NewClaim = ({ isOpen, onClose, selectedToken = null, selectedTransfer = nu
   const [allowance, setAllowance] = useState('0');
   const [needsApproval, setNeedsApproval] = useState(true);
   const [availableTokens, setAvailableTokens] = useState([]);
+  const [isThirdPartyClaim, setIsThirdPartyClaim] = useState(false);
+  const [showTransactionDetails, setShowTransactionDetails] = useState(false);
+  const [useMaxAllowance, setUseMaxAllowance] = useState(false);
+  const [isRevoking, setIsRevoking] = useState(false);
   
   // Custom control state for transaction details
   const [customControls, setCustomControls] = useState({
@@ -132,13 +155,6 @@ const NewClaim = ({ isOpen, onClose, selectedToken = null, selectedTransfer = nu
     if (isOpen) {
       // Add a small delay to ensure network switch has completed
       const timer = setTimeout(async () => {
-        // Always set sender address from provider/account when dialog opens
-        if (account) {
-          setFormData(prev => ({
-            ...prev,
-            senderAddress: toChecksumAddress(account)
-          }));
-        }
         if (selectedTransfer) {
           // Pre-fill form with transfer data
           console.log('🔍 Pre-filling form with transfer data:', selectedTransfer);
@@ -226,7 +242,7 @@ const NewClaim = ({ isOpen, onClose, selectedToken = null, selectedTransfer = nu
             })(),
             txid: selectedTransfer.txid || selectedTransfer.transactionHash || '',
             txts: txtsValue,
-            senderAddress: toChecksumAddress(account || selectedTransfer.fromAddress || selectedTransfer.senderAddress || ''),
+            senderAddress: toChecksumAddress(selectedTransfer.fromAddress || selectedTransfer.senderAddress || ''),
             recipientAddress: toChecksumAddress(selectedTransfer.toAddress || selectedTransfer.recipientAddress || account || ''),
             data: selectedTransfer.data || '0x'
           }));
@@ -236,16 +252,16 @@ const NewClaim = ({ isOpen, onClose, selectedToken = null, selectedTransfer = nu
             ...prev,
             tokenAddress: selectedToken.address,
             recipientAddress: toChecksumAddress(account || ''),
-            senderAddress: toChecksumAddress(account || ''),
+            senderAddress: '', // Don't pre-fill sender address for manual claims
             txts: reliableTimestamp // Use reliable external timestamp
           }));
         } else if (account) {
-          // If no selected token but account is available, still set the addresses
+          // If no selected token but account is available, still set the recipient address
           const reliableTimestamp = await getReliableTimestamp();
           setFormData(prev => ({
             ...prev,
             recipientAddress: toChecksumAddress(account),
-            senderAddress: toChecksumAddress(account),
+            senderAddress: '', // Don't pre-fill sender address for manual claims
             txts: reliableTimestamp // Use reliable external timestamp
           }));
         }
@@ -262,6 +278,9 @@ const NewClaim = ({ isOpen, onClose, selectedToken = null, selectedTransfer = nu
           senderAddress: false,
           recipientAddress: false
         });
+        
+        // Reset transaction details visibility when dialog opens
+        setShowTransactionDetails(false);
       }, 1000); // Wait 1 second for network switch to complete
       
       return () => clearTimeout(timer);
@@ -783,16 +802,29 @@ const NewClaim = ({ isOpen, onClose, selectedToken = null, selectedTransfer = nu
         allowanceComparison: `${allowanceWei.toString()} >= ${stakeWei.toString()} = ${allowanceWei.gte(stakeWei)}`
       });
       
-      setAllowance(currentAllowance);
-      const needsApprovalResult = allowanceWei.lt(stakeWei);
+      // Handle max allowance display
+      if (allowanceWei.eq(getMaxAllowance())) {
+        setAllowance('∞ (MAX)');
+      } else {
+        setAllowance(currentAllowance);
+      }
+      
+      // Check if approval is needed based on max allowance preference
+      let needsApprovalResult;
+      if (useMaxAllowance) {
+        needsApprovalResult = !allowanceWei.eq(getMaxAllowance());
+      } else {
+        needsApprovalResult = allowanceWei.lt(stakeWei);
+      }
+      
       console.log('🔍 Setting needsApproval to:', needsApprovalResult);
-      setNeedsApproval(needsApprovalResult); // Allow if allowance >= required stake
+      setNeedsApproval(needsApprovalResult);
     } catch (error) {
       console.error('Error checking stake token allowance:', error);
       setAllowance('0');
       setNeedsApproval(true);
     }
-  }, [selectedBridge, formData.amount, provider, account, requiredStake, network?.id]);
+  }, [selectedBridge, formData.amount, provider, account, requiredStake, network?.id, useMaxAllowance]);
 
   // Load available tokens
   useEffect(() => {
@@ -838,6 +870,21 @@ const NewClaim = ({ isOpen, onClose, selectedToken = null, selectedTransfer = nu
       checkAllowance();
     }
   }, [selectedBridge, formData.amount, provider, account, checkAllowance, isOpen]);
+
+  // Check if this is a third-party claim
+  useEffect(() => {
+    const isThirdParty = checkThirdPartyClaim(account, formData.recipientAddress, formData.reward);
+    setIsThirdPartyClaim(isThirdParty);
+    
+    if (isThirdParty) {
+      console.log('🔍 Third-party claim detected:', {
+        account: account,
+        recipientAddress: formData.recipientAddress,
+        reward: formData.reward,
+        isThirdParty: isThirdParty
+      });
+    }
+  }, [account, formData.recipientAddress, formData.reward]);
 
   // Auto-select token when selectedTransfer is provided and availableTokens are loaded
   useEffect(() => {
@@ -889,6 +936,79 @@ const NewClaim = ({ isOpen, onClose, selectedToken = null, selectedTransfer = nu
     }));
   };
 
+  // Handle copy to clipboard
+  const handleCopyToClipboard = async (text, label) => {
+    try {
+      await navigator.clipboard.writeText(text);
+      toast.success(`${label} copied to clipboard`);
+    } catch (error) {
+      console.error('Failed to copy to clipboard:', error);
+      toast.error('Failed to copy to clipboard');
+    }
+  };
+
+  // Handle revoke allowance
+  const handleRevokeAllowance = async () => {
+    setIsRevoking(true);
+    
+    try {
+      console.log('🔄 Starting allowance revocation...');
+      
+      if (network?.id === NETWORKS.THREEDPASS.id) {
+        // For 3DPass network, use 3DPass token approval with 0 amount
+        await approve3DPassToken(
+          signer,
+          selectedBridge.stakeTokenAddress, // P3D token address for staking
+          selectedBridge.address,           // Bridge contract address
+          '0'                              // Revoke by setting to 0
+        );
+      } else {
+        // For other networks (like Ethereum), use standard ERC20 approval with 0
+        const tokenContract = new ethers.Contract(selectedBridge.stakeTokenAddress, [
+          'function approve(address spender, uint256 amount) returns (bool)',
+          'function decimals() view returns (uint8)'
+        ], signer);
+        
+        const revokeTx = await tokenContract.approve(selectedBridge.address, 0, { 
+          gasLimit: 100000 
+        });
+        
+        console.log('⏳ Waiting for revocation transaction confirmation...');
+        await revokeTx.wait();
+        console.log('✅ Allowance revoked successfully');
+      }
+      
+      toast.success('Allowance revoked successfully!');
+      
+      // Refresh allowance display
+      await checkAllowance();
+      
+    } catch (error) {
+      console.error('❌ Allowance revocation failed:', error);
+      
+      // Handle different types of errors gracefully
+      let errorMessage = 'Allowance revocation failed';
+      
+      if (error.code === 4001 || error.message?.includes('User denied transaction') || error.message?.includes('user rejected transaction')) {
+        errorMessage = 'Transaction cancelled';
+      } else if (error.code === -32603 || error.message?.includes('insufficient funds')) {
+        errorMessage = 'Insufficient funds for transaction';
+      } else if (error.message?.includes('gas')) {
+        errorMessage = 'Transaction failed due to gas issues. Please try again.';
+      } else if (error.message?.includes('revert')) {
+        errorMessage = 'Transaction failed. Please check your inputs and try again.';
+      } else if (error.message?.includes('network')) {
+        errorMessage = 'Network error. Please check your connection and try again.';
+      } else {
+        errorMessage = `Allowance revocation failed: ${error.message}`;
+      }
+      
+      toast.error(errorMessage);
+    } finally {
+      setIsRevoking(false);
+    }
+  };
+
   // Handle approval
   const handleApproval = async () => {
     if (!signer || !selectedBridge || !formData.amount) return;
@@ -898,11 +1018,12 @@ const NewClaim = ({ isOpen, onClose, selectedToken = null, selectedTransfer = nu
       // Approve the stake token, not the claim token
       if (network?.id === NETWORKS.THREEDPASS.id) {
         // For 3DPass network, use 3DPass token approval
+        const approvalAmount = useMaxAllowance ? getMaxAllowance() : requiredStake;
         await approve3DPassToken(
           signer,
           selectedBridge.stakeTokenAddress, // P3D token address for staking
           selectedBridge.address,           // Bridge contract address
-          requiredStake                     // P3D stake amount
+          approvalAmount                    // P3D stake amount or max allowance
         );
       } else {
         // For other networks (like Ethereum), use standard ERC20 approval
@@ -912,8 +1033,8 @@ const NewClaim = ({ isOpen, onClose, selectedToken = null, selectedTransfer = nu
         ], signer);
         
         const decimals = await tokenContract.decimals();
-        const stakeWei = ethers.utils.parseUnits(requiredStake, decimals);
-        const approvalTx = await tokenContract.approve(selectedBridge.address, stakeWei);
+        const approvalAmount = useMaxAllowance ? getMaxAllowance() : ethers.utils.parseUnits(requiredStake, decimals);
+        const approvalTx = await tokenContract.approve(selectedBridge.address, approvalAmount);
         console.log('🔍 Approval transaction sent:', approvalTx.hash);
         
         // Wait for the transaction to be mined
@@ -1333,6 +1454,16 @@ const NewClaim = ({ isOpen, onClose, selectedToken = null, selectedTransfer = nu
       if (stakeAmount > stakeBalance) return false;
     }
     
+    // For third-party claims, check if user has enough tokens to burn
+    if (isThirdPartyClaim && formData.amount && formData.reward) {
+      const claimAmount = parseFloat(formData.amount);
+      const rewardAmount = parseFloat(formData.reward);
+      const tokensToBurn = claimAmount - rewardAmount;
+      const userTokenBalance = parseFloat(tokenBalance);
+      
+      if (tokensToBurn > userTokenBalance) return false;
+    }
+    
     return true;
   };
 
@@ -1442,7 +1573,7 @@ const NewClaim = ({ isOpen, onClose, selectedToken = null, selectedTransfer = nu
                                 {isLoadingStakeBalance ? 'Loading...' : formatStakeTokenForDisplay(stakeTokenBalance, network?.id)}
                                 {!isLoadingStakeBalance && parseFloat(stakeTokenBalance) < parseFloat(requiredStake) && (
                                   <span className="text-xs text-red-400 ml-1">
-                                    (Insufficient for stake: {formatStakeTokenForDisplay(requiredStake, network?.id)})
+                                    (Insufficient)
                                   </span>
                                 )}
                               </p>
@@ -1478,9 +1609,19 @@ const NewClaim = ({ isOpen, onClose, selectedToken = null, selectedTransfer = nu
                     </div>
                     <div>
                       <p className="text-secondary-400">Bridge Contract</p>
-                      <p className="font-medium text-white font-mono text-xs">
-                        {selectedBridge.address.slice(0, 6)}...{selectedBridge.address.slice(-4)}
-                      </p>
+                      <div className="flex items-center gap-2">
+                        <p className="font-medium text-white font-mono text-xs">
+                          {selectedBridge.address.slice(0, 6)}...{selectedBridge.address.slice(-4)}
+                        </p>
+                        <button
+                          type="button"
+                          onClick={() => handleCopyToClipboard(selectedBridge.address, 'Bridge contract address')}
+                          className="p-1 text-secondary-400 hover:text-white transition-colors"
+                          title="Copy full address"
+                        >
+                          <Copy className="w-3 h-3" />
+                        </button>
+                      </div>
                     </div>
                     <div>
                       <p className="text-secondary-400">Required Stake</p>
@@ -1503,14 +1644,100 @@ const NewClaim = ({ isOpen, onClose, selectedToken = null, selectedTransfer = nu
                 </div>
               )}
 
+              {/* Third-Party Claim Warning */}
+              {isThirdPartyClaim && selectedBridge && (
+                <div className="card border-primary-700 bg-primary-900/20">
+                  <div className="flex items-center gap-3 mb-4">
+                    <Info className="w-5 h-5 text-primary-500" />
+                    <h3 className="text-lg font-semibold text-white">Third-Party Claim</h3>
+                    <span className="px-2 py-1 bg-warning-600 text-white text-xs rounded-full">
+                      Token Burning Required
+                    </span>
+                  </div>
+                  
+                  <div className="space-y-3">
+                    <p className="text-sm text-secondary-400">
+                      You are about to claim on behalf of the sender to speed up the transfer and get rewarded.
+                    </p>
+                    
+                    <div className="bg-dark-800 border border-secondary-700 rounded-lg p-3">
+                      <div className="space-y-2 text-sm">
+                        <div className="flex justify-between">
+                          <span className="text-secondary-400">Claim Amount:</span>
+                          <span className="font-medium text-white">{formData.amount} {tokenMetadata?.symbol}</span>
+                        </div>
+                        <div className="flex justify-between">
+                          <span className="text-secondary-400">Reward:</span>
+                          <span className="font-medium text-white">{formData.reward} {tokenMetadata?.symbol}</span>
+                        </div>
+                        <div className="flex justify-between">
+                          <span className="text-secondary-400">Tokens to Burn:</span>
+                          <span className="font-medium text-white">
+                            {formData.amount && formData.reward ? 
+                              (parseFloat(formData.amount) - parseFloat(formData.reward)).toFixed(6) : 
+                              '0'
+                            } {tokenMetadata?.symbol}
+                          </span>
+                        </div>
+                        <div className="flex justify-between">
+                          <span className="text-secondary-400">Your {tokenMetadata?.symbol} Balance:</span>
+                          <span className={`font-medium ${
+                            formData.amount && formData.reward && 
+                            (parseFloat(formData.amount) - parseFloat(formData.reward)) > parseFloat(tokenBalance) 
+                              ? 'text-red-400' 
+                              : 'text-white'
+                          }`}>
+                            {tokenBalance} {tokenMetadata?.symbol}
+                            {formData.amount && formData.reward && 
+                             (parseFloat(formData.amount) - parseFloat(formData.reward)) > parseFloat(tokenBalance) && (
+                              <span className="text-xs text-red-400 ml-1">
+                                (Insufficient)
+                              </span>
+                            )}
+                          </span>
+                        </div>
+                      </div>
+                    </div>
+                    
+                    <p className="text-xs text-secondary-400">
+                      <strong>Note:</strong> The bridge will burn {formData.amount && formData.reward ? 
+                        (parseFloat(formData.amount) - parseFloat(formData.reward)).toFixed(6) : 
+                        '0'
+                      } {tokenMetadata?.symbol} from your balance and mint the same amount to the recipient.
+                    </p>
+                  </div>
+                </div>
+              )}
+
               {/* Form Fields */}
               <div className="card">
-                <div className="flex items-center gap-3 mb-4">
-                  <ExternalLink className="w-5 h-5 text-primary-500" />
-                  <h3 className="text-lg font-semibold text-white">Transaction Details</h3>
+                <div className="flex items-center justify-between mb-4">
+                  <div className="flex items-center gap-3">
+                    <ExternalLink className="w-5 h-5 text-primary-500" />
+                    <h3 className="text-lg font-semibold text-white">Transaction Details</h3>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setShowTransactionDetails(!showTransactionDetails)}
+                    className="flex items-center gap-2 px-3 py-1 text-sm text-secondary-400 hover:text-white transition-colors border border-secondary-600 rounded-lg hover:border-secondary-500"
+                  >
+                    {showTransactionDetails ? (
+                      <>
+                        <ChevronUp className="w-4 h-4" />
+                        Hide Details
+                      </>
+                    ) : (
+                      <>
+                        <ChevronDown className="w-4 h-4" />
+                        Show Details
+                      </>
+                    )}
+                  </button>
                 </div>
                 
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                {showTransactionDetails && (
+                  <div className="space-y-4">
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                   <div>
                     <div className="flex items-center justify-between mb-2">
                       <label className="block text-sm font-medium text-secondary-300">
@@ -1722,9 +1949,11 @@ const NewClaim = ({ isOpen, onClose, selectedToken = null, selectedTransfer = nu
                     className={`input-field w-full ${
                       !customControls.recipientAddress ? 'opacity-50 cursor-not-allowed bg-dark-800' : ''
                     }`}
-                    placeholder="0x..."
-                  />
-                </div>
+                  placeholder="0x..."
+                />
+              </div>
+                  </div>
+                )}
               </div>
 
               {/* Approval Section */}
@@ -1744,23 +1973,62 @@ const NewClaim = ({ isOpen, onClose, selectedToken = null, selectedTransfer = nu
                       <strong>Required:</strong> {formatStakeTokenForDisplay(requiredStake, network?.id)} {selectedBridge?.stakeTokenSymbol || 'stake'} for staking
                     </p>
                     <p className="text-sm text-warning-200">
-                      <strong>Current allowance:</strong> {formatStakeTokenForDisplay(allowance, network?.id)} {selectedBridge?.stakeTokenSymbol || 'stake'}
+                      <strong>Current allowance:</strong> {allowance === '∞ (MAX)' ? '∞ (MAX)' : formatStakeTokenForDisplay(allowance, network?.id)} {selectedBridge?.stakeTokenSymbol || 'stake'}
                     </p>
                   </div>
                   
-                  <button
-                    type="button"
-                    onClick={handleApproval}
-                    disabled={submitting || !isFormValid()}
-                    className="btn-warning flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
-                  >
-                    {submitting ? (
-                      <Loader2 className="w-4 h-4 animate-spin" />
-                    ) : (
-                      <CheckCircle className="w-4 h-4" />
+                  {/* Max Allowance Option */}
+                  <div className="border-t border-warning-700 pt-3 mb-4">
+                    <label className="flex items-center space-x-3 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={useMaxAllowance}
+                        onChange={(e) => setUseMaxAllowance(e.target.checked)}
+                        className="w-4 h-4 text-warning-400 bg-warning-900 border-warning-600 rounded focus:ring-warning-500 focus:ring-2"
+                      />
+                      <div className="flex-1">
+                        <span className="text-warning-300 text-sm font-medium">
+                          Set maximum allowance (∞)
+                        </span>
+                        <p className="text-warning-400 text-xs mt-1">
+                          Approve unlimited spending to avoid future approval transactions.
+                        </p>
+                      </div>
+                    </label>
+                  </div>
+                  
+                  <div className="space-y-3">
+                    <button
+                      type="button"
+                      onClick={handleApproval}
+                      disabled={submitting || !isFormValid()}
+                      className="btn-warning w-full flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
+                    >
+                      {submitting ? (
+                        <Loader2 className="w-4 h-4 animate-spin" />
+                      ) : (
+                        <CheckCircle className="w-4 h-4" />
+                      )}
+                      {useMaxAllowance ? `Approve ∞ ${selectedBridge?.stakeTokenSymbol || 'Stake Token'}` : `Approve ${selectedBridge?.stakeTokenSymbol || 'Stake Token'} for Bridge`}
+                    </button>
+                    
+                    {/* Revoke Allowance Button - Show if there's any existing allowance */}
+                    {allowance !== '0' && allowance !== '∞ (MAX)' && (
+                      <button
+                        type="button"
+                        onClick={handleRevokeAllowance}
+                        disabled={isRevoking}
+                        className="btn-secondary w-full flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
+                      >
+                        {isRevoking ? (
+                          <Loader2 className="w-4 h-4 animate-spin" />
+                        ) : (
+                          <X className="w-4 h-4" />
+                        )}
+                        Revoke Allowance
+                      </button>
                     )}
-                    Approve {selectedBridge?.stakeTokenSymbol || 'Stake Token'} for Bridge
-                  </button>
+                  </div>
                 </div>
               )}
 
@@ -1780,14 +2048,38 @@ const NewClaim = ({ isOpen, onClose, selectedToken = null, selectedTransfer = nu
                     <div className="space-y-2">
                       <div className="flex justify-between">
                         <span className="text-success-300 text-sm">Current allowance:</span>
-                        <span className="text-success-400 font-medium text-sm">{formatStakeTokenForDisplay(allowance, network?.id)} {selectedBridge?.stakeTokenSymbol || 'stake'}</span>
+                        <span className="text-success-400 font-medium text-sm">
+                          {allowance === '∞ (MAX)' ? '∞ (MAX)' : formatStakeTokenForDisplay(allowance, network?.id)} {selectedBridge?.stakeTokenSymbol || 'stake'}
+                        </span>
                       </div>
                       <div className="flex justify-between">
                         <span className="text-success-300 text-sm">Required for staking:</span>
                         <span className="text-success-400 font-medium text-sm">{formatStakeTokenForDisplay(requiredStake, network?.id)} {selectedBridge?.stakeTokenSymbol || 'stake'}</span>
                       </div>
+                      {allowance === '∞ (MAX)' && (
+                        <div className="text-xs text-success-300 mt-2 p-2 bg-success-800/30 rounded border border-success-700">
+                          ✅ Maximum allowance set - no future approvals needed for this token
+                        </div>
+                      )}
                     </div>
                   </div>
+                  
+                  {/* Revoke Allowance Button - Show if there's any allowance */}
+                  {allowance !== '0' && allowance !== '∞ (MAX)' && (
+                    <button
+                      type="button"
+                      onClick={handleRevokeAllowance}
+                      disabled={isRevoking}
+                      className="btn-secondary w-full flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed mt-4"
+                    >
+                      {isRevoking ? (
+                        <Loader2 className="w-4 h-4 animate-spin" />
+                      ) : (
+                        <X className="w-4 h-4" />
+                      )}
+                      Revoke Allowance
+                    </button>
+                  )}
                 </div>
               )}
 
