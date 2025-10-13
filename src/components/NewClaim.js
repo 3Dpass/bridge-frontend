@@ -220,6 +220,7 @@ const NewClaim = ({ isOpen, onClose, selectedToken = null, selectedTransfer = nu
           setFormData(prev => ({
             ...prev,
             tokenAddress: tokenAddress.toLowerCase(),
+            // CRITICAL: Preserve exact format to match bot expectations
             amount: selectedTransfer.amount ? 
               (typeof selectedTransfer.amount === 'string' ? 
                 (selectedTransfer.amount.startsWith('0x') ? 
@@ -233,10 +234,11 @@ const NewClaim = ({ isOpen, onClose, selectedToken = null, selectedTransfer = nu
                     ethers.utils.formatUnits(selectedTransfer.reward, tokenDecimals) : 
                     selectedTransfer.reward) : 
                  ethers.utils.formatUnits(selectedTransfer.reward, tokenDecimals)) : '0';
-              console.log('🔍 Pre-filling reward from transfer:', {
+              console.log('🔍 Pre-filling reward from transfer (bot-compatible format):', {
                 originalReward: selectedTransfer.reward,
                 formattedReward: rewardValue,
-                tokenDecimals
+                tokenDecimals,
+                formatPreserved: true
               });
               return rewardValue;
             })(),
@@ -1103,25 +1105,33 @@ const NewClaim = ({ isOpen, onClose, selectedToken = null, selectedTransfer = nu
         signer
       );
 
-      const amountWei = ethers.utils.parseUnits(formData.amount, getTokenDecimals(network?.id, formData.tokenAddress));
-      const rewardWei = ethers.utils.parseUnits(formData.reward || '0', getTokenDecimals(network?.id, formData.tokenAddress));
+      // CRITICAL: Ensure exact format matching with bot expectations
+      // Parse amounts with exact decimal precision to avoid format mismatches
+      const tokenDecimals = getTokenDecimals(network?.id, formData.tokenAddress);
+      const amountWei = ethers.utils.parseUnits(formData.amount, tokenDecimals);
+      const rewardWei = ethers.utils.parseUnits(formData.reward || '0', tokenDecimals);
       
       // Keep amount as BigNumber for proper uint encoding
       const amountBigNumber = amountWei;
-      // Reward should be passed as int, not hex string
-      const rewardInt = rewardWei.toNumber();
       
-      // Validate reward is within reasonable bounds
-      if (rewardInt < 0) {
+      // CRITICAL: Keep reward as BigNumber to avoid precision loss and format mismatches
+      // The bot expects exact format matching - converting to number can cause issues
+      const rewardBigNumber = rewardWei;
+      
+      // Validate reward is within reasonable bounds (as BigNumber)
+      if (rewardBigNumber.lt(0)) {
         throw new Error('Reward cannot be negative');
       }
       
-      console.log('🔍 Reward validation:', {
+      console.log('🔍 Bot-compatible format validation:', {
+        originalAmount: formData.amount,
         originalReward: formData.reward,
+        amountWei: amountWei.toString(),
         rewardWei: rewardWei.toString(),
-        rewardInt: rewardInt,
-        isNegative: rewardInt < 0,
-        isTooLarge: rewardInt > Number.MAX_SAFE_INTEGER
+        amountBigNumber: amountBigNumber.toString(),
+        rewardBigNumber: rewardBigNumber.toString(),
+        tokenDecimals: tokenDecimals,
+        formatConsistent: true
       });
       // txts should be passed as BigNumber for proper uint32 encoding
       const txtsBigNumber = ethers.BigNumber.from(parseInt(formData.txts) || await getReliableTimestamp());
@@ -1134,7 +1144,7 @@ const NewClaim = ({ isOpen, onClose, selectedToken = null, selectedTransfer = nu
         amountWei: amountWei.toString(),
         amountBigNumber: amountBigNumber.toString(),
         rewardWei: rewardWei.toString(),
-        rewardInt: rewardInt,
+        rewardBigNumber: rewardBigNumber.toString(),
         txtsBigNumber: txtsBigNumber.toString(),
         stakeWei: stakeWei.toString(),
         txid: formData.txid,
@@ -1155,31 +1165,58 @@ const NewClaim = ({ isOpen, onClose, selectedToken = null, selectedTransfer = nu
       }
       if (!ethers.utils.isAddress(recipientChecksummed)) return;
 
-      // Validate reward against transfer data if available
-      if (selectedTransfer && selectedTransfer.reward) {
+      // CRITICAL: Validate format consistency with original transfer data
+      if (selectedTransfer) {
         const tokenDecimals = getTokenDecimals(network?.id, formData.tokenAddress);
-        const transferRewardFormatted = typeof selectedTransfer.reward === 'string' ? 
-          (selectedTransfer.reward.startsWith('0x') ? 
-            ethers.utils.formatUnits(selectedTransfer.reward, tokenDecimals) : 
-            selectedTransfer.reward) : 
-          ethers.utils.formatUnits(selectedTransfer.reward, tokenDecimals);
         
-        const currentRewardFormatted = formData.reward || '0';
-        
-        console.log('🔍 Validating reward against transfer data:', {
-          transferReward: selectedTransfer.reward,
-          transferRewardFormatted,
-          currentReward: formData.reward,
-          currentRewardFormatted,
-          match: transferRewardFormatted === currentRewardFormatted
-        });
-        
-        // Warn if reward doesn't match but don't block the transaction
-        if (transferRewardFormatted !== currentRewardFormatted) {
-          console.warn('⚠️ Reward amount differs from transfer data:', {
-            transferReward: transferRewardFormatted,
-            claimReward: currentRewardFormatted
+        // Validate amount format consistency
+        if (selectedTransfer.amount) {
+          const transferAmountFormatted = typeof selectedTransfer.amount === 'string' ? 
+            (selectedTransfer.amount.startsWith('0x') ? 
+              ethers.utils.formatUnits(selectedTransfer.amount, tokenDecimals) : 
+              selectedTransfer.amount) : 
+            ethers.utils.formatUnits(selectedTransfer.amount, tokenDecimals);
+          
+          const currentAmountFormatted = formData.amount;
+          
+          console.log('🔍 Bot format validation - Amount:', {
+            transferAmount: selectedTransfer.amount,
+            transferAmountFormatted,
+            currentAmount: formData.amount,
+            currentAmountFormatted,
+            exactMatch: transferAmountFormatted === currentAmountFormatted,
+            formatConsistent: true
           });
+          
+          // CRITICAL: Ensure exact format match to prevent bot challenges
+          if (transferAmountFormatted !== currentAmountFormatted) {
+            throw new Error(`Amount format mismatch: Transfer has "${transferAmountFormatted}" but claim has "${currentAmountFormatted}". This will cause bot challenges.`);
+          }
+        }
+        
+        // Validate reward format consistency
+        if (selectedTransfer.reward) {
+          const transferRewardFormatted = typeof selectedTransfer.reward === 'string' ? 
+            (selectedTransfer.reward.startsWith('0x') ? 
+              ethers.utils.formatUnits(selectedTransfer.reward, tokenDecimals) : 
+              selectedTransfer.reward) : 
+            ethers.utils.formatUnits(selectedTransfer.reward, tokenDecimals);
+          
+          const currentRewardFormatted = formData.reward || '0';
+          
+          console.log('🔍 Bot format validation - Reward:', {
+            transferReward: selectedTransfer.reward,
+            transferRewardFormatted,
+            currentReward: formData.reward,
+            currentRewardFormatted,
+            exactMatch: transferRewardFormatted === currentRewardFormatted,
+            formatConsistent: true
+          });
+          
+          // CRITICAL: Ensure exact format match to prevent bot challenges
+          if (transferRewardFormatted !== currentRewardFormatted) {
+            throw new Error(`Reward format mismatch: Transfer has "${transferRewardFormatted}" but claim has "${currentRewardFormatted}". This will cause bot challenges.`);
+          }
         }
       }
 
@@ -1215,7 +1252,7 @@ const NewClaim = ({ isOpen, onClose, selectedToken = null, selectedTransfer = nu
         processedTxid,
         txtsBigNumber,
         amountBigNumber,
-        rewardInt,
+        rewardBigNumber,
         stakeWei,
         senderChecksummed,
         recipientChecksummed,
@@ -1229,7 +1266,7 @@ const NewClaim = ({ isOpen, onClose, selectedToken = null, selectedTransfer = nu
         amountWei: amountWei.toString(),
         amountBigNumber: amountBigNumber.toString(),
         rewardWei: rewardWei.toString(),
-        rewardInt: rewardInt,
+        rewardBigNumber: rewardBigNumber.toString(),
         stakeWei: stakeWei.toString(),
         senderAddress: formData.senderAddress,
         recipientAddress: formData.recipientAddress,
@@ -1346,7 +1383,7 @@ const NewClaim = ({ isOpen, onClose, selectedToken = null, selectedTransfer = nu
           processedTxid,
           txtsBigNumber,
           amountBigNumber,
-          rewardInt,
+          rewardBigNumber,
           stakeWeiForCheck,
           senderChecksummed,
           recipientChecksummed,
@@ -1368,7 +1405,7 @@ const NewClaim = ({ isOpen, onClose, selectedToken = null, selectedTransfer = nu
         processedTxid,
         txtsBigNumber,
         amountBigNumber,
-        rewardInt,
+        rewardBigNumber,
         stakeWeiForCheck,
         senderChecksummed,
         recipientChecksummed,

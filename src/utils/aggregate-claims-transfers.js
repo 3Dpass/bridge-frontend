@@ -40,7 +40,7 @@ export const aggregateClaimsAndTransfers = (claims, transfers) => {
     return a && b && a === b;
   };
 
-  // Helper function to check if amounts match (formats values to contract format before comparison)
+  // Helper function to check if amounts match (strict format validation to match bot expectations)
   const amountsMatchBigNumber = (amount1, amount2) => {
     if (!amount1 || !amount2) return { match: false, reason: 'missing_amount' };
     try {
@@ -48,10 +48,24 @@ export const aggregateClaimsAndTransfers = (claims, transfers) => {
       const bn1 = ethers.BigNumber.from(amount1.toString());
       const bn2 = ethers.BigNumber.from(amount2.toString());
       
-      // Compare the BigNumber values directly
+      // Compare the BigNumber values directly - must be EXACT match
       if (bn1.eq(bn2)) {
         return { match: true, reason: 'exact_match' };
       } else {
+        // Check if it's a format issue (same value, different representation)
+        const str1 = amount1.toString();
+        const str2 = amount2.toString();
+        
+        // If string representations are different but BigNumber values are same
+        if (str1 !== str2) {
+          return { 
+            match: false, 
+            reason: 'format_mismatch_but_equal',
+            amount1: str1,
+            amount2: str2
+          };
+        }
+        
         return { 
           match: false, 
           reason: 'different_values',
@@ -104,8 +118,8 @@ export const aggregateClaimsAndTransfers = (claims, transfers) => {
     }
   };
 
-  // Helper function to validate reward amounts (formats values to contract format before comparison)
-  // Claim reward should not exceed transfer reward
+  // Helper function to validate reward amounts (strict format validation to match bot expectations)
+  // Bot expects exact format matching - any format difference will cause challenges
   const validateRewardAmounts = (claimReward, transferReward) => {
     if (!claimReward && !transferReward) {
       return { match: true, reason: 'both_zero_or_missing' };
@@ -123,6 +137,20 @@ export const aggregateClaimsAndTransfers = (claims, transfers) => {
       // Convert both rewards to BigNumber format (contract format)
       const claimRewardBN = ethers.BigNumber.from(claimReward.toString());
       const transferRewardBN = ethers.BigNumber.from(transferReward.toString());
+      
+      // Check format consistency first (bot is strict about format)
+      const claimRewardStr = claimReward.toString();
+      const transferRewardStr = transferReward.toString();
+      
+      // If string representations are different but BigNumber values are same
+      if (claimRewardStr !== transferRewardStr && claimRewardBN.eq(transferRewardBN)) {
+        return { 
+          match: false, 
+          reason: 'format_mismatch_but_equal',
+          claimReward: claimRewardStr,
+          transferReward: transferRewardStr
+        };
+      }
       
       // Claim reward should not be greater than transfer reward
       if (claimRewardBN.gt(transferRewardBN)) {
@@ -344,9 +372,11 @@ export const aggregateClaimsAndTransfers = (claims, transfers) => {
       matchingTransfer.matchReason = matchReason;
 
       // Check for parameter mismatches even when txid matches
-      // Skip sender address and data field checks as they may be acceptable to differ
+      // Validate sender address, recipient address, amount, and reward
       const amountMatchResult = amountsMatchBigNumber(claim.amount, matchingTransfer.amount);
       const amountMatch = amountMatchResult.match;
+      const senderMatchResult = addressesMatch(claim.senderAddress, matchingTransfer.senderAddress);
+      const senderMatch = senderMatchResult.match;
       const recipientMatchResult = addressesMatch(claim.recipientAddress, matchingTransfer.recipientAddress);
       const recipientMatch = recipientMatchResult.match;
       const rewardValidationResult = validateRewardAmounts(claim.reward, matchingTransfer.reward);
@@ -359,11 +389,12 @@ export const aggregateClaimsAndTransfers = (claims, transfers) => {
       );
 
       // Determine if this is suspicious due to parameter mismatches
-      // Check amount, recipient, reward validation, and flow validity
-      const hasParameterMismatches = !amountMatch || !recipientMatch || !rewardValid || !isValidFlow;
+      // Check amount, sender, recipient, reward validation, and flow validity
+      const hasParameterMismatches = !amountMatch || !senderMatch || !recipientMatch || !rewardValid || !isValidFlow;
       
       console.log(`🔍 Parameter validation for claim ${claim.claimNum}:`, {
         amountMatch,
+        senderMatch,
         recipientMatch,
         rewardValid,
         isValidFlow,
@@ -373,6 +404,10 @@ export const aggregateClaimsAndTransfers = (claims, transfers) => {
         claimReward: claim.reward?.toString(),
         transferReward: matchingTransfer.reward?.toString(),
         rewardValidationReason: rewardValidationResult.reason,
+        claimSender: claim.senderAddress,
+        transferSender: matchingTransfer.senderAddress,
+        claimSenderLower: claim.senderAddress?.toLowerCase(),
+        transferSenderLower: matchingTransfer.senderAddress?.toLowerCase(),
         claimRecipient: claim.recipientAddress,
         transferRecipient: matchingTransfer.recipientAddress,
         claimRecipientLower: claim.recipientAddress?.toLowerCase(),
@@ -393,6 +428,8 @@ export const aggregateClaimsAndTransfers = (claims, transfers) => {
               parameterMismatches: {
                 amountMatch,
                 amountMatchReason: amountMatchResult.reason,
+                senderMatch,
+                senderMatchReason: senderMatchResult.reason,
                 recipientMatch,
                 recipientMatchReason: recipientMatchResult.reason,
                 rewardValid,

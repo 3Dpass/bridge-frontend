@@ -40,14 +40,31 @@ const getMatchStatus = (claim) => {
   const mismatches = [];
   if (!claim.parameterMismatches.amountMatch) {
     const amountReason = claim.parameterMismatches.amountMatchReason;
-    if (amountReason === 'format_mismatch_and_different') {
-      mismatches.push({ field: 'amount', reason: 'different values' });
-    } else if (amountReason === 'same_format_different_value') {
+    if (amountReason === 'different_values') {
       mismatches.push({ field: 'amount', reason: 'different values' });
     } else if (amountReason === 'format_mismatch_but_equal') {
       mismatches.push({ field: 'amount', reason: 'format mismatch' });
+    } else if (amountReason === 'missing_amount') {
+      mismatches.push({ field: 'amount', reason: 'missing amount' });
+    } else if (amountReason === 'conversion_error') {
+      mismatches.push({ field: 'amount', reason: 'conversion error' });
     } else {
       mismatches.push({ field: 'amount', reason: 'mismatch' });
+    }
+  }
+  
+  if (!claim.parameterMismatches.senderMatch) {
+    const senderReason = claim.parameterMismatches.senderMatchReason;
+    if (senderReason === 'mixed_checksum_format') {
+      mismatches.push({ field: 'sender', reason: 'format mismatch' });
+    } else if (senderReason === 'both_non_checksummed') {
+      mismatches.push({ field: 'sender', reason: 'non-checksummed' });
+    } else if (senderReason === 'checksummed_format_mismatch') {
+      mismatches.push({ field: 'sender', reason: 'checksum mismatch' });
+    } else if (senderReason === 'different_addresses') {
+      mismatches.push({ field: 'sender', reason: 'different address' });
+    } else {
+      mismatches.push({ field: 'sender', reason: 'mismatch' });
     }
   }
   
@@ -63,6 +80,21 @@ const getMatchStatus = (claim) => {
       mismatches.push({ field: 'recipient', reason: 'different address' });
     } else {
       mismatches.push({ field: 'recipient', reason: 'mismatch' });
+    }
+  }
+  
+  if (!claim.parameterMismatches.rewardValid) {
+    const rewardReason = claim.parameterMismatches.rewardValidationReason;
+    if (rewardReason === 'claim_reward_exceeds_transfer_reward') {
+      mismatches.push({ field: 'reward', reason: 'exceeds transfer reward' });
+    } else if (rewardReason === 'format_mismatch_but_equal') {
+      mismatches.push({ field: 'reward', reason: 'format mismatch' });
+    } else if (rewardReason === 'transfer_reward_missing') {
+      mismatches.push({ field: 'reward', reason: 'transfer reward missing' });
+    } else if (rewardReason === 'conversion_error') {
+      mismatches.push({ field: 'reward', reason: 'conversion error' });
+    } else {
+      mismatches.push({ field: 'reward', reason: 'mismatch' });
     }
   }
   
@@ -83,6 +115,15 @@ const getFieldMatchStatus = (claim, field) => {
   
   // Check if txid matches (for txid field)
   if (field === 'txid') {
+    return { isMatch: true, reason: null };
+  }
+  
+  // Check if reward matches (for reward field)
+  if (field === 'reward') {
+    const rewardMismatch = mismatches.find(m => m.field === 'reward');
+    if (rewardMismatch) {
+      return { isMatch: false, reason: rewardMismatch.reason };
+    }
     return { isMatch: true, reason: null };
   }
   
@@ -1585,6 +1626,19 @@ const ClaimList = () => {
                                     return `${formatted} ${getTransferTokenSymbol(claim)}`;
                                   })()}
                                 </span>
+                                {(() => {
+                                  const matchStatus = getFieldMatchStatus(claim, 'reward');
+                                  if (matchStatus.isMatch) {
+                                    return <CheckCircle className="w-4 h-4 text-green-500 ml-2 inline" />;
+                                  } else {
+                                    return (
+                                      <span className="ml-2 inline-flex items-center">
+                                        <X className="w-4 h-4 text-red-500 mr-1" />
+                                        <span className="text-red-400 text-xs">{matchStatus.reason}</span>
+                                      </span>
+                                    );
+                                  }
+                                })()}
                               </div>
                             )}
                             <div>
@@ -1599,6 +1653,19 @@ const ClaimList = () => {
                               >
                                 <Copy className="w-3 h-3 text-secondary-400 hover:text-white" />
                               </button>
+                              {(() => {
+                                const matchStatus = getFieldMatchStatus(claim, 'sender');
+                                if (matchStatus.isMatch) {
+                                  return <CheckCircle className="w-4 h-4 text-green-500 ml-2 inline" />;
+                                } else {
+                                  return (
+                                    <span className="ml-2 inline-flex items-center">
+                                      <X className="w-4 h-4 text-red-500 mr-1" />
+                                      <span className="text-red-400 text-xs">{matchStatus.reason}</span>
+                                    </span>
+                                  );
+                                }
+                              })()}
                             </div>
                             <div>
                               <span className="text-secondary-400">Recipient:</span>
@@ -1803,14 +1870,31 @@ const ClaimList = () => {
                                 if (!claim.parameterMismatches.amountMatch) {
                                   // Show specific amount mismatch reason
                                   const amountReason = claim.parameterMismatches.amountMatchReason;
-                                  if (amountReason === 'format_mismatch_and_different') {
-                                    mismatches.push('Amount (different values)');
-                                  } else if (amountReason === 'same_format_different_value') {
+                                  if (amountReason === 'different_values') {
                                     mismatches.push('Amount (different values)');
                                   } else if (amountReason === 'format_mismatch_but_equal') {
                                     mismatches.push('Amount (format mismatch)');
+                                  } else if (amountReason === 'missing_amount') {
+                                    mismatches.push('Amount (missing amount)');
+                                  } else if (amountReason === 'conversion_error') {
+                                    mismatches.push('Amount (conversion error)');
                                   } else {
                                     mismatches.push('Amount');
+                                  }
+                                }
+                                if (!claim.parameterMismatches.senderMatch) {
+                                  // Show specific sender mismatch reason
+                                  const senderReason = claim.parameterMismatches.senderMatchReason;
+                                  if (senderReason === 'mixed_checksum_format') {
+                                    mismatches.push('Sender (format mismatch)');
+                                  } else if (senderReason === 'both_non_checksummed') {
+                                    mismatches.push('Sender (non-checksummed)');
+                                  } else if (senderReason === 'checksummed_format_mismatch') {
+                                    mismatches.push('Sender (checksum mismatch)');
+                                  } else if (senderReason === 'different_addresses') {
+                                    mismatches.push('Sender (different address)');
+                                  } else {
+                                    mismatches.push('Sender');
                                   }
                                 }
                                 if (!claim.parameterMismatches.recipientMatch) {
@@ -1826,6 +1910,21 @@ const ClaimList = () => {
                                     mismatches.push('Recipient (different address)');
                                   } else {
                                     mismatches.push('Recipient');
+                                  }
+                                }
+                                if (!claim.parameterMismatches.rewardValid) {
+                                  // Show specific reward mismatch reason
+                                  const rewardReason = claim.parameterMismatches.rewardValidationReason;
+                                  if (rewardReason === 'claim_reward_exceeds_transfer_reward') {
+                                    mismatches.push('Reward (exceeds transfer reward)');
+                                  } else if (rewardReason === 'format_mismatch_but_equal') {
+                                    mismatches.push('Reward (format mismatch)');
+                                  } else if (rewardReason === 'transfer_reward_missing') {
+                                    mismatches.push('Reward (transfer reward missing)');
+                                  } else if (rewardReason === 'conversion_error') {
+                                    mismatches.push('Reward (conversion error)');
+                                  } else {
+                                    mismatches.push('Reward');
                                   }
                                 }
                                 if (!claim.parameterMismatches.isValidFlow) {
