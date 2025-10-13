@@ -41,7 +41,7 @@ function App() {
                       : 'text-secondary-400 hover:text-white hover:bg-dark-700'
                   }`}
                 >
-                  Claim
+                  Transactions
                 </button>
                 <button
                   onClick={() => setActiveTab('pools')}
@@ -116,7 +116,7 @@ function App() {
                         Counterstake consensus
                       </a>
                     ),
-                    description: 'Nodes are to claim valid transfers and challenge fraudulent ones on the destination chain. You can also claim yourself, if the nodes refused to assist.',
+                    description: 'The nodes are going to claim valid transfers and challenge fraudulent ones. You can also claim yourself, if the nodes refused to assist.',
                   },
                   {
                     step: '3',
