@@ -497,35 +497,54 @@ const ClaimList = () => {
     // Get decimals from network configuration
     const tokenSymbol = getTransferTokenSymbol(claim);
     
-    // For import claims, the token is from the foreign network
-    // For export claims, the token is from the current network
+    // For both import and export claims, the token being claimed is from the foreign network
+    // Import: User claims tokens that were sent FROM foreign network TO current network
+    // Export: User claims tokens that were sent FROM current network TO foreign network
     let targetNetworkSymbol = network?.symbol;
     
     if (claim.bridgeType === 'import' || claim.bridgeType === 'import_wrapper') {
-      // For imports, token is from the foreign network (e.g., USDT from Ethereum)
-      // Try to get the foreign network from bridge instance or use default
+      // For imports, token is from the foreign network
+      // Try to get the foreign network from bridge instance or claim data
       targetNetworkSymbol = claim.bridgeInstance?.foreignNetwork || 
-                           claim.foreignNetwork || 
-                           'ETHEREUM';
+                           claim.foreignNetwork;
     } else if (claim.bridgeType === 'export') {
-      // For exports, token is from the current network (e.g., P3D from 3DPass)
-      targetNetworkSymbol = network?.symbol;
+      // For exports, the token being claimed is from the foreign network
+      // The user is claiming tokens that were sent TO the foreign network
+      targetNetworkSymbol = claim.bridgeInstance?.foreignNetwork || 
+                           claim.foreignNetwork;
     }
     
-    console.log(`🔍 Looking for ${tokenSymbol} decimals in ${targetNetworkSymbol} network (bridgeType: ${claim.bridgeType})`);
+    // Debug logging with better error handling
+    console.log(`🔍 Looking for ${tokenSymbol} decimals in ${targetNetworkSymbol || 'undefined'} network (bridgeType: ${claim.bridgeType})`, {
+      tokenSymbol,
+      targetNetworkSymbol,
+      bridgeType: claim.bridgeType,
+      currentNetwork: network?.symbol,
+      bridgeInstance: claim.bridgeInstance,
+      foreignNetwork: claim.foreignNetwork,
+      homeNetwork: claim.homeNetwork,
+      bridgeInstanceForeignNetwork: claim.bridgeInstance?.foreignNetwork,
+      bridgeInstanceHomeNetwork: claim.bridgeInstance?.homeNetwork
+    });
     
-    // Try to get decimals from the target network first
-    const networkConfig = getNetworkWithSettings(targetNetworkSymbol);
-    if (networkConfig && networkConfig.tokens) {
-      const token = networkConfig.tokens[tokenSymbol];
-      if (token && token.decimals) {
-        console.log(`🔍 Found decimals for ${tokenSymbol} in ${targetNetworkSymbol} config:`, token.decimals);
-        return token.decimals;
+    // Try to get decimals from the target network first (only if targetNetworkSymbol is defined)
+    if (targetNetworkSymbol) {
+      const networkConfig = getNetworkWithSettings(targetNetworkSymbol);
+      if (networkConfig && networkConfig.tokens) {
+        const token = networkConfig.tokens[tokenSymbol];
+        if (token && token.decimals) {
+          console.log(`🔍 Found decimals for ${tokenSymbol} in ${targetNetworkSymbol} config:`, token.decimals);
+          return token.decimals;
+        }
       }
     }
     
-    // If not found in target network, search all networks
-    console.log(`🔍 ${tokenSymbol} not found in ${targetNetworkSymbol}, searching all networks...`);
+    // If not found in target network or targetNetworkSymbol is undefined, search all networks
+    if (targetNetworkSymbol) {
+      console.log(`🔍 ${tokenSymbol} not found in ${targetNetworkSymbol}, searching all networks...`);
+    } else {
+      console.log(`🔍 Target network is undefined for ${tokenSymbol}, searching all networks...`);
+    }
     
     // Try to get decimals from other networks as fallback
     for (const networkKey of Object.keys(NETWORKS)) {
@@ -539,9 +558,16 @@ const ClaimList = () => {
       }
     }
     
-    // If not found in any network config, use a reasonable default
-    console.log(`🔍 No decimals found for ${tokenSymbol} in any network config, using default: 18`);
-    return 18;
+    // If not found in any network config, use a reasonable default based on token symbol
+    let defaultDecimals = 18;
+    if (tokenSymbol === 'USDT' || tokenSymbol === 'USDC') {
+      defaultDecimals = 6;
+    } else if (tokenSymbol === 'P3D') {
+      defaultDecimals = 18;
+    }
+    
+    console.log(`🔍 No decimals found for ${tokenSymbol} in any network config, using default: ${defaultDecimals}`);
+    return defaultDecimals;
   }, [network?.symbol, getTransferTokenSymbol, getNetworkWithSettings]);
 
   const getStakeTokenSymbol = useCallback((claim) => {
@@ -648,7 +674,17 @@ const ClaimList = () => {
       return false;
     }
     
-    return account.toLowerCase() === claim.recipientAddress.toLowerCase();
+    // Check if this is a third-party claim (claimant_address differs from recipient_address)
+    const isThirdPartyClaim = claim.claimant_address && 
+                             claim.claimant_address.toLowerCase() !== claim.recipientAddress.toLowerCase();
+    
+    if (isThirdPartyClaim) {
+      // For third-party claims, the claimant (assistant) can withdraw
+      return account.toLowerCase() === claim.claimant_address.toLowerCase();
+    } else {
+      // For regular claims, the recipient can withdraw
+      return account.toLowerCase() === claim.recipientAddress.toLowerCase();
+    }
   }, [account, currentBlock]);
 
   // Helper function to check if current user is the recipient
@@ -659,6 +695,12 @@ const ClaimList = () => {
     
     return account.toLowerCase() === claim.recipientAddress.toLowerCase();
   }, [account]);
+
+  // Helper function to check if this is a third-party claim
+  const isThirdPartyClaim = useCallback((claim) => {
+    return claim.claimant_address && 
+           claim.claimant_address.toLowerCase() !== claim.recipientAddress.toLowerCase();
+  }, []);
 
   // Helper function to check if a claim can be challenged
   const canChallengeClaim = useCallback((claim) => {
@@ -1523,6 +1565,11 @@ const ClaimList = () => {
                     <span className="text-xs bg-primary-600/20 text-primary-400 px-2 py-1 rounded">
                       {claim.networkName || claim.networkKey}
                     </span>
+                    {!isPending && !isTransfer && isThirdPartyClaim(claim) && (
+                      <span className="text-xs bg-green-600/20 text-green-400 px-2 py-1 rounded">
+                        Fast-forwarded
+                      </span>
+                    )}
                   </div>
 
                   {/* Show both transfer and claim details for completed transfers and suspicious claims with transfers */}
@@ -1711,6 +1758,21 @@ const ClaimList = () => {
                                 }
                               })()}
                             </div>
+                            {isThirdPartyClaim(claim) && (
+                              <div>
+                                <span className="text-secondary-400">Assistant:</span>
+                                <span className="text-white ml-2 font-mono">
+                                  {formatAddress(claim.claimant_address)}
+                                </span>
+                                <button
+                                  onClick={() => copyToClipboard(claim.claimant_address, 'Claimant address')}
+                                  className="ml-2 p-1 hover:bg-dark-700 rounded transition-colors"
+                                  title="Copy claimant address"
+                                >
+                                  <Copy className="w-3 h-3 text-secondary-400 hover:text-white" />
+                                </button>
+                              </div>
+                            )}
                             <div>
                               <span className="text-secondary-400">Claim Txid:</span>
                               <span className="text-white ml-2 font-mono">
@@ -1820,6 +1882,22 @@ const ClaimList = () => {
                           <Copy className="w-3 h-3 text-secondary-400 hover:text-white" />
                         </button>
                       </div>
+                      
+                      {isThirdPartyClaim(claim) && (
+                        <div>
+                          <span className="text-secondary-400">Claimant:</span>
+                          <span className="text-white ml-2 font-mono">
+                            {formatAddress(claim.claimant_address)}
+                          </span>
+                          <button
+                            onClick={() => copyToClipboard(claim.claimant_address, 'Claimant address')}
+                            className="ml-2 p-1 hover:bg-dark-700 rounded transition-colors"
+                            title="Copy claimant address"
+                          >
+                            <Copy className="w-3 h-3 text-secondary-400 hover:text-white" />
+                          </button>
+                        </div>
+                      )}
                     </div>
                   )}
 
@@ -1877,6 +1955,22 @@ const ClaimList = () => {
                           <Copy className="w-3 h-3 text-secondary-400 hover:text-white" />
                         </button>
                       </div>
+                      
+                      {isThirdPartyClaim(claim) && (
+                        <div>
+                          <span className="text-secondary-400">Claimant:</span>
+                          <span className="text-white ml-2 font-mono">
+                            {formatAddress(claim.claimant_address)}
+                          </span>
+                          <button
+                            onClick={() => copyToClipboard(claim.claimant_address, 'Claimant address')}
+                            className="ml-2 p-1 hover:bg-dark-700 rounded transition-colors"
+                            title="Copy claimant address"
+                          >
+                            <Copy className="w-3 h-3 text-secondary-400 hover:text-white" />
+                          </button>
+                        </div>
+                      )}
                     </div>
                   )}
 

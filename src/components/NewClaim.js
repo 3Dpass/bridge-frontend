@@ -1114,12 +1114,12 @@ const NewClaim = ({ isOpen, onClose, selectedToken = null, selectedTransfer = nu
       // Keep amount as BigNumber for proper uint encoding
       const amountBigNumber = amountWei;
       
-      // CRITICAL: Keep reward as BigNumber to avoid precision loss and format mismatches
-      // The bot expects exact format matching - converting to number can cause issues
-      const rewardBigNumber = rewardWei;
+      // CRITICAL: Reward should be passed as int, not BigNumber for claim function
+      // The ABI expects "int reward", not "uint reward" - convert to integer
+      const rewardInt = parseInt(rewardWei.toString());
       
-      // Validate reward is within reasonable bounds (as BigNumber)
-      if (rewardBigNumber.lt(0)) {
+      // Validate reward is within reasonable bounds
+      if (rewardInt < 0) {
         throw new Error('Reward cannot be negative');
       }
       
@@ -1129,7 +1129,7 @@ const NewClaim = ({ isOpen, onClose, selectedToken = null, selectedTransfer = nu
         amountWei: amountWei.toString(),
         rewardWei: rewardWei.toString(),
         amountBigNumber: amountBigNumber.toString(),
-        rewardBigNumber: rewardBigNumber.toString(),
+        rewardInt: rewardInt,
         tokenDecimals: tokenDecimals,
         formatConsistent: true
       });
@@ -1144,7 +1144,7 @@ const NewClaim = ({ isOpen, onClose, selectedToken = null, selectedTransfer = nu
         amountWei: amountWei.toString(),
         amountBigNumber: amountBigNumber.toString(),
         rewardWei: rewardWei.toString(),
-        rewardBigNumber: rewardBigNumber.toString(),
+        rewardInt: rewardInt,
         txtsBigNumber: txtsBigNumber.toString(),
         stakeWei: stakeWei.toString(),
         txid: formData.txid,
@@ -1283,7 +1283,7 @@ const NewClaim = ({ isOpen, onClose, selectedToken = null, selectedTransfer = nu
         processedTxid,
         txtsBigNumber,
         amountBigNumber,
-        rewardBigNumber,
+        rewardInt,
         stakeWei,
         senderChecksummed,
         recipientChecksummed,
@@ -1297,7 +1297,7 @@ const NewClaim = ({ isOpen, onClose, selectedToken = null, selectedTransfer = nu
         amountWei: amountWei.toString(),
         amountBigNumber: amountBigNumber.toString(),
         rewardWei: rewardWei.toString(),
-        rewardBigNumber: rewardBigNumber.toString(),
+        rewardInt: rewardInt,
         stakeWei: stakeWei.toString(),
         senderAddress: formData.senderAddress,
         recipientAddress: formData.recipientAddress,
@@ -1414,7 +1414,7 @@ const NewClaim = ({ isOpen, onClose, selectedToken = null, selectedTransfer = nu
           processedTxid,
           txtsBigNumber,
           amountBigNumber,
-          rewardBigNumber,
+          rewardInt,
           stakeWeiForCheck,
           senderChecksummed,
           recipientChecksummed,
@@ -1436,7 +1436,7 @@ const NewClaim = ({ isOpen, onClose, selectedToken = null, selectedTransfer = nu
         processedTxid,
         txtsBigNumber,
         amountBigNumber,
-        rewardBigNumber,
+        rewardInt,
         stakeWeiForCheck,
         senderChecksummed,
         recipientChecksummed,

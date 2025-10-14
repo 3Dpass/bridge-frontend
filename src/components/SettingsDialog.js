@@ -3076,6 +3076,7 @@ const SettingsDialog = ({ isOpen, onClose }) => {
                     <option value={24}>1 day</option>
                     <option value={48}>2 days</option>
                     <option value={168}>1 week</option>
+                    <option value={336}>2 weeks</option>
                   </select>
                 </div>
                 
@@ -3110,6 +3111,7 @@ const SettingsDialog = ({ isOpen, onClose }) => {
                       <option value={24}>1 day</option>
                       <option value={48}>2 days</option>
                       <option value={168}>1 week</option>
+                      <option value={336}>2 weeks</option>
                     </select>
                   </div>
                   

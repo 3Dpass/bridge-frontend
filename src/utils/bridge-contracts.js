@@ -433,14 +433,18 @@ export const claimTransfer = async (assistantContract, transfer, claimerAddress)
     const amountWei = ethers.utils.parseEther(amount);
     const rewardWei = ethers.utils.parseEther(reward);
     
+    // CRITICAL: Reward should be passed as int, not BigNumber for assistant claim function
+    // The ABI expects "int reward", not "uint reward" - convert to integer
+    const rewardInt = parseInt(rewardWei.toString());
+    
     let tx;
     
     if (transfer.type === 'export') {
       // Claim export transfer
-      tx = await assistantContract.claim(destinationAddress, data, amountWei, rewardWei);
+      tx = await assistantContract.claim(destinationAddress, data, amountWei, rewardInt);
     } else {
       // Claim import transfer
-      tx = await assistantContract.claim(destinationAddress, data, amountWei, rewardWei);
+      tx = await assistantContract.claim(destinationAddress, data, amountWei, rewardInt);
     }
     
     return await tx.wait();

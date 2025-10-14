@@ -195,6 +195,10 @@ const WithdrawClaim = ({ claim, onWithdrawSuccess, onClose }) => {
         const currentTime = Math.floor(Date.now() / 1000);
         const signerAddress = await signer.getAddress();
         
+        // Check if this is a third-party claim (claimant_address differs from recipient_address)
+        const isThirdPartyClaim = claimDetails.claimant_address && 
+                                 claimDetails.claimant_address.toLowerCase() !== claimDetails.recipient_address.toLowerCase();
+        
         console.log('🔍 Validation checks:');
         console.log('  - Current time:', currentTime);
         console.log('  - Expiry time:', Number(claimDetails.expiry_ts));
@@ -203,7 +207,10 @@ const WithdrawClaim = ({ claim, onWithdrawSuccess, onClose }) => {
         console.log('  - Is YES outcome:', claimDetails.current_outcome === 1);
         console.log('  - Is withdrawn:', claimDetails.withdrawn);
         console.log('  - Signer address:', signerAddress);
+        console.log('  - Claimant address:', claimDetails.claimant_address);
         console.log('  - Recipient address:', claimDetails.recipient_address);
+        console.log('  - Is third-party claim:', isThirdPartyClaim);
+        console.log('  - Is claimant:', signerAddress.toLowerCase() === claimDetails.claimant_address.toLowerCase());
         console.log('  - Is recipient:', signerAddress.toLowerCase() === claimDetails.recipient_address.toLowerCase());
         
         // Check if claim is expired
@@ -221,17 +228,33 @@ const WithdrawClaim = ({ claim, onWithdrawSuccess, onClose }) => {
           throw new Error(`Claim has NO outcome (${claimDetails.current_outcome}). Only YES outcomes can be withdrawn.`);
         }
         
-        // Check if user is the recipient (the person who will receive the funds)
-        if (signerAddress.toLowerCase() !== claimDetails.recipient_address.toLowerCase()) {
-          // If not the recipient, check if they have stakes on the winning outcome
-          try {
-            const yesStake = await contract.stakes(claimNum, 1, signerAddress); // 1 = YES outcome
-            console.log('🔍 User YES stake:', yesStake.toString());
-            if (yesStake.isZero()) {
+        if (isThirdPartyClaim) {
+          // For third-party claims, check if user is the claimant (assistant) who made the claim
+          if (signerAddress.toLowerCase() !== claimDetails.claimant_address.toLowerCase()) {
+            // If not the claimant, check if they have stakes on the winning outcome
+            try {
+              const yesStake = await contract.stakes(claimNum, 1, signerAddress); // 1 = YES outcome
+              console.log('🔍 User YES stake:', yesStake.toString());
+              if (yesStake.isZero()) {
+                throw new Error('You are not the claimant and have no stakes on the winning outcome');
+              }
+            } catch (stakeErr) {
+              throw new Error('You are not the claimant and have no stakes on the winning outcome');
+            }
+          }
+        } else {
+          // For regular claims, check if user is the recipient (the person who will receive the funds)
+          if (signerAddress.toLowerCase() !== claimDetails.recipient_address.toLowerCase()) {
+            // If not the recipient, check if they have stakes on the winning outcome
+            try {
+              const yesStake = await contract.stakes(claimNum, 1, signerAddress); // 1 = YES outcome
+              console.log('🔍 User YES stake:', yesStake.toString());
+              if (yesStake.isZero()) {
+                throw new Error('You are not the recipient and have no stakes on the winning outcome');
+              }
+            } catch (stakeErr) {
               throw new Error('You are not the recipient and have no stakes on the winning outcome');
             }
-          } catch (stakeErr) {
-            throw new Error('You are not the recipient and have no stakes on the winning outcome');
           }
         }
         

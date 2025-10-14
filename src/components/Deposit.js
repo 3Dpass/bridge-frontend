@@ -27,6 +27,8 @@ const Deposit = ({ assistant, onClose, onSuccess }) => {
   const [requiredAmount, setRequiredAmount] = useState('0');
   const [isCheckingApproval, setIsCheckingApproval] = useState(true);
   const [requiredNetwork, setRequiredNetwork] = useState(null);
+  const [useMaxAllowance, setUseMaxAllowance] = useState(false);
+  const [isRevoking, setIsRevoking] = useState(false);
 
   // Get the appropriate ABI based on assistant type
   const getAssistantABI = useCallback(() => {
@@ -599,24 +601,39 @@ const Deposit = ({ assistant, onClose, onSuccess }) => {
       
       // For Import Wrapper assistants, we need to approve a large amount for both tokens
       // to avoid having to re-approve for each deposit
-      const maxApprovalAmount = ethers.utils.parseUnits('1000000', stakeDecimals); // 1M tokens
-      const maxImageApprovalAmount = ethers.utils.parseUnits('1000000', imageDecimals); // 1M tokens
+      const maxApprovalAmount = useMaxAllowance 
+        ? ethers.constants.MaxUint256 
+        : ethers.utils.parseUnits('1000000', stakeDecimals); // 1M tokens or max uint256
+      const maxImageApprovalAmount = useMaxAllowance 
+        ? ethers.constants.MaxUint256 
+        : ethers.utils.parseUnits('1000000', imageDecimals); // 1M tokens or max uint256
       
       // Check current allowances
       const stakeAllowance = await stakeTokenContract.allowance(account, assistant.address);
       const imageAllowance = await imageTokenContract.allowance(account, assistant.address);
       
       // Store values for display
-      const formattedStakeRequired = ethers.utils.formatUnits(maxApprovalAmount, stakeDecimals);
-      const formattedImageRequired = ethers.utils.formatUnits(maxImageApprovalAmount, imageDecimals);
-      const formattedStakeCurrent = ethers.utils.formatUnits(stakeAllowance, stakeDecimals);
-      const formattedImageCurrent = ethers.utils.formatUnits(imageAllowance, imageDecimals);
+      const formattedStakeRequired = useMaxAllowance ? '∞' : ethers.utils.formatUnits(maxApprovalAmount, stakeDecimals);
+      const formattedImageRequired = useMaxAllowance ? '∞' : ethers.utils.formatUnits(maxImageApprovalAmount, imageDecimals);
+      
+      // Check if current allowances are at maximum value and display "Max" instead
+      const isStakeMaxAllowance = stakeAllowance.eq(ethers.constants.MaxUint256) || stakeAllowance.gt(ethers.utils.parseUnits('1000000000', stakeDecimals));
+      const isImageMaxAllowance = imageAllowance.eq(ethers.constants.MaxUint256) || imageAllowance.gt(ethers.utils.parseUnits('1000000000', imageDecimals));
+      
+      const formattedStakeCurrent = isStakeMaxAllowance ? 'Max' : ethers.utils.formatUnits(stakeAllowance, stakeDecimals);
+      const formattedImageCurrent = isImageMaxAllowance ? 'Max' : ethers.utils.formatUnits(imageAllowance, imageDecimals);
       
       console.log('🔍 Setting approval display:', {
         stakeTokenSymbol,
         imageTokenSymbol,
         formattedStakeRequired,
-        formattedImageRequired
+        formattedImageRequired,
+        stakeAllowance: stakeAllowance.toString(),
+        imageAllowance: imageAllowance.toString(),
+        isStakeMaxAllowance,
+        isImageMaxAllowance,
+        formattedStakeCurrent,
+        formattedImageCurrent
       });
       
       // For display, show the actual amounts entered by the user
@@ -628,24 +645,29 @@ const Deposit = ({ assistant, onClose, onSuccess }) => {
       setCurrentAllowance(`${formattedStakeCurrent} ${stakeTokenSymbol}\n${formattedImageCurrent} ${imageTokenSymbol}`);
       
       // Check if approval is needed for both tokens
-      // Consider approved if allowance is greater than 100K tokens (practical threshold)
-      const practicalApprovalThreshold = ethers.utils.parseUnits('100000', stakeDecimals);
-      const practicalImageApprovalThreshold = ethers.utils.parseUnits('100000', imageDecimals);
-      
-      const needsStakeApproval = stakeAllowance.lt(practicalApprovalThreshold);
-      const needsImageApproval = imageAllowance.lt(practicalImageApprovalThreshold);
+      // For max allowance, check if current allowance is already at max
+      // For regular amounts, check if current allowance is greater than 100K tokens (practical threshold)
+      const needsStakeApproval = useMaxAllowance 
+        ? !(stakeAllowance.eq(ethers.constants.MaxUint256) || stakeAllowance.gt(ethers.utils.parseUnits('1000000000', stakeDecimals)))
+        : stakeAllowance.lt(ethers.utils.parseUnits('100000', stakeDecimals));
+        
+      const needsImageApproval = useMaxAllowance 
+        ? !(imageAllowance.eq(ethers.constants.MaxUint256) || imageAllowance.gt(ethers.utils.parseUnits('1000000000', imageDecimals)))
+        : imageAllowance.lt(ethers.utils.parseUnits('100000', imageDecimals));
+        
       const needsApproval = needsStakeApproval || needsImageApproval;
       
       console.log('🔍 Batch approval check completed:', {
-        practicalApprovalThreshold: practicalApprovalThreshold.toString(),
-        practicalImageApprovalThreshold: practicalImageApprovalThreshold.toString(),
         stakeAllowance: stakeAllowance.toString(),
         imageAllowance: imageAllowance.toString(),
         needsStakeApproval,
         needsImageApproval,
         needsApproval,
         actualStakeAmount,
-        actualImageAmount
+        actualImageAmount,
+        useMaxAllowance,
+        isStakeMaxAllowance,
+        isImageMaxAllowance
       });
       
       return needsApproval;
@@ -655,7 +677,7 @@ const Deposit = ({ assistant, onClose, onSuccess }) => {
     } finally {
       setIsCheckingApproval(false);
     }
-  }, [assistant, account, signer, amount, imageAmount, getStakeTokenAddress, getImageTokenAddress, stakeTokenSymbol, imageTokenSymbol]);
+  }, [assistant, account, signer, amount, imageAmount, getStakeTokenAddress, getImageTokenAddress, stakeTokenSymbol, imageTokenSymbol, useMaxAllowance]);
 
   // Handle batch approval for ImportWrapper assistants (3DPass only)
   const handleBatchApprove = async () => {
@@ -696,8 +718,12 @@ const Deposit = ({ assistant, onClose, onSuccess }) => {
       const imageDecimals = get3DPassTokenDecimals(imageTokenAddress) || 18;
       
       // Approve large amounts for both tokens to avoid re-approval
-      const maxApprovalAmount = ethers.utils.parseUnits('1000000', stakeDecimals); // 1M tokens
-      const maxImageApprovalAmount = ethers.utils.parseUnits('1000000', imageDecimals); // 1M tokens
+      const maxApprovalAmount = useMaxAllowance 
+        ? ethers.constants.MaxUint256 
+        : ethers.utils.parseUnits('1000000', stakeDecimals); // 1M tokens or max uint256
+      const maxImageApprovalAmount = useMaxAllowance 
+        ? ethers.constants.MaxUint256 
+        : ethers.utils.parseUnits('1000000', imageDecimals); // 1M tokens or max uint256
       
       // Prepare batch call data for both tokens
       const stakeApproveData = stakeTokenContract.interface.encodeFunctionData('approve', [assistant.address, maxApprovalAmount]);
@@ -797,6 +823,204 @@ const Deposit = ({ assistant, onClose, onSuccess }) => {
     }
   };
 
+  // Handle batch revoke for ImportWrapper assistants (3DPass only)
+  const handleBatchRevoke = async () => {
+    if (assistant.type !== 'import_wrapper') {
+      return;
+    }
+
+    console.log('🔐 Starting batch revoke for ImportWrapper assistant...');
+    
+    setIsRevoking(true);
+    try {
+      // Get both token addresses
+      const stakeTokenAddress = getStakeTokenAddress(assistant);
+      const imageTokenAddress = getImageTokenAddress(assistant);
+      
+      console.log('🔐 Batch revoke token addresses:', {
+        stakeTokenAddress,
+        imageTokenAddress,
+        assistantAddress: assistant.address,
+        assistantType: assistant.type
+      });
+      
+      if (!stakeTokenAddress || !imageTokenAddress) {
+        console.error('❌ Missing token addresses:', {
+          stakeTokenAddress,
+          imageTokenAddress
+        });
+        throw new Error('Missing token addresses');
+      }
+
+      // Create contracts
+      const stakeTokenContract = new ethers.Contract(stakeTokenAddress, IPRECOMPILE_ERC20_ABI, signer);
+      const imageTokenContract = new ethers.Contract(imageTokenAddress, IPRECOMPILE_ERC20_ABI, signer);
+      const batchContract = createBatchContract();
+      
+      // Revoke allowance by setting to 0
+      const zeroAmount = ethers.constants.Zero;
+      
+      // Prepare batch call data for both tokens
+      const stakeRevokeData = stakeTokenContract.interface.encodeFunctionData('approve', [assistant.address, zeroAmount]);
+      const imageRevokeData = imageTokenContract.interface.encodeFunctionData('approve', [assistant.address, zeroAmount]);
+      
+      console.log('🔐 Batch revoke call data prepared:', {
+        stakeRevokeData: stakeRevokeData.slice(0, 10) + '...',
+        imageRevokeData: imageRevokeData.slice(0, 10) + '...',
+        zeroAmount: zeroAmount.toString()
+      });
+      
+      // Batch parameters
+      const to = [stakeTokenAddress, imageTokenAddress];
+      const values = [0, 0]; // No ETH value for approvals
+      const callData = [stakeRevokeData, imageRevokeData];
+      const gasLimits = [100000, 100000]; // Gas limit for each approval
+      
+      console.log('🔐 Executing batch revoke...', {
+        to,
+        callData: callData.map(data => data.slice(0, 10) + '...'), // Show only function selectors
+        gasLimits
+      });
+      
+      // Execute batch revoke
+      const batchTx = await batchContract.batchAll(to, values, callData, gasLimits, {
+        gasLimit: 300000 // Higher gas limit for batch transaction
+      });
+      
+      console.log('⏳ Waiting for batch revoke transaction confirmation...');
+      const receipt = await batchTx.wait();
+      
+      console.log('✅ Batch revoke transaction confirmed:', receipt.transactionHash);
+      
+      // Verify the revoke worked by checking allowances again
+      console.log('🔍 Verifying revoke after transaction...');
+      
+      // Wait a moment for the blockchain to update
+      await new Promise(resolve => setTimeout(resolve, 2000));
+      
+      // Check allowances directly
+      const stakeAllowance = await stakeTokenContract.allowance(account, assistant.address);
+      const imageAllowance = await imageTokenContract.allowance(account, assistant.address);
+      
+      console.log('🔍 Post-transaction allowances:', {
+        stakeAllowance: stakeAllowance.toString(),
+        imageAllowance: imageAllowance.toString(),
+        bothRevoked: stakeAllowance.isZero() && imageAllowance.isZero()
+      });
+      
+      if (stakeAllowance.isZero() && imageAllowance.isZero()) {
+        console.log('✅ Both tokens revoked successfully!');
+        toast.success('Allowance revoked for both tokens!');
+        setStep('approve'); // Reset to approval step
+      } else {
+        console.log('⚠️ Revoke verification failed:', {
+          stakeAllowance: stakeAllowance.toString(),
+          imageAllowance: imageAllowance.toString()
+        });
+        toast.error('Revoke transaction completed but verification failed. Please try again.');
+      }
+      
+    } catch (error) {
+      console.error('Batch revoke error:', error);
+      
+      if (error.code === 'ACTION_REJECTED') {
+        toast.error('Transaction was rejected by user');
+      } else if (error.code === 'INSUFFICIENT_FUNDS') {
+        toast.error('Insufficient funds for gas');
+      } else if (error.message?.includes('gas')) {
+        toast.error('Gas estimation failed. Please try again.');
+      } else if (error.message?.includes('revert')) {
+        toast.error('Transaction failed. Please check your inputs.');
+      } else if (error.code === 'NETWORK_ERROR') {
+        toast.error('Network error. Please check your connection.');
+      } else if (error.code === 'NONCE_EXPIRED') {
+        toast.error('Transaction nonce expired. Please try again.');
+      } else if (error.message?.includes('timeout')) {
+        toast.error('Transaction timeout. Please try again.');
+      } else {
+        toast.error(`Batch revoke failed: ${error.message || 'Unknown error'}`);
+      }
+    } finally {
+      setIsRevoking(false);
+    }
+  };
+
+  // Handle single token revoke for non-ImportWrapper assistants
+  const handleRevoke = async () => {
+    console.log('🔐 handleRevoke called for assistant type:', assistant.type);
+    
+    if (!account || !signer) {
+      toast.error('Please connect your wallet');
+      return;
+    }
+
+    // For ImportWrapper assistants, use batch revoke
+    if (assistant.type === 'import_wrapper') {
+      console.log('🔐 Calling handleBatchRevoke for ImportWrapper assistant');
+      return await handleBatchRevoke();
+    }
+
+    // For other assistant types, use regular revoke
+    if (!stakeTokenAddress) {
+      toast.error('Missing token address');
+      return;
+    }
+
+    setIsRevoking(true);
+    try {
+      const tokenContract = createTokenContract(stakeTokenAddress);
+      
+      console.log('🔐 Revoking allowance for assistant...');
+      const revokeTx = await tokenContract.approve(assistant.address, 0, { 
+        gasLimit: 100000 
+      });
+      
+      console.log('⏳ Waiting for revoke transaction confirmation...');
+      const receipt = await revokeTx.wait();
+      
+      console.log('✅ Revoke transaction confirmed:', receipt.transactionHash);
+      
+      // Refresh allowance display
+      const updatedAllowance = await tokenContract.allowance(account, assistant.address);
+      const actualDecimals = await tokenContract.decimals();
+      const isMaxAllowance = updatedAllowance.eq(ethers.constants.MaxUint256) || updatedAllowance.gt(ethers.utils.parseUnits('1000000000', actualDecimals));
+      const formattedAllowance = isMaxAllowance 
+        ? 'Max' 
+        : ethers.utils.formatUnits(updatedAllowance, actualDecimals);
+      setCurrentAllowance(formattedAllowance);
+      
+      setStep('approve');
+      toast.success('Allowance revoked successfully!');
+      
+    } catch (error) {
+      console.error('❌ Revoke failed:', error);
+      
+      // Handle different types of errors gracefully
+      if (error.code === 'ACTION_REJECTED' || error.message?.includes('User denied')) {
+        toast.error('Transaction was cancelled by user');
+      } else if (error.code === 'INSUFFICIENT_FUNDS') {
+        toast.error('Insufficient funds for transaction');
+      } else if (error.message?.includes('gas')) {
+        toast.error('Transaction failed due to gas issues. Please try again.');
+      } else if (error.message?.includes('revert')) {
+        toast.error('Transaction failed. Please check your inputs and try again.');
+      } else if (error.message?.includes('network')) {
+        toast.error('Network error. Please check your connection and try again.');
+      } else if (error.message?.includes('execution reverted')) {
+        toast.error('Transaction reverted. Please check your inputs and try again.');
+      } else if (error.message?.includes('nonce')) {
+        toast.error('Transaction nonce error. Please try again.');
+      } else if (error.message?.includes('timeout')) {
+        toast.error('Transaction timeout. Please try again.');
+      } else {
+        const errorMessage = error.reason || error.message || 'Revoke failed';
+        toast.error(errorMessage);
+      }
+    } finally {
+      setIsRevoking(false);
+    }
+  };
+
   // Check if approval is needed
   const checkApprovalNeeded = useCallback(async () => {
     console.log('🔍 checkApprovalNeeded called with:', {
@@ -856,17 +1080,31 @@ const Deposit = ({ assistant, onClose, onSuccess }) => {
       
       // Convert display amount to actual amount for approval check
       const actualAmount = convertDisplayToActual(amount, actualDecimals, stakeTokenAddress);
-      const amountWei = ethers.utils.parseUnits(actualAmount, actualDecimals);
+      const amountWei = useMaxAllowance 
+        ? ethers.constants.MaxUint256 
+        : ethers.utils.parseUnits(actualAmount, actualDecimals);
       const allowance = await tokenContract.allowance(account, assistant.address);
       
       // Store the values for display (convert back to display format)
-      const formattedRequired = convertActualToDisplay(ethers.utils.formatUnits(amountWei, actualDecimals), actualDecimals, stakeTokenAddress);
-      const formattedCurrent = convertActualToDisplay(ethers.utils.formatUnits(allowance, actualDecimals), actualDecimals, stakeTokenAddress);
+      const formattedRequired = useMaxAllowance 
+        ? '∞' 
+        : convertActualToDisplay(ethers.utils.formatUnits(amountWei, actualDecimals), actualDecimals, stakeTokenAddress);
+      
+      // Check if current allowance is at maximum value and display "Max" instead
+      const isMaxAllowance = allowance.eq(ethers.constants.MaxUint256) || allowance.gt(ethers.utils.parseUnits('1000000000', actualDecimals));
+      const formattedCurrent = isMaxAllowance 
+        ? 'Max' 
+        : convertActualToDisplay(ethers.utils.formatUnits(allowance, actualDecimals), actualDecimals, stakeTokenAddress);
       
       setRequiredAmount(formattedRequired);
       setCurrentAllowance(formattedCurrent);
       
-      const needsApproval = allowance.lt(amountWei);
+      // For max allowance, check if current allowance is already at max
+      // For regular amounts, check if current allowance is sufficient
+      const needsApproval = useMaxAllowance 
+        ? !(allowance.eq(ethers.constants.MaxUint256) || allowance.gt(ethers.utils.parseUnits('1000000000', actualDecimals)))
+        : allowance.lt(amountWei);
+        
       console.log('🔍 Approval check completed:', {
         displayAmount: amount,
         actualAmount,
@@ -875,7 +1113,9 @@ const Deposit = ({ assistant, onClose, onSuccess }) => {
         allowance: allowance.toString(),
         required: formattedRequired,
         current: formattedCurrent,
-        needsApproval
+        needsApproval,
+        useMaxAllowance,
+        isMaxAllowance
       });
       
       return needsApproval;
@@ -885,7 +1125,7 @@ const Deposit = ({ assistant, onClose, onSuccess }) => {
     } finally {
       setIsCheckingApproval(false);
     }
-  }, [stakeTokenAddress, amount, imageAmount, assistant.address, assistant.type, account, signer, createTokenContract, checkNetwork, checkBatchApprovalNeeded, convertActualToDisplay, convertDisplayToActual]);
+  }, [stakeTokenAddress, amount, imageAmount, assistant.address, assistant.type, account, signer, createTokenContract, checkNetwork, checkBatchApprovalNeeded, convertActualToDisplay, convertDisplayToActual, useMaxAllowance]);
 
   // Handle approval
   const handleApprove = async () => {
@@ -915,7 +1155,9 @@ const Deposit = ({ assistant, onClose, onSuccess }) => {
       
       // Convert display amount to actual amount for approval
       const actualAmount = convertDisplayToActual(amount, actualDecimals, stakeTokenAddress);
-      const amountWei = ethers.utils.parseUnits(actualAmount, actualDecimals);
+      const amountWei = useMaxAllowance 
+        ? ethers.constants.MaxUint256 
+        : ethers.utils.parseUnits(actualAmount, actualDecimals);
       
       console.log('🔐 Approving assistant to spend tokens...');
       const approveTx = await tokenContract.approve(assistant.address, amountWei, { 
@@ -929,8 +1171,12 @@ const Deposit = ({ assistant, onClose, onSuccess }) => {
       
       // Refresh allowance display
       const updatedAllowance = await tokenContract.allowance(account, assistant.address);
-      setCurrentAllowance(ethers.utils.formatUnits(updatedAllowance, actualDecimals));
-      setRequiredAmount(ethers.utils.formatUnits(amountWei, actualDecimals));
+      const isMaxAllowance = updatedAllowance.eq(ethers.constants.MaxUint256) || updatedAllowance.gt(ethers.utils.parseUnits('1000000000', actualDecimals));
+      const formattedAllowance = isMaxAllowance 
+        ? 'Max' 
+        : ethers.utils.formatUnits(updatedAllowance, actualDecimals);
+      setCurrentAllowance(formattedAllowance);
+      setRequiredAmount(useMaxAllowance ? '∞' : ethers.utils.formatUnits(amountWei, actualDecimals));
       
       setStep('approved');
       toast.success('Approval successful!');
@@ -1237,7 +1483,7 @@ const Deposit = ({ assistant, onClose, onSuccess }) => {
     };
     
     checkApproval();
-  }, [signer, stakeTokenAddress, amount, imageAmount, assistant.type, checkApprovalNeeded]);
+  }, [signer, stakeTokenAddress, amount, imageAmount, assistant.type, checkApprovalNeeded, useMaxAllowance]);
 
 
   const handleDeposit = async () => {
@@ -1845,7 +2091,7 @@ const Deposit = ({ assistant, onClose, onSuccess }) => {
                 <div className="flex-1">
                   <h3 className="text-warning-400 font-medium">Approval Required</h3>
                   <p className="text-warning-300 text-sm mt-1">
-                    You need to approve the assistant contract to spend your {stakeTokenSymbol} tokens before depositing.
+                    Approve the assistant contract to spend your {stakeTokenSymbol} tokens before depositing.
                   </p>
                   
                   {!isCheckingApproval && (
@@ -1864,6 +2110,27 @@ const Deposit = ({ assistant, onClose, onSuccess }) => {
                       </div>
                     </div>
                   )}
+                  
+                  {/* Max Allowance Option */}
+                  <div className="mt-3">
+                    <label className="flex items-center space-x-2 text-sm">
+                      <input
+                        type="checkbox"
+                        checked={useMaxAllowance}
+                        onChange={(e) => setUseMaxAllowance(e.target.checked)}
+                        className="w-4 h-4 text-primary-600 bg-dark-800 border-secondary-600 rounded focus:ring-primary-500"
+                      />
+                      <span className="text-warning-300">
+                        Set maximum allowance (∞) to avoid repeated approvals
+                      </span>
+                    </label>
+                    <p className="text-xs text-warning-400 mt-1">
+                      {assistant.type === 'import_wrapper' 
+                        ? `This will set unlimited allowance for both ${stakeTokenSymbol} and ${imageTokenSymbol} tokens.`
+                        : `This will set unlimited allowance for ${stakeTokenSymbol} tokens.`
+                      }
+                    </p>
+                  </div>
                 </div>
               </div>
             </div>
@@ -1890,12 +2157,35 @@ const Deposit = ({ assistant, onClose, onSuccess }) => {
                 ) : (
                   <span>
                     {assistant.type === 'import_wrapper' 
-                      ? `Approve ${stakeTokenSymbol} and ${imageTokenSymbol}`
-                      : `Approve ${stakeTokenSymbol}`
+                      ? `Approve ${stakeTokenSymbol} and ${imageTokenSymbol}${useMaxAllowance ? ' (∞)' : ''}`
+                      : `Approve ${stakeTokenSymbol}${useMaxAllowance ? ' (∞)' : ''}`
                     }
                   </span>
                 )}
               </button>
+              
+              {/* Show revoke button if there's existing allowance */}
+              {!isCheckingApproval && currentAllowance && currentAllowance !== '0' && !currentAllowance.includes('0.0') && (
+                <button
+                  onClick={handleRevoke}
+                  disabled={isRevoking}
+                  className="w-full bg-gray-600 hover:bg-gray-700 disabled:bg-dark-600 disabled:cursor-not-allowed text-white py-2 px-4 rounded-md text-sm font-medium transition-colors"
+                >
+                  {isRevoking ? (
+                    <div className="flex items-center justify-center space-x-2">
+                      <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
+                      <span>Revoking Allowance...</span>
+                    </div>
+                  ) : (
+                    <span>
+                      {assistant.type === 'import_wrapper' 
+                        ? `Revoke ${stakeTokenSymbol} and ${imageTokenSymbol} Allowance`
+                        : `Revoke ${stakeTokenSymbol} Allowance`
+                      }
+                    </span>
+                  )}
+                </button>
+              )}
             </div>
           </div>
         );
@@ -1927,25 +2217,55 @@ const Deposit = ({ assistant, onClose, onSuccess }) => {
                         <span className="text-success-400 font-medium whitespace-pre-line">{requiredAmount}</span>
                       </div>
                     </div>
+                    {useMaxAllowance && (
+                      <div className="text-sm">
+                        <div className="flex justify-between">
+                          <span className="text-success-300">Allowance type:</span>
+                          <span className="text-success-400 font-medium">Maximum (∞)</span>
+                        </div>
+                      </div>
+                    )}
                   </div>
                 </div>
               </div>
             </div>
             
-            <button
-              onClick={handleDeposit}
-              disabled={loading || !amount}
-              className="w-full bg-primary-600 hover:bg-primary-700 disabled:bg-dark-600 disabled:cursor-not-allowed text-white py-3 px-4 rounded-md text-sm font-medium transition-colors"
-            >
-              {loading ? (
-                <div className="flex items-center justify-center space-x-2">
-                  <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
-                  <span>Processing Deposit...</span>
-                </div>
-              ) : (
-                <span>Deposit {stakeTokenSymbol} and {imageTokenSymbol}</span>
-              )}
-            </button>
+            <div className="space-y-3">
+              <button
+                onClick={handleDeposit}
+                disabled={loading || !amount}
+                className="w-full bg-primary-600 hover:bg-primary-700 disabled:bg-dark-600 disabled:cursor-not-allowed text-white py-3 px-4 rounded-md text-sm font-medium transition-colors"
+              >
+                {loading ? (
+                  <div className="flex items-center justify-center space-x-2">
+                    <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
+                    <span>Processing Deposit...</span>
+                  </div>
+                ) : (
+                  <span>Deposit {stakeTokenSymbol} and {imageTokenSymbol}</span>
+                )}
+              </button>
+              
+              <button
+                onClick={handleRevoke}
+                disabled={isRevoking}
+                className="w-full bg-gray-600 hover:bg-gray-700 disabled:bg-dark-600 disabled:cursor-not-allowed text-white py-2 px-4 rounded-md text-sm font-medium transition-colors"
+              >
+                {isRevoking ? (
+                  <div className="flex items-center justify-center space-x-2">
+                    <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
+                    <span>Revoking Allowance...</span>
+                  </div>
+                ) : (
+                  <span>
+                    {assistant.type === 'import_wrapper' 
+                      ? `Revoke ${stakeTokenSymbol} and ${imageTokenSymbol} Allowance`
+                      : `Revoke ${stakeTokenSymbol} Allowance`
+                    }
+                  </span>
+                )}
+              </button>
+            </div>
           </div>
         );
 
