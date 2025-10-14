@@ -98,6 +98,15 @@ const getMatchStatus = (claim) => {
     }
   }
   
+  if (!claim.parameterMismatches.dataValid) {
+    const dataReason = claim.parameterMismatches.dataValidationReason;
+    if (dataReason === 'data_mismatch') {
+      mismatches.push({ field: 'data', reason: 'data mismatch' });
+    } else {
+      mismatches.push({ field: 'data', reason: 'mismatch' });
+    }
+  }
+  
   if (!claim.parameterMismatches.isValidFlow) {
     mismatches.push({ field: 'flow', reason: 'invalid flow' });
   }
@@ -123,6 +132,15 @@ const getFieldMatchStatus = (claim, field) => {
     const rewardMismatch = mismatches.find(m => m.field === 'reward');
     if (rewardMismatch) {
       return { isMatch: false, reason: rewardMismatch.reason };
+    }
+    return { isMatch: true, reason: null };
+  }
+  
+  // Check if data matches (for data field)
+  if (field === 'data') {
+    const dataMismatch = mismatches.find(m => m.field === 'data');
+    if (dataMismatch) {
+      return { isMatch: false, reason: dataMismatch.reason };
     }
     return { isMatch: true, reason: null };
   }
@@ -1728,6 +1746,19 @@ const ClaimList = () => {
                               <span className="text-white ml-2 font-mono text-xs">
                                 {claim.data || '0x'}
                               </span>
+                              {(() => {
+                                const matchStatus = getFieldMatchStatus(claim, 'data');
+                                if (matchStatus.isMatch) {
+                                  return <CheckCircle className="w-4 h-4 text-green-500 ml-2 inline" />;
+                                } else {
+                                  return (
+                                    <span className="ml-2 inline-flex items-center">
+                                      <X className="w-4 h-4 text-red-500 mr-1" />
+                                      <span className="text-red-400 text-xs">{matchStatus.reason}</span>
+                                    </span>
+                                  );
+                                }
+                              })()}
                             </div>
                           </div>
                         </div>
@@ -1925,6 +1956,15 @@ const ClaimList = () => {
                                     mismatches.push('Reward (conversion error)');
                                   } else {
                                     mismatches.push('Reward');
+                                  }
+                                }
+                                if (!claim.parameterMismatches.dataValid) {
+                                  // Show specific data mismatch reason
+                                  const dataReason = claim.parameterMismatches.dataValidationReason;
+                                  if (dataReason === 'data_mismatch') {
+                                    mismatches.push('Data (mismatch)');
+                                  } else {
+                                    mismatches.push('Data');
                                   }
                                 }
                                 if (!claim.parameterMismatches.isValidFlow) {

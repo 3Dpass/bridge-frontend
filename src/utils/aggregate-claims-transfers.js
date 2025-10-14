@@ -173,6 +173,46 @@ export const aggregateClaimsAndTransfers = (claims, transfers) => {
       return { match: false, reason: 'conversion_error', error: e.message };
     }
   };
+
+  // Helper function to validate data field (strict format validation to match bot expectations)
+  // Bot validates data field - must match exactly to prevent challenges
+  const validateDataField = (claimData, transferData) => {
+    // Normalize both data fields to handle different formats
+    const normalizeData = (data) => {
+      if (!data) return '0x';
+      if (typeof data === 'string') {
+        // Ensure proper hex format
+        if (data === '0x' || data === '') return '0x';
+        if (!data.startsWith('0x')) return '0x' + data;
+        return data.toLowerCase();
+      }
+      return data.toString();
+    };
+    
+    const claimDataNormalized = normalizeData(claimData);
+    const transferDataNormalized = normalizeData(transferData);
+    
+    // Check exact match
+    if (claimDataNormalized === transferDataNormalized) {
+      return { match: true, reason: 'data_exact_match' };
+    }
+    
+    // Check if both are effectively empty (0x or empty string)
+    const claimIsEmpty = claimDataNormalized === '0x' || claimDataNormalized === '';
+    const transferIsEmpty = transferDataNormalized === '0x' || transferDataNormalized === '';
+    
+    if (claimIsEmpty && transferIsEmpty) {
+      return { match: true, reason: 'both_data_empty' };
+    }
+    
+    // Data mismatch - this will cause bot challenges
+    return { 
+      match: false, 
+      reason: 'data_mismatch',
+      claimData: claimDataNormalized,
+      transferData: transferDataNormalized
+    };
+  };
   
   // Debug: Log the first transfer details
   if (transfers.length > 0) {
@@ -332,6 +372,8 @@ export const aggregateClaimsAndTransfers = (claims, transfers) => {
         const recipientMatch = recipientMatchResult.match;
         const rewardValidationResult = validateRewardAmounts(claim.reward, transfer.reward);
         const rewardValid = rewardValidationResult.match;
+        const dataValidationResult = validateDataField(claim.data, transfer.data);
+        const dataValid = dataValidationResult.match;
         
         // Check if this is a valid flow (Export transfer should match Import claim, etc.)
         const isValidFlow = (
@@ -339,10 +381,10 @@ export const aggregateClaimsAndTransfers = (claims, transfers) => {
           (transfer.eventType === 'NewRepatriation' && claim.bridgeType === 'export')
         );
         
-        if (amountMatch && senderMatch && recipientMatch && rewardValid && isValidFlow) {
+        if (amountMatch && senderMatch && recipientMatch && rewardValid && dataValid && isValidFlow) {
           matchingTransfer = transfer;
           matchReason = 'fallback_match';
-          console.log(`🔍 Fallback match found for transfer ${transfer.transactionHash} - amount, addresses, reward, and flow match`);
+          console.log(`🔍 Fallback match found for transfer ${transfer.transactionHash} - amount, addresses, reward, data, and flow match`);
           break;
         }
       }
@@ -372,7 +414,7 @@ export const aggregateClaimsAndTransfers = (claims, transfers) => {
       matchingTransfer.matchReason = matchReason;
 
       // Check for parameter mismatches even when txid matches
-      // Validate sender address, recipient address, amount, and reward
+      // Validate sender address, recipient address, amount, reward, and data
       const amountMatchResult = amountsMatchBigNumber(claim.amount, matchingTransfer.amount);
       const amountMatch = amountMatchResult.match;
       const senderMatchResult = addressesMatch(claim.senderAddress, matchingTransfer.senderAddress);
@@ -381,6 +423,8 @@ export const aggregateClaimsAndTransfers = (claims, transfers) => {
       const recipientMatch = recipientMatchResult.match;
       const rewardValidationResult = validateRewardAmounts(claim.reward, matchingTransfer.reward);
       const rewardValid = rewardValidationResult.match;
+      const dataValidationResult = validateDataField(claim.data, matchingTransfer.data);
+      const dataValid = dataValidationResult.match;
       
       // Check if this is a valid flow
       const isValidFlow = (
@@ -389,14 +433,15 @@ export const aggregateClaimsAndTransfers = (claims, transfers) => {
       );
 
       // Determine if this is suspicious due to parameter mismatches
-      // Check amount, sender, recipient, reward validation, and flow validity
-      const hasParameterMismatches = !amountMatch || !senderMatch || !recipientMatch || !rewardValid || !isValidFlow;
+      // Check amount, sender, recipient, reward validation, data validation, and flow validity
+      const hasParameterMismatches = !amountMatch || !senderMatch || !recipientMatch || !rewardValid || !dataValid || !isValidFlow;
       
       console.log(`🔍 Parameter validation for claim ${claim.claimNum}:`, {
         amountMatch,
         senderMatch,
         recipientMatch,
         rewardValid,
+        dataValid,
         isValidFlow,
         hasParameterMismatches,
         claimAmount: claim.amount?.toString(),
@@ -425,17 +470,19 @@ export const aggregateClaimsAndTransfers = (claims, transfers) => {
               status: 'suspicious',
               isFraudulent: true,
               reason: 'txid_match_but_parameter_mismatch',
-              parameterMismatches: {
-                amountMatch,
-                amountMatchReason: amountMatchResult.reason,
-                senderMatch,
-                senderMatchReason: senderMatchResult.reason,
-                recipientMatch,
-                recipientMatchReason: recipientMatchResult.reason,
-                rewardValid,
-                rewardValidationReason: rewardValidationResult.reason,
-                isValidFlow
-              }
+        parameterMismatches: {
+          amountMatch,
+          amountMatchReason: amountMatchResult.reason,
+          senderMatch,
+          senderMatchReason: senderMatchResult.reason,
+          recipientMatch,
+          recipientMatchReason: recipientMatchResult.reason,
+          rewardValid,
+          rewardValidationReason: rewardValidationResult.reason,
+          dataValid,
+          dataValidationReason: dataValidationResult.reason,
+          isValidFlow
+        }
             };
 
         result.suspiciousClaims.push(suspiciousClaim);

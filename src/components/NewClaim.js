@@ -1218,6 +1218,37 @@ const NewClaim = ({ isOpen, onClose, selectedToken = null, selectedTransfer = nu
             throw new Error(`Reward format mismatch: Transfer has "${transferRewardFormatted}" but claim has "${currentRewardFormatted}". This will cause bot challenges.`);
           }
         }
+        
+        // CRITICAL: Validate data field format consistency
+        if (selectedTransfer.data !== undefined) {
+          // Normalize data field formats for comparison
+          const normalizeData = (data) => {
+            if (!data) return '0x';
+            if (typeof data === 'string') {
+              if (data === '0x' || data === '') return '0x';
+              if (!data.startsWith('0x')) return '0x' + data;
+              return data.toLowerCase();
+            }
+            return data.toString();
+          };
+          
+          const transferDataNormalized = normalizeData(selectedTransfer.data);
+          const currentDataNormalized = normalizeData(formData.data);
+          
+          console.log('🔍 Bot format validation - Data:', {
+            transferData: selectedTransfer.data,
+            transferDataNormalized,
+            currentData: formData.data,
+            currentDataNormalized,
+            exactMatch: transferDataNormalized === currentDataNormalized,
+            formatConsistent: true
+          });
+          
+          // CRITICAL: Ensure exact format match to prevent bot challenges
+          if (transferDataNormalized !== currentDataNormalized) {
+            throw new Error(`Data format mismatch: Transfer has "${transferDataNormalized}" but claim has "${currentDataNormalized}". This will cause bot challenges.`);
+          }
+        }
       }
 
       // Keep txid in original format (hex string with 0x prefix as expected by bot)
