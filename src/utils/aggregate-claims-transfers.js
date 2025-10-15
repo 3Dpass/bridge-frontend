@@ -138,18 +138,9 @@ export const aggregateClaimsAndTransfers = (claims, transfers) => {
       const claimRewardBN = ethers.BigNumber.from(claimReward.toString());
       const transferRewardBN = ethers.BigNumber.from(transferReward.toString());
       
-      // Check format consistency first (bot is strict about format)
-      const claimRewardStr = claimReward.toString();
-      const transferRewardStr = transferReward.toString();
-      
-      // If string representations are different but BigNumber values are same
-      if (claimRewardStr !== transferRewardStr && claimRewardBN.eq(transferRewardBN)) {
-        return { 
-          match: false, 
-          reason: 'format_mismatch_but_equal',
-          claimReward: claimRewardStr,
-          transferReward: transferRewardStr
-        };
+      // Compare the BigNumber values directly - must be EXACT match
+      if (claimRewardBN.eq(transferRewardBN)) {
+        return { match: true, reason: 'rewards_equal' };
       }
       
       // Claim reward should not be greater than transfer reward
@@ -162,9 +153,18 @@ export const aggregateClaimsAndTransfers = (claims, transfers) => {
         };
       }
       
-      // Check if they're equal
-      if (claimRewardBN.eq(transferRewardBN)) {
-        return { match: true, reason: 'rewards_equal' };
+      // Check if it's a format issue (same value, different representation)
+      const claimRewardStr = claimReward.toString();
+      const transferRewardStr = transferReward.toString();
+      
+      // If string representations are different but BigNumber values are same
+      if (claimRewardStr !== transferRewardStr) {
+        return { 
+          match: false, 
+          reason: 'format_mismatch_but_equal',
+          claimReward: claimRewardStr,
+          transferReward: transferRewardStr
+        };
       }
       
       // Claim reward is less than transfer reward (acceptable)

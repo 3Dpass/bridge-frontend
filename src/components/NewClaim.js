@@ -4,12 +4,14 @@ import { useSettings } from '../contexts/SettingsContext';
 import { 
   get3DPassTokenMetadata, 
   get3DPassTokenBalance,
-  approve3DPassToken,
   get3DPassTokenAllowance,
   getTokenSymbolFromPrecompile
 } from '../utils/threedpass';
 import { 
-  COUNTERSTAKE_ABI
+  COUNTERSTAKE_ABI,
+  ERC20_ABI,
+  IPRECOMPILE_ERC20_ABI,
+  IP3D_ABI
 } from '../contracts/abi';
 import { NETWORKS } from '../config/networks';
 import { 
@@ -105,6 +107,111 @@ const checkThirdPartyClaim = (account, recipientAddress, reward) => {
 // Get maximum allowance value (2^256 - 1)
 const getMaxAllowance = () => {
   return ethers.constants.MaxUint256;
+};
+
+// Helper function to parse and categorize errors
+const parseError = (error) => {
+  const errorMessage = error.message || error.toString();
+  
+  // User rejection/cancellation
+  if (errorMessage.includes('user rejected') || 
+      errorMessage.includes('ACTION_REJECTED') ||
+      errorMessage.includes('User denied') ||
+      errorMessage.includes('cancelled') ||
+      error.code === 'ACTION_REJECTED') {
+    return {
+      type: 'user_rejection',
+      title: 'Transaction Cancelled',
+      message: 'You cancelled the transaction. No changes were made.',
+      canRetry: true,
+      isUserError: true
+    };
+  }
+  
+  // Transaction replaced/repriced (user adjusted gas)
+  if (errorMessage.includes('transaction was replaced') ||
+      error.code === 'TRANSACTION_REPLACED') {
+    return {
+      type: 'transaction_replaced',
+      title: 'Transaction Repriced',
+      message: 'Your wallet automatically adjusted the gas price for faster confirmation. The transaction was successful.',
+      canRetry: false,
+      isUserError: false,
+      isSuccess: true
+    };
+  }
+  
+  // Transaction hash issues (specific to your problem)
+  if (errorMessage.includes('Transaction does not have a transaction hash') ||
+      errorMessage.includes('there was a problem') ||
+      error.code === -32603) {
+    return {
+      type: 'transaction_hash_error',
+      title: 'Transaction Submission Failed',
+      message: 'The transaction could not be submitted properly. This often happens with allowance increases.',
+      canRetry: true,
+      isUserError: false
+    };
+  }
+  
+  // Insufficient funds
+  if (errorMessage.includes('insufficient funds') || 
+      errorMessage.includes('insufficient balance')) {
+    return {
+      type: 'insufficient_funds',
+      title: 'Insufficient Funds',
+      message: 'You don\'t have enough tokens or ETH to complete this transaction.',
+      canRetry: false,
+      isUserError: true
+    };
+  }
+  
+  // Gas estimation failed
+  if (errorMessage.includes('gas required exceeds allowance') ||
+      errorMessage.includes('gas estimation failed') ||
+      errorMessage.includes('UNPREDICTABLE_GAS_LIMIT')) {
+    return {
+      type: 'gas_error',
+      title: 'Gas Estimation Failed',
+      message: 'The transaction requires more gas than available. Try increasing gas limit.',
+      canRetry: true,
+      isUserError: false
+    };
+  }
+  
+  // Network issues
+  if (errorMessage.includes('network') || 
+      errorMessage.includes('timeout') ||
+      errorMessage.includes('connection')) {
+    return {
+      type: 'network_error',
+      title: 'Network Error',
+      message: 'There was a network issue. Please check your connection and try again.',
+      canRetry: true,
+      isUserError: false
+    };
+  }
+  
+  // Contract/transaction errors
+  if (errorMessage.includes('execution reverted') ||
+      errorMessage.includes('revert')) {
+    return {
+      type: 'contract_error',
+      title: 'Transaction Failed',
+      message: 'The transaction was rejected by the smart contract. Please check your inputs.',
+      canRetry: true,
+      isUserError: false
+    };
+  }
+  
+  // Default error
+  return {
+    type: 'unknown',
+    title: 'Operation Failed',
+    message: errorMessage,
+    canRetry: true,
+    isUserError: false
+  };
 };
 
 const NewClaim = ({ isOpen, onClose, selectedToken = null, selectedTransfer = null, onClaimSubmitted = null }) => {
@@ -293,6 +400,28 @@ const NewClaim = ({ isOpen, onClose, selectedToken = null, selectedTransfer = nu
   const loadAvailableTokens = useCallback(async () => {
     if (!provider) return;
 
+    // Validate network connection before proceeding
+    try {
+      const currentNetwork = await provider.getNetwork();
+      console.log('🔍 Current network in loadAvailableTokens:', {
+        expectedNetworkId: network?.id,
+        actualChainId: currentNetwork.chainId,
+        networkName: currentNetwork.name
+      });
+
+      // Check if we're on the expected network
+      if (network?.id && currentNetwork.chainId !== network.id) {
+        console.warn('⚠️ Network mismatch detected, skipping token loading:', {
+          expected: network.id,
+          actual: currentNetwork.chainId
+        });
+        return;
+      }
+    } catch (networkError) {
+      console.warn('⚠️ Failed to get current network, skipping token loading:', networkError);
+      return;
+    }
+
     try {
       const tokens = [];
       const allBridges = getBridgeInstancesWithSettings();
@@ -403,17 +532,20 @@ const NewClaim = ({ isOpen, onClose, selectedToken = null, selectedTransfer = nu
       // Load metadata for each unique token address
       for (const address of tokenAddresses) {
         try {
+          // Double-check network before loading metadata
+          const currentNetwork = await provider.getNetwork();
+          if (network?.id && currentNetwork.chainId !== network.id) {
+            console.warn(`⚠️ Network changed during token loading for ${address}, skipping`);
+            continue;
+          }
+
           // For 3DPass network, use 3DPass token metadata
           if (network?.id === NETWORKS.THREEDPASS.id) {
             const metadata = await get3DPassTokenMetadata(provider, address);
             tokens.push(metadata);
           } else {
             // For other networks (like Ethereum), use standard ERC20 metadata
-            const tokenContract = new ethers.Contract(address, [
-              'function symbol() view returns (string)',
-              'function name() view returns (string)',
-              'function decimals() view returns (uint8)'
-            ], provider);
+            const tokenContract = new ethers.Contract(address, ERC20_ABI, provider);
             
             const [symbol, name, decimals] = await Promise.all([
               tokenContract.symbol(),
@@ -430,6 +562,20 @@ const NewClaim = ({ isOpen, onClose, selectedToken = null, selectedTransfer = nu
           }
         } catch (error) {
           console.warn(`Failed to load metadata for ${address}:`, error);
+          
+          // If it's a network error, don't add the token
+          if (error.code === 'NETWORK_ERROR' || error.message?.includes('underlying network changed')) {
+            console.warn(`⚠️ Network error for ${address}, skipping token`);
+            continue;
+          }
+          
+          // For other errors, try to add a fallback token entry
+          tokens.push({
+            address,
+            symbol: 'Unknown',
+            name: 'Unknown Token',
+            decimals: 18
+          });
         }
       }
 
@@ -440,7 +586,30 @@ const NewClaim = ({ isOpen, onClose, selectedToken = null, selectedTransfer = nu
       setAvailableTokens(tokens);
     } catch (error) {
       console.error('Error loading available tokens:', error);
+      
+      // Provide more specific error messages based on error type
+      if (error.code === 'NETWORK_ERROR' || error.message?.includes('underlying network changed')) {
+        toast.error(
+          <div>
+            <h3 className="text-warning-400 font-medium">Network Switch Required</h3>
+            <p className="text-warning-300 text-sm mt-1">
+              Please wait for the network switch to complete, then try again.
+            </p>
+          </div>,
+          {
+            duration: 6000,
+            style: {
+              background: '#92400e',
+              border: '1px solid #f59e0b',
+              color: '#fff',
+              padding: '16px',
+              borderRadius: '8px',
+            },
+          }
+        );
+      } else {
       toast.error('Failed to load available tokens');
+      }
     }
   }, [provider, getBridgeInstancesWithSettings, network?.id, network?.name, formData.tokenAddress]);
 
@@ -777,10 +946,7 @@ const NewClaim = ({ isOpen, onClose, selectedToken = null, selectedTransfer = nu
         stakeTokenDecimals = getStakeTokenDecimals(network?.id);
       } else {
         // For other networks (like Ethereum), use standard ERC20 allowance
-        const tokenContract = new ethers.Contract(selectedBridge.stakeTokenAddress, [
-          'function allowance(address owner, address spender) view returns (uint256)',
-          'function decimals() view returns (uint8)'
-        ], provider);
+        const tokenContract = new ethers.Contract(selectedBridge.stakeTokenAddress, ERC20_ABI, provider);
         
         const [allowanceWei, decimals] = await Promise.all([
           tokenContract.allowance(account, selectedBridge.address),
@@ -831,7 +997,12 @@ const NewClaim = ({ isOpen, onClose, selectedToken = null, selectedTransfer = nu
   // Load available tokens
   useEffect(() => {
     if (isOpen && (network?.id === NETWORKS.THREEDPASS.id || network?.id === NETWORKS.ETHEREUM.id)) {
+      // Add a delay to ensure network switch has completed
+      const timer = setTimeout(() => {
       loadAvailableTokens();
+      }, 2000); // Wait 2 seconds for network switch to complete
+      
+      return () => clearTimeout(timer);
     }
   }, [isOpen, network, loadAvailableTokens]);
 
@@ -956,21 +1127,20 @@ const NewClaim = ({ isOpen, onClose, selectedToken = null, selectedTransfer = nu
     try {
       console.log('🔄 Starting allowance revocation...');
       
+      // Use the same approach for both networks - direct contract interaction
+      // Choose the appropriate ABI based on network and token type
+      let tokenABI;
       if (network?.id === NETWORKS.THREEDPASS.id) {
-        // For 3DPass network, use 3DPass token approval with 0 amount
-        await approve3DPassToken(
-          signer,
-          selectedBridge.stakeTokenAddress, // P3D token address for staking
-          selectedBridge.address,           // Bridge contract address
-          '0'                              // Revoke by setting to 0
-        );
+        // For 3DPass, use IP3D_ABI for P3D tokens or IPRECOMPILE_ERC20_ABI for other precompile tokens
+        const isP3DToken = selectedBridge.stakeTokenAddress === NETWORKS.THREEDPASS.tokens.P3D.address;
+        tokenABI = isP3DToken ? IP3D_ABI : IPRECOMPILE_ERC20_ABI;
       } else {
-        // For other networks (like Ethereum), use standard ERC20 approval with 0
-        const tokenContract = new ethers.Contract(selectedBridge.stakeTokenAddress, [
-          'function approve(address spender, uint256 amount) returns (bool)',
-          'function decimals() view returns (uint8)'
-        ], signer);
+        // For other networks (like Ethereum), use standard ERC20 ABI
+        tokenABI = ERC20_ABI;
+      }
+      const tokenContract = new ethers.Contract(selectedBridge.stakeTokenAddress, tokenABI, signer);
         
+      console.log('🔐 Revoking allowance (setting to 0)...');
         const revokeTx = await tokenContract.approve(selectedBridge.address, 0, { 
           gasLimit: 100000 
         });
@@ -978,7 +1148,6 @@ const NewClaim = ({ isOpen, onClose, selectedToken = null, selectedTransfer = nu
         console.log('⏳ Waiting for revocation transaction confirmation...');
         await revokeTx.wait();
         console.log('✅ Allowance revoked successfully');
-      }
       
       toast.success('Allowance revoked successfully!');
       
@@ -988,60 +1157,270 @@ const NewClaim = ({ isOpen, onClose, selectedToken = null, selectedTransfer = nu
     } catch (error) {
       console.error('❌ Allowance revocation failed:', error);
       
-      // Handle different types of errors gracefully
-      let errorMessage = 'Allowance revocation failed';
+      const errorInfo = parseError(error);
       
-      if (error.code === 4001 || error.message?.includes('User denied transaction') || error.message?.includes('user rejected transaction')) {
-        errorMessage = 'Transaction cancelled';
-      } else if (error.code === -32603 || error.message?.includes('insufficient funds')) {
-        errorMessage = 'Insufficient funds for transaction';
-      } else if (error.message?.includes('gas')) {
-        errorMessage = 'Transaction failed due to gas issues. Please try again.';
-      } else if (error.message?.includes('revert')) {
-        errorMessage = 'Transaction failed. Please check your inputs and try again.';
-      } else if (error.message?.includes('network')) {
-        errorMessage = 'Network error. Please check your connection and try again.';
-      } else {
-        errorMessage = `Allowance revocation failed: ${error.message}`;
+      // Handle transaction replacement as success
+      if (errorInfo.type === 'transaction_replaced') {
+        console.log('✅ Revoke transaction was repriced and successful');
+        
+        // Show success notification
+        toast.success(
+          <div>
+            <h3 className="text-success-400 font-medium">Allowance Revoked</h3>
+            <p className="text-success-300 text-sm mt-1">
+              Your wallet automatically adjusted the gas price. The allowance was successfully revoked.
+            </p>
+          </div>,
+          {
+            duration: 6000,
+            style: {
+              background: '#065f46',
+              border: '1px solid #047857',
+              color: '#fff',
+              padding: '16px',
+              borderRadius: '8px',
+            },
+          }
+        );
+        
+        // Refresh allowance display
+        await checkAllowance();
+        return;
       }
       
-      toast.error(errorMessage);
+      // Show error notification
+      toast.error(
+        <div>
+          <h3 className="text-error-400 font-medium">{errorInfo.title}</h3>
+          <p className="text-error-300 text-sm mt-1">{errorInfo.message}</p>
+          {errorInfo.type === 'user_rejection' && (
+            <p className="text-error-200 text-xs mt-2">💡 You can try again by clicking the revoke button.</p>
+          )}
+        </div>,
+        {
+          duration: 6000,
+          style: {
+            background: '#7f1d1d',
+            border: '1px solid #dc2626',
+            color: '#fff',
+            padding: '16px',
+            borderRadius: '8px',
+          },
+        }
+      );
     } finally {
       setIsRevoking(false);
     }
   };
 
-  // Handle approval
-  const handleApproval = async () => {
+  // Handle approval with two-step process for existing allowances
+  const handleApproval = async (retryCount = 0) => {
     if (!signer || !selectedBridge || !formData.amount) return;
 
     setSubmitting(true);
     try {
+      console.log('🔍 Starting approval process...', retryCount > 0 ? `(Retry ${retryCount})` : '');
+      console.log('📋 Approval details:', {
+        stakeTokenAddress: selectedBridge.stakeTokenAddress,
+        bridgeAddress: selectedBridge.address,
+        requiredStake: requiredStake,
+        useMaxAllowance: useMaxAllowance
+      });
+
       // Approve the stake token, not the claim token
       if (network?.id === NETWORKS.THREEDPASS.id) {
-        // For 3DPass network, use 3DPass token approval
-        const approvalAmount = useMaxAllowance ? getMaxAllowance() : requiredStake;
-        await approve3DPassToken(
-          signer,
-          selectedBridge.stakeTokenAddress, // P3D token address for staking
-          selectedBridge.address,           // Bridge contract address
-          approvalAmount                    // P3D stake amount or max allowance
-        );
-      } else {
-        // For other networks (like Ethereum), use standard ERC20 approval
-        const tokenContract = new ethers.Contract(selectedBridge.stakeTokenAddress, [
-          'function approve(address spender, uint256 amount) returns (bool)',
-          'function decimals() view returns (uint8)'
-        ], signer);
+        // For 3DPass network, use 3DPass token approval with two-step process
+        // Use IP3D_ABI for P3D tokens or IPRECOMPILE_ERC20_ABI for other precompile tokens
+        const isP3DToken = selectedBridge.stakeTokenAddress === NETWORKS.THREEDPASS.tokens.P3D.address;
+        const tokenABI = isP3DToken ? IP3D_ABI : IPRECOMPILE_ERC20_ABI;
+        const tokenContract = new ethers.Contract(selectedBridge.stakeTokenAddress, tokenABI, signer);
         
         const decimals = await tokenContract.decimals();
         const approvalAmount = useMaxAllowance ? getMaxAllowance() : ethers.utils.parseUnits(requiredStake, decimals);
-        const approvalTx = await tokenContract.approve(selectedBridge.address, approvalAmount);
-        console.log('🔍 Approval transaction sent:', approvalTx.hash);
         
-        // Wait for the transaction to be mined
-        await approvalTx.wait();
-        console.log('✅ Approval transaction confirmed');
+        console.log('💰 Parsed amount for 3DPass approval:', ethers.utils.formatUnits(approvalAmount, decimals));
+        console.log('🔐 3DPass approval amount:', useMaxAllowance ? 'MAX (∞)' : ethers.utils.formatUnits(approvalAmount, decimals));
+        
+        // Check current allowance
+        const currentAllowanceBN = await tokenContract.allowance(await signer.getAddress(), selectedBridge.address);
+        console.log('📊 Current 3DPass allowance:', ethers.utils.formatUnits(currentAllowanceBN, decimals));
+        
+        // For max allowance, check if it's already set to max
+        if (useMaxAllowance && currentAllowanceBN.eq(getMaxAllowance())) {
+          console.log('✅ Maximum 3DPass allowance already set');
+          toast.success('Maximum allowance already set!');
+          await checkAllowance();
+          return;
+        }
+        
+        // For specific amount, check if current allowance is sufficient
+        if (!useMaxAllowance && currentAllowanceBN.gte(approvalAmount)) {
+          console.log('✅ Sufficient 3DPass allowance already exists');
+          toast.success('Sufficient allowance already exists!');
+          await checkAllowance();
+          return;
+        }
+
+        // For allowance increases, we need to handle this more carefully
+        const hasExistingAllowance = currentAllowanceBN.gt(0);
+        console.log('🔍 Has existing 3DPass allowance:', hasExistingAllowance);
+
+        console.log('🔐 Approving 3DPass bridge to spend stake tokens...');
+        
+        // Use different gas strategies based on whether this is an increase or new approval
+        const gasOptions = hasExistingAllowance ? {
+          gasLimit: 150000, // Higher gas limit for allowance increases
+          gasPrice: undefined, // Let the provider estimate
+        } : {
+          gasLimit: 100000, // Standard gas limit for new approvals
+          gasPrice: undefined,
+        };
+
+        // First, try to estimate gas to ensure the transaction is valid
+        let gasEstimate;
+        try {
+          gasEstimate = await tokenContract.estimateGas.approve(selectedBridge.address, approvalAmount);
+          console.log('⛽ 3DPass gas estimate:', gasEstimate.toString());
+          // Add 20% buffer to gas estimate
+          gasOptions.gasLimit = gasEstimate.mul(120).div(100);
+        } catch (gasError) {
+          console.warn('⚠️ 3DPass gas estimation failed, using fallback:', gasError);
+          // If gas estimation fails, use a higher fallback
+          gasOptions.gasLimit = hasExistingAllowance ? 200000 : 150000;
+        }
+
+        console.log('⛽ Using 3DPass gas limit:', gasOptions.gasLimit.toString());
+
+        // For allowance increases, we might need to reset to 0 first
+        if (hasExistingAllowance && retryCount === 0) {
+          console.log('🔄 Attempting two-step 3DPass approval (reset then approve)...');
+          try {
+            // Step 1: Reset allowance to 0
+            console.log('🔄 Step 1: Resetting 3DPass allowance to 0...');
+            const resetTx = await tokenContract.approve(selectedBridge.address, 0, {
+              gasLimit: 100000
+            });
+            await resetTx.wait();
+            console.log('✅ 3DPass allowance reset successful');
+            
+            // Step 2: Set new allowance
+            console.log('🔄 Step 2: Setting new 3DPass allowance...');
+            const approveTx = await tokenContract.approve(selectedBridge.address, approvalAmount, gasOptions);
+            
+            console.log('⏳ Waiting for 3DPass approval transaction confirmation...');
+            const receipt = await approveTx.wait();
+            
+            console.log('✅ 3DPass approval transaction confirmed:', receipt.transactionHash);
+            
+          } catch (twoStepError) {
+            console.warn('⚠️ Two-step 3DPass approval failed, trying direct approval:', twoStepError);
+            // Fall through to direct approval
+            throw twoStepError;
+          }
+        } else {
+          // Direct approval (either new approval or retry)
+          const approveTx = await tokenContract.approve(selectedBridge.address, approvalAmount, gasOptions);
+          
+          console.log('⏳ Waiting for 3DPass approval transaction confirmation...');
+          const receipt = await approveTx.wait();
+          
+          console.log('✅ 3DPass approval transaction confirmed:', receipt.transactionHash);
+        }
+      } else {
+        // For other networks (like Ethereum), use standard ERC20 approval
+        const tokenContract = new ethers.Contract(selectedBridge.stakeTokenAddress, ERC20_ABI, signer);
+        
+        const decimals = await tokenContract.decimals();
+        const approvalAmount = useMaxAllowance ? getMaxAllowance() : ethers.utils.parseUnits(requiredStake, decimals);
+        
+        console.log('💰 Parsed amount for approval:', ethers.utils.formatUnits(approvalAmount, decimals));
+        console.log('🔐 Approval amount:', useMaxAllowance ? 'MAX (∞)' : ethers.utils.formatUnits(approvalAmount, decimals));
+        
+        // Check current allowance
+        const currentAllowanceBN = await tokenContract.allowance(await signer.getAddress(), selectedBridge.address);
+        console.log('📊 Current allowance:', ethers.utils.formatUnits(currentAllowanceBN, decimals));
+        
+        // For max allowance, check if it's already set to max
+        if (useMaxAllowance && currentAllowanceBN.eq(getMaxAllowance())) {
+          console.log('✅ Maximum allowance already set');
+          toast.success('Maximum allowance already set!');
+          await checkAllowance();
+          return;
+        }
+        
+        // For specific amount, check if current allowance is sufficient
+        if (!useMaxAllowance && currentAllowanceBN.gte(approvalAmount)) {
+          console.log('✅ Sufficient allowance already exists');
+          toast.success('Sufficient allowance already exists!');
+          await checkAllowance();
+          return;
+        }
+
+        // For allowance increases, we need to handle this more carefully
+        const hasExistingAllowance = currentAllowanceBN.gt(0);
+        console.log('🔍 Has existing allowance:', hasExistingAllowance);
+
+        console.log('🔐 Approving bridge to spend stake tokens...');
+        
+        // Use different gas strategies based on whether this is an increase or new approval
+        const gasOptions = hasExistingAllowance ? {
+          gasLimit: 150000, // Higher gas limit for allowance increases
+          gasPrice: undefined, // Let the provider estimate
+        } : {
+          gasLimit: 100000, // Standard gas limit for new approvals
+          gasPrice: undefined,
+        };
+
+        // First, try to estimate gas to ensure the transaction is valid
+        let gasEstimate;
+        try {
+          gasEstimate = await tokenContract.estimateGas.approve(selectedBridge.address, approvalAmount);
+          console.log('⛽ Gas estimate:', gasEstimate.toString());
+          // Add 20% buffer to gas estimate
+          gasOptions.gasLimit = gasEstimate.mul(120).div(100);
+        } catch (gasError) {
+          console.warn('⚠️ Gas estimation failed, using fallback:', gasError);
+          // If gas estimation fails, use a higher fallback
+          gasOptions.gasLimit = hasExistingAllowance ? 200000 : 150000;
+        }
+
+        console.log('⛽ Using gas limit:', gasOptions.gasLimit.toString());
+
+        // For allowance increases, we might need to reset to 0 first
+        if (hasExistingAllowance && retryCount === 0) {
+          console.log('🔄 Attempting two-step approval (reset then approve)...');
+          try {
+            // Step 1: Reset allowance to 0
+            console.log('🔄 Step 1: Resetting allowance to 0...');
+            const resetTx = await tokenContract.approve(selectedBridge.address, 0, {
+              gasLimit: 100000
+            });
+            await resetTx.wait();
+            console.log('✅ Allowance reset successful');
+            
+            // Step 2: Set new allowance
+            console.log('🔄 Step 2: Setting new allowance...');
+            const approveTx = await tokenContract.approve(selectedBridge.address, approvalAmount, gasOptions);
+            
+            console.log('⏳ Waiting for approval transaction confirmation...');
+            const receipt = await approveTx.wait();
+            
+            console.log('✅ Approval transaction confirmed:', receipt.transactionHash);
+            
+          } catch (twoStepError) {
+            console.warn('⚠️ Two-step approval failed, trying direct approval:', twoStepError);
+            // Fall through to direct approval
+            throw twoStepError;
+          }
+        } else {
+          // Direct approval (either new approval or retry)
+          const approveTx = await tokenContract.approve(selectedBridge.address, approvalAmount, gasOptions);
+          
+          console.log('⏳ Waiting for approval transaction confirmation...');
+          const receipt = await approveTx.wait();
+          
+          console.log('✅ Approval transaction confirmed:', receipt.transactionHash);
+        }
       }
 
       toast.success('Stake token approval successful!');
@@ -1050,26 +1429,99 @@ const NewClaim = ({ isOpen, onClose, selectedToken = null, selectedTransfer = nu
       console.log('🔍 Checking allowance after approval...');
       await checkAllowance();
     } catch (error) {
-      console.error('Error approving stake token:', error);
+      console.error('❌ Approval failed:', error);
       
-      // Handle different types of errors gracefully
-      let errorMessage = 'Stake token approval failed';
+      const errorInfo = parseError(error);
       
-      if (error.code === 4001 || error.message?.includes('User denied transaction') || error.message?.includes('user rejected transaction')) {
-        errorMessage = 'Transaction cancelled';
-      } else if (error.code === -32603 || error.message?.includes('insufficient funds')) {
-        errorMessage = 'Insufficient funds for transaction';
-      } else if (error.message?.includes('gas')) {
-        errorMessage = 'Transaction failed due to gas issues. Please try again.';
-      } else if (error.message?.includes('revert')) {
-        errorMessage = 'Transaction failed. Please check your inputs and try again.';
-      } else if (error.message?.includes('network')) {
-        errorMessage = 'Network error. Please check your connection and try again.';
-      } else {
-        errorMessage = `Stake token approval failed: ${error.message}`;
+      // Handle transaction replacement as success
+      if (errorInfo.type === 'transaction_replaced') {
+        console.log('✅ Transaction was repriced and successful');
+        
+        // Show success notification
+        toast.success(
+          <div>
+            <h3 className="text-success-400 font-medium">Approval Successful</h3>
+            <p className="text-success-300 text-sm mt-1">
+              Your wallet automatically adjusted the gas price. The approval was successful.
+            </p>
+          </div>,
+          {
+            duration: 6000,
+            style: {
+              background: '#065f46',
+              border: '1px solid #047857',
+              color: '#fff',
+              padding: '16px',
+              borderRadius: '8px',
+            },
+          }
+        );
+        
+        // Refresh allowance display
+        await checkAllowance();
+        return;
       }
       
-      toast.error(errorMessage);
+      // Check if this is a retryable error and we haven't exceeded retry limit
+      if (errorInfo.canRetry && retryCount < 2) {
+        console.log(`🔄 Retrying approval (attempt ${retryCount + 1}/2)...`);
+        
+        // Show retry notification
+        toast.error(
+          <div>
+            <h3 className="text-warning-400 font-medium">Approval Failed - Retrying</h3>
+            <p className="text-warning-300 text-sm mt-1">
+              The approval transaction failed. Retrying with different parameters... (Attempt {retryCount + 1}/2)
+            </p>
+          </div>,
+          {
+            duration: 4000,
+            style: {
+              background: '#92400e',
+              border: '1px solid #f59e0b',
+              color: '#fff',
+              padding: '16px',
+              borderRadius: '8px',
+            },
+          }
+        );
+        
+        // Wait a bit before retrying
+        await new Promise(resolve => setTimeout(resolve, 2000));
+        
+        // Retry with different approach
+        return handleApproval(retryCount + 1);
+      }
+      
+      // Show final error notification
+      toast.error(
+        <div>
+          <h3 className="text-error-400 font-medium">{errorInfo.title}</h3>
+          <p className="text-error-300 text-sm mt-1">{errorInfo.message}</p>
+          {errorInfo.type === 'user_rejection' && (
+            <p className="text-error-200 text-xs mt-2">💡 You can try again by clicking the approve button.</p>
+          )}
+          {errorInfo.type === 'gas_error' && (
+            <p className="text-error-200 text-xs mt-2">💡 Try increasing the gas limit in your wallet settings.</p>
+          )}
+          {errorInfo.type === 'contract_error' && (
+            <p className="text-error-200 text-xs mt-2">💡 This often happens with existing allowances. Try revoking the current allowance first.</p>
+          )}
+          {errorInfo.canRetry && retryCount >= 2 && (
+            <p className="text-error-200 text-xs mt-2">💡 Multiple retry attempts failed. Try refreshing the page or switching networks.</p>
+          )}
+        </div>,
+        {
+          duration: 6000,
+          style: {
+            background: '#7f1d1d',
+            border: '1px solid #dc2626',
+            color: '#fff',
+            padding: '16px',
+            borderRadius: '8px',
+          },
+        }
+      );
     } finally {
       setSubmitting(false);
     }

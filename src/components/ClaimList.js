@@ -1885,7 +1885,7 @@ const ClaimList = () => {
                       
                       {isThirdPartyClaim(claim) && (
                         <div>
-                          <span className="text-secondary-400">Claimant:</span>
+                          <span className="text-secondary-400">Assistant:</span>
                           <span className="text-white ml-2 font-mono">
                             {formatAddress(claim.claimant_address)}
                           </span>
@@ -1958,7 +1958,7 @@ const ClaimList = () => {
                       
                       {isThirdPartyClaim(claim) && (
                         <div>
-                          <span className="text-secondary-400">Claimant:</span>
+                          <span className="text-secondary-400">Assistant:</span>
                           <span className="text-white ml-2 font-mono">
                             {formatAddress(claim.claimant_address)}
                           </span>
