@@ -174,7 +174,7 @@ const ClaimList = () => {
   const [aggregatedData, setAggregatedData] = useState(null);
   const [loading, setLoading] = useState(false);
   const [isInitialLoad, setIsInitialLoad] = useState(true);
-  const [filter, setFilter] = useState('all'); // 'all', 'my', 'suspicious', 'pending'
+  const [filter, setFilter] = useState('all'); // 'all', 'my', 'suspicious', 'pending', 'active'
   const [retryStatus, setRetryStatus] = useState(null);
   const [currentBlock, setCurrentBlock] = useState(null);
   const [showNewClaim, setShowNewClaim] = useState(false);
@@ -1372,7 +1372,7 @@ const ClaimList = () => {
               }`}
             >
               <User className="w-4 h-4" />
-              My Claims
+              Mine
             </button>
             <button
               onClick={() => setFilter('pending')}
@@ -1384,6 +1384,17 @@ const ClaimList = () => {
             >
               <Clock className="w-4 h-4" />
               Pending
+            </button>
+            <button
+              onClick={() => setFilter('active')}
+              className={`flex items-center gap-2 px-3 py-2 rounded-md text-sm font-medium transition-colors ${
+                filter === 'active'
+                  ? 'bg-blue-600 text-white'
+                  : 'text-secondary-400 hover:text-white hover:bg-dark-700'
+              }`}
+            >
+              <Clock className="w-4 h-4" />
+              Active
             </button>
             <button
               onClick={() => setFilter('suspicious')}
@@ -1442,6 +1453,7 @@ const ClaimList = () => {
             <h3 className="text-lg font-semibold text-white mb-2">
               {filter === 'suspicious' ? 'No Suspicious Claims Found' :
                filter === 'pending' ? 'No Pending Transfers Found' :
+               filter === 'active' ? 'No Active Claims Found' :
                'No Claims Found'}
             </h3>
             <p className="text-secondary-400">
@@ -1451,6 +1463,8 @@ const ClaimList = () => {
                 ? 'No suspicious claims detected across all networks'
                 : filter === 'pending'
                 ? 'No pending transfers found across all networks'
+                : filter === 'active'
+                ? 'No active claims found across all networks'
                 : 'No claims found across all networks'
               }
             </p>
@@ -1486,6 +1500,14 @@ const ClaimList = () => {
                 break;
               case 'pending':
                 displayData = aggregatedData.pendingTransfers;
+                break;
+              case 'active':
+                // Filter for active claims (not finished, not expired, not withdrawn)
+                displayData = [...aggregatedData.completedTransfers, ...aggregatedData.suspiciousClaims]
+                  .filter(claim => {
+                    const status = getClaimStatus(claim);
+                    return status === 'active';
+                  });
                 break;
               default:
                 displayData = [...aggregatedData.completedTransfers, ...aggregatedData.suspiciousClaims];
