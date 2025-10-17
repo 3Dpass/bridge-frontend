@@ -1,11 +1,12 @@
 import React from 'react';
 import { useWeb3 } from '../contexts/Web3Context';
+import { useSettings } from '../contexts/SettingsContext';
 import { Wallet, Network, LogOut, Menu, X, Settings } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { ReactComponent as Logo } from '../assets/logo.svg';
 import SettingsDialog from './SettingsDialog';
 
-const Header = () => {
+const Header = ({ onNavClick, activeTab }) => {
   const {
     account,
     network,
@@ -16,15 +17,19 @@ const Header = () => {
     switchNetwork,
     formatAddress,
   } = useWeb3();
+  
+  const { getAllNetworksWithSettings } = useSettings();
 
   const [isMenuOpen, setIsMenuOpen] = React.useState(false);
   const [isSettingsOpen, setIsSettingsOpen] = React.useState(false);
 
-  const supportedNetworks = [
-    { id: 1, name: 'Ethereum', symbol: 'ETH' },
-    { id: 56, name: 'BSC', symbol: 'BSC' },
-    { id: 1333, name: '3DPass', symbol: '3DPass' },
-  ];
+  // Get networks from settings
+  const networksFromSettings = getAllNetworksWithSettings();
+  const supportedNetworks = Object.values(networksFromSettings).map(network => ({
+    id: network.id,
+    name: network.name,
+    symbol: network.symbol
+  }));
 
   const handleConnect = async () => {
     try {
@@ -68,16 +73,39 @@ const Header = () => {
             </motion.div>
           </div>
 
-          {/* Desktop Navigation 
+          {/* Desktop Navigation */}
           <nav className="hidden md:flex items-center space-x-8">
-            <a href="#bridge" className="text-secondary-300 hover:text-white transition-colors">
-              Bridge
-            </a>
-            <a href="#how-it-works" className="text-secondary-300 hover:text-white transition-colors">
-              How it works
-            </a>
+            <button
+              onClick={() => onNavClick('bridge')}
+              className={`transition-colors ${
+                activeTab === 'bridge'
+                  ? 'text-white'
+                  : 'text-secondary-300 hover:text-white'
+              }`}
+            >
+              Transfer
+            </button>
+            <button
+              onClick={() => onNavClick('transfers')}
+              className={`transition-colors ${
+                activeTab === 'transfers'
+                  ? 'text-white'
+                  : 'text-secondary-300 hover:text-white'
+              }`}
+            >
+              Transactions
+            </button>
+            <button
+              onClick={() => onNavClick('pools')}
+              className={`transition-colors ${
+                activeTab === 'pools'
+                  ? 'text-white'
+                  : 'text-secondary-300 hover:text-white'
+              }`}
+            >
+              Pools
+            </button>
           </nav>
-          */}
 
           {/* Wallet Connection */}
           <div className="flex items-center space-x-4">
@@ -98,6 +126,14 @@ const Header = () => {
               </div>
             )}
 
+            {/* Mobile Menu Button - Always visible on mobile */}
+            <button
+              onClick={() => setIsMenuOpen(!isMenuOpen)}
+              className="md:hidden p-2 rounded-lg bg-dark-800 border border-secondary-700 hover:bg-dark-700 transition-colors"
+            >
+              {isMenuOpen ? <X className="w-4 h-4" /> : <Menu className="w-4 h-4" />}
+            </button>
+
             {/* Connect Button */}
             {!isConnected ? (
               <motion.button
@@ -117,14 +153,6 @@ const Header = () => {
                   <div className="w-2 h-2 bg-success-500 rounded-full"></div>
                   <span className="text-sm text-white">{formatAddress(account)}</span>
                 </div>
-
-                {/* Mobile Menu Button */}
-                <button
-                  onClick={() => setIsMenuOpen(!isMenuOpen)}
-                  className="md:hidden p-2 rounded-lg bg-dark-800 border border-secondary-700 hover:bg-dark-700 transition-colors"
-                >
-                  {isMenuOpen ? <X className="w-4 h-4" /> : <Menu className="w-4 h-4" />}
-                </button>
 
                 {/* Desktop Actions */}
                 <div className="hidden md:flex items-center space-x-2">
@@ -154,26 +182,51 @@ const Header = () => {
             <div className="px-4 py-4 space-y-4">
               {/* Mobile Navigation */}
               <nav className="space-y-2">
-                <a
-                  href="#bridge"
-                  className="block px-3 py-2 text-secondary-300 hover:text-white hover:bg-dark-800 rounded-lg transition-colors"
-                  onClick={() => setIsMenuOpen(false)}
+                <button
+                  onClick={() => {
+                    onNavClick('bridge');
+                    setIsMenuOpen(false);
+                  }}
+                  className={`w-full text-left px-3 py-2 rounded-lg transition-colors ${
+                    activeTab === 'bridge'
+                      ? 'bg-primary-600 text-white'
+                      : 'text-secondary-300 hover:text-white hover:bg-dark-800'
+                  }`}
                 >
-                  Bridge
-                </a>
-                <a
-                  href="#how-it-works"
-                  className="block px-3 py-2 text-secondary-300 hover:text-white hover:bg-dark-800 rounded-lg transition-colors"
-                  onClick={() => setIsMenuOpen(false)}
+                  Transfer
+                </button>
+                <button
+                  onClick={() => {
+                    onNavClick('transfers');
+                    setIsMenuOpen(false);
+                  }}
+                  className={`w-full text-left px-3 py-2 rounded-lg transition-colors ${
+                    activeTab === 'transfers'
+                      ? 'bg-primary-600 text-white'
+                      : 'text-secondary-300 hover:text-white hover:bg-dark-800'
+                  }`}
                 >
-                  How it works
-                </a>
+                  Transactions
+                </button>
+                <button
+                  onClick={() => {
+                    onNavClick('pools');
+                    setIsMenuOpen(false);
+                  }}
+                  className={`w-full text-left px-3 py-2 rounded-lg transition-colors ${
+                    activeTab === 'pools'
+                      ? 'bg-primary-600 text-white'
+                      : 'text-secondary-300 hover:text-white hover:bg-dark-800'
+                  }`}
+                >
+                  Pools
+                </button>
               </nav>
 
               {/* Network Selector */}
               {isConnected && (
                 <div className="space-y-2">
-                  <h3 className="text-sm font-medium text-secondary-400 px-3">Switch Network</h3>
+                  <h3 className="text-sm font-medium text-secondary-400 px-3">Networks:</h3>
                   <div className="space-y-1">
                     {supportedNetworks.map((net) => (
                       <button

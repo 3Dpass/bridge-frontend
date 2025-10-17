@@ -11,51 +11,19 @@ import { motion } from 'framer-motion';
 function App() {
   const [activeTab, setActiveTab] = useState('bridge'); // 'bridge', 'transfers', or 'pools'
 
+  // Handle navigation clicks
+  const handleNavClick = (section) => {
+    setActiveTab(section);
+  };
+
     return (
     <Web3Provider>
       <SettingsProvider>
         <div className="min-h-screen bg-dark-950">
-          <Header />
+          <Header onNavClick={handleNavClick} activeTab={activeTab} />
 
           <main className="pt-8 pb-16">
           
-          {/* Tab Navigation */}
-          <section className="mb-8">
-            <div className="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8">
-              <div className="flex space-x-1 bg-dark-800 rounded-lg p-1">
-                <button
-                  onClick={() => setActiveTab('bridge')}
-                  className={`flex-1 py-2 px-4 rounded-md text-sm font-medium transition-colors ${
-                    activeTab === 'bridge'
-                      ? 'bg-primary-600 text-white'
-                      : 'text-secondary-400 hover:text-white hover:bg-dark-700'
-                  }`}
-                >
-                  Transfer
-                </button>
-                <button
-                  onClick={() => setActiveTab('transfers')}
-                  className={`flex-1 py-2 px-4 rounded-md text-sm font-medium transition-colors ${
-                    activeTab === 'transfers'
-                      ? 'bg-primary-600 text-white'
-                      : 'text-secondary-400 hover:text-white hover:bg-dark-700'
-                  }`}
-                >
-                  Transactions
-                </button>
-                <button
-                  onClick={() => setActiveTab('pools')}
-                  className={`flex-1 py-2 px-4 rounded-md text-sm font-medium transition-colors ${
-                    activeTab === 'pools'
-                      ? 'bg-primary-600 text-white'
-                      : 'text-secondary-400 hover:text-white hover:bg-dark-700'
-                  }`}
-                >
-                  Pools
-                </button>
-              </div>
-            </div>
-          </section>
 
           {/* Bridge Form Section */}
           {activeTab === 'bridge' && (
@@ -116,7 +84,7 @@ function App() {
                         Counterstake consensus
                       </a>
                     ),
-                    description: 'The nodes are going to claim valid transfers and challenge fraudulent ones. You can also claim yourself, if the nodes refused to assist.',
+                    description: 'The nodes are going to claim valid transfers and challenge fraudulent ones. You may as well claim yourself, if the nodes refused to assist.',
                   },
                   {
                     step: '3',
