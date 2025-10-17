@@ -1639,6 +1639,8 @@ const ClaimList = () => {
             homeNetwork: claim.homeNetwork,
             foreignNetwork: claim.foreignNetwork,
             transferTokenSymbol: getTransferTokenSymbol(claim),
+            claimTransactionHash: claim.claimTransactionHash,
+            hasClaimTransactionHash: !!claim.claimTransactionHash,
               isSuspicious,
               isPending,
               rawItem: item
@@ -1923,7 +1925,7 @@ const ClaimList = () => {
                               </div>
                             )}
                             <div>
-                              <span className="text-secondary-400">Claim Txid:</span>
+                              <span className="text-secondary-400">Transfer Txid:</span>
                               <span className="text-white ml-2 font-mono">
                                 {formatAddress(claim.txid)}
                               </span>
@@ -1947,10 +1949,6 @@ const ClaimList = () => {
                                   );
                                 }
                               })()}
-                            </div>
-                            <div>
-                              <span className="text-secondary-400">Claim Block:</span>
-                              <span className="text-white ml-2">{claim.blockNumber || 'N/A'}</span>
                             </div>
                             <div>
                               <span className="text-secondary-400">Timestamp:</span>
@@ -1990,6 +1988,25 @@ const ClaimList = () => {
                                 }
                               })()}
                             </div>
+                            <div>
+                              <span className="text-secondary-400">Claim Block:</span>
+                              <span className="text-white ml-2">{claim.blockNumber || 'N/A'}</span>
+                            </div>
+                            {claim.claimTransactionHash && (
+                              <div>
+                                <span className="text-secondary-400">Claim Tx Hash:</span>
+                                <span className="text-white ml-2 font-mono">
+                                  {formatAddress(claim.claimTransactionHash)}
+                                </span>
+                                <button
+                                  onClick={() => copyToClipboard(claim.claimTransactionHash, 'Claim transaction hash')}
+                                  className="ml-2 p-1 hover:bg-dark-700 rounded transition-colors"
+                                  title="Copy claim transaction hash"
+                                >
+                                  <Copy className="w-3 h-3 text-secondary-400 hover:text-white" />
+                                </button>
+                              </div>
+                            )}
                           </div>
                         </div>
                       </div>

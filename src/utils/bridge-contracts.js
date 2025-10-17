@@ -807,6 +807,7 @@ export const getAllClaims = async (contract, limit = 100, rpcUrl, claimSearchDep
         let txid = newClaimEvent ? newClaimEvent.txid : null;
         let reward = newClaimEvent ? newClaimEvent.reward : null;
         let blockNumber = newClaimEvent ? newClaimEvent.blockNumber : null;
+        let claimTransactionHash = newClaimEvent ? newClaimEvent.transactionHash : null;
         
         // If we couldn't get txid from NewClaim event, try to get it from the claim data itself
         if (!txid && claimDetails.txid) {
@@ -818,24 +819,27 @@ export const getAllClaims = async (contract, limit = 100, rpcUrl, claimSearchDep
           console.log('🔍 getAllClaims: Claim', claimNum, 'no txid available - no matching NewClaim event found');
         }
         
-        // Add the claim number, txid, reward, and blockNumber to the claim details
+        // Add the claim number, txid, reward, blockNumber, and claim transaction hash to the claim details
         const claimWithNumber = {
           ...claimDetails,
           claim_num: claimNum,
           txid: txid, // Add the txid from the NewClaim event
           reward: reward, // Add the reward from the NewClaim event
-          blockNumber: blockNumber // Add the blockNumber from the NewClaim event
+          blockNumber: blockNumber, // Add the blockNumber from the NewClaim event
+          claimTransactionHash: claimTransactionHash // Add the transaction hash from the NewClaim event
         };
-        console.log('🔍 getAllClaims: Added claim with number, txid, reward, and blockNumber:', {
+        console.log('🔍 getAllClaims: Added claim with number, txid, reward, blockNumber, and claim transaction hash:', {
           claimNum: claimNum,
           txid: txid,
           reward: reward,
           blockNumber: blockNumber,
+          claimTransactionHash: claimTransactionHash,
           claimWithNumber: claimWithNumber,
           hasClaimNum: !!claimWithNumber.claim_num,
           hasTxid: !!claimWithNumber.txid,
           hasReward: !!claimWithNumber.reward,
-          hasBlockNumber: !!claimWithNumber.blockNumber
+          hasBlockNumber: !!claimWithNumber.blockNumber,
+          hasClaimTransactionHash: !!claimWithNumber.claimTransactionHash
         });
         claims.push(claimWithNumber);
       } else {
