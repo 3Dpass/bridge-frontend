@@ -1405,7 +1405,7 @@ const ClaimList = () => {
               }`}
             >
               <AlertTriangle className="w-4 h-4" />
-              Suspect
+              Suspicious
             </button>
             
           </div>
