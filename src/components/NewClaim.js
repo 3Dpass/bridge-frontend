@@ -8,7 +8,9 @@ import {
   getTokenSymbolFromPrecompile
 } from '../utils/threedpass';
 import { 
-  COUNTERSTAKE_ABI,
+  EXPORT_ABI,
+  IMPORT_ABI,
+  IMPORT_WRAPPER_ABI,
   ERC20_ABI,
   IPRECOMPILE_ERC20_ABI,
   IP3D_ABI
@@ -29,7 +31,6 @@ import {
 import { motion, AnimatePresence } from 'framer-motion';
 import { ethers } from 'ethers';
 import toast from 'react-hot-toast';
-import { getReliableTimestamp } from '../utils/time';
 
 // Safely convert to EIP-55 checksum if it's an EVM address
 const toChecksumAddress = (address) => {
@@ -215,7 +216,7 @@ const parseError = (error) => {
 };
 
 const NewClaim = ({ isOpen, onClose, selectedToken = null, selectedTransfer = null, onClaimSubmitted = null }) => {
-  const { account, provider, network, isConnected, signer } = useWeb3();
+  const { account, provider, network, signer } = useWeb3();
   const { getBridgeInstancesWithSettings, getNetworkWithSettings } = useSettings();
   
   // Form state
@@ -245,6 +246,7 @@ const NewClaim = ({ isOpen, onClose, selectedToken = null, selectedTransfer = nu
   const [showTransactionDetails, setShowTransactionDetails] = useState(false);
   const [useMaxAllowance, setUseMaxAllowance] = useState(false);
   const [isRevoking, setIsRevoking] = useState(false);
+  const [contractSettings, setContractSettings] = useState(null);
   
   // Custom control state for transaction details
   const [customControls, setCustomControls] = useState({
@@ -266,20 +268,22 @@ const NewClaim = ({ isOpen, onClose, selectedToken = null, selectedTransfer = nu
           // Pre-fill form with transfer data
           console.log('🔍 Pre-filling form with transfer data:', selectedTransfer);
           
-          // Use reliable external timestamp for both Expatriation and Repatriation claims
+          // Use the exact block timestamp from the transfer event (following bot pattern)
           const calculateTxts = async () => {
-            const reliableTimestamp = await getReliableTimestamp();
+            // The bot uses the block timestamp from the transfer event, not external timestamp
+            // This ensures exact consistency with the original transfer event
+            const transferBlockTimestamp = selectedTransfer.timestamp || selectedTransfer.blockTimestamp;
             
-            console.log('🔍 Using reliable external timestamp:', {
-              reliableTimestamp: reliableTimestamp,
-              reliableDate: new Date(reliableTimestamp * 1000).toISOString(),
-              transferTimestamp: selectedTransfer.timestamp,
-              blockTimestamp: selectedTransfer.blockTimestamp,
-              blockNumber: selectedTransfer.blockNumber
+            console.log('🔍 Using transfer block timestamp (bot pattern):', {
+              transferBlockTimestamp: transferBlockTimestamp,
+              transferBlockDate: new Date(transferBlockTimestamp * 1000).toISOString(),
+              blockNumber: selectedTransfer.blockNumber,
+              transferType: selectedTransfer.eventType,
+              transactionHash: selectedTransfer.transactionHash
             });
             
-            console.log(`🔍 Using reliable timestamp: ${reliableTimestamp} (${new Date(reliableTimestamp * 1000).toISOString()})`);
-            return reliableTimestamp;
+            console.log(`🔍 Using transfer block timestamp: ${transferBlockTimestamp} (${new Date(transferBlockTimestamp * 1000).toISOString()})`);
+            return transferBlockTimestamp;
           };
           
           const txtsValue = await calculateTxts();
@@ -356,23 +360,57 @@ const NewClaim = ({ isOpen, onClose, selectedToken = null, selectedTransfer = nu
             data: selectedTransfer.data || '0x'
           }));
         } else if (selectedToken) {
-          const reliableTimestamp = await getReliableTimestamp();
-          setFormData(prev => ({
-            ...prev,
-            tokenAddress: selectedToken.address,
-            recipientAddress: toChecksumAddress(account || ''),
-            senderAddress: '', // Don't pre-fill sender address for manual claims
-            txts: reliableTimestamp // Use reliable external timestamp
-          }));
+          // For manual claims without transfer data, use current block timestamp
+          // This follows the same pattern as the bot for consistency
+          if (provider) {
+            try {
+              const currentBlock = await provider.getBlock('latest');
+              const currentBlockTimestamp = currentBlock.timestamp;
+              setFormData(prev => ({
+                ...prev,
+                tokenAddress: selectedToken.address,
+                recipientAddress: toChecksumAddress(account || ''),
+                senderAddress: '', // Don't pre-fill sender address for manual claims
+                txts: currentBlockTimestamp // Use current block timestamp (bot pattern)
+              }));
+            } catch (error) {
+              console.error('Error getting current block timestamp:', error);
+              // Fallback to Date.now() if provider fails
+              const currentBlockTimestamp = Math.floor(Date.now() / 1000);
+              setFormData(prev => ({
+                ...prev,
+                tokenAddress: selectedToken.address,
+                recipientAddress: toChecksumAddress(account || ''),
+                senderAddress: '', // Don't pre-fill sender address for manual claims
+                txts: currentBlockTimestamp // Use current block timestamp (bot pattern)
+              }));
+            }
+          }
         } else if (account) {
           // If no selected token but account is available, still set the recipient address
-          const reliableTimestamp = await getReliableTimestamp();
-          setFormData(prev => ({
-            ...prev,
-            recipientAddress: toChecksumAddress(account),
-            senderAddress: '', // Don't pre-fill sender address for manual claims
-            txts: reliableTimestamp // Use reliable external timestamp
-          }));
+          // For manual claims without transfer data, use current block timestamp
+          if (provider) {
+            try {
+              const currentBlock = await provider.getBlock('latest');
+              const currentBlockTimestamp = currentBlock.timestamp;
+              setFormData(prev => ({
+                ...prev,
+                recipientAddress: toChecksumAddress(account),
+                senderAddress: '', // Don't pre-fill sender address for manual claims
+                txts: currentBlockTimestamp // Use current block timestamp (bot pattern)
+              }));
+            } catch (error) {
+              console.error('Error getting current block timestamp:', error);
+              // Fallback to Date.now() if provider fails
+              const currentBlockTimestamp = Math.floor(Date.now() / 1000);
+              setFormData(prev => ({
+                ...prev,
+                recipientAddress: toChecksumAddress(account),
+                senderAddress: '', // Don't pre-fill sender address for manual claims
+                txts: currentBlockTimestamp // Use current block timestamp (bot pattern)
+              }));
+            }
+          }
         }
         // Reset approval state when form opens or token changes
         setNeedsApproval(true);
@@ -680,6 +718,106 @@ const NewClaim = ({ isOpen, onClose, selectedToken = null, selectedTransfer = nu
     }
   }, [formData.tokenAddress, provider, account, network?.id]);
 
+  // Helper function to get the correct ABI based on bridge type
+  const getBridgeABI = useCallback((bridgeType) => {
+    switch (bridgeType) {
+      case 'export':
+        return EXPORT_ABI;
+      case 'import':
+        return IMPORT_ABI;
+      case 'import_wrapper':
+        return IMPORT_WRAPPER_ABI;
+      default:
+        throw new Error(`Unknown bridge type: ${bridgeType}`);
+    }
+  }, []);
+
+  // Load contract settings including min_tx_age
+  const loadContractSettings = useCallback(async () => {
+    if (!selectedBridge || !provider) return;
+
+    try {
+      console.log('🔍 Loading contract settings for bridge:', selectedBridge.address);
+      
+      const bridgeContract = new ethers.Contract(
+        selectedBridge.address,
+        getBridgeABI(selectedBridge.type),
+        provider
+      );
+
+      const settings = await bridgeContract.settings();
+      console.log('🔍 Contract settings loaded:', {
+        tokenAddress: settings.tokenAddress,
+        ratio100: settings.ratio100.toString(),
+        counterstake_coef100: settings.counterstake_coef100.toString(),
+        min_tx_age: settings.min_tx_age.toString(),
+        min_stake: settings.min_stake.toString(),
+        large_threshold: settings.large_threshold.toString()
+      });
+      
+      setContractSettings({
+        tokenAddress: settings.tokenAddress,
+        ratio100: settings.ratio100,
+        counterstake_coef100: settings.counterstake_coef100,
+        min_tx_age: settings.min_tx_age,
+        min_stake: settings.min_stake,
+        large_threshold: settings.large_threshold
+      });
+    } catch (error) {
+      console.error('Error loading contract settings:', error);
+      setContractSettings(null);
+    }
+  }, [selectedBridge, provider, getBridgeABI]);
+
+  // Validate timestamp requirement (min_tx_age)
+  const validateTimestampRequirement = useCallback(async () => {
+    if (!contractSettings || !formData.txts || !provider) return { isValid: true, message: '' };
+
+    try {
+      // Get current block timestamp from the provider (after network switch)
+      const currentBlock = await provider.getBlock('latest');
+      const currentBlockTimestamp = currentBlock.timestamp;
+      const transferTimestamp = parseInt(formData.txts);
+      const minTxAge = contractSettings.min_tx_age?.toNumber ? contractSettings.min_tx_age.toNumber() : parseInt(contractSettings.min_tx_age);
+      
+      const requiredTimestamp = transferTimestamp + minTxAge;
+      const timeRemaining = requiredTimestamp - currentBlockTimestamp;
+      
+      console.log('🔍 Timestamp validation:', {
+        currentBlockTimestamp,
+        currentBlockNumber: currentBlock.number,
+        transferTimestamp,
+        minTxAge,
+        requiredTimestamp,
+        timeRemaining,
+        isValid: currentBlockTimestamp >= requiredTimestamp
+      });
+
+      if (currentBlockTimestamp < requiredTimestamp) {
+        const minutesRemaining = Math.ceil(timeRemaining / 60);
+        const hoursRemaining = Math.floor(minutesRemaining / 60);
+        const remainingMinutes = minutesRemaining % 60;
+        
+        let timeMessage = '';
+        if (hoursRemaining > 0) {
+          timeMessage = `${hoursRemaining}h ${remainingMinutes}m`;
+        } else {
+          timeMessage = `${minutesRemaining}m`;
+        }
+        
+        return {
+          isValid: false,
+          message: `Claim is too early. Please wait ${timeMessage} more (min_tx_age: ${minTxAge}s)`
+        };
+      }
+
+      return { isValid: true, message: '' };
+    } catch (error) {
+      console.error('Error validating timestamp requirement:', error);
+      return { isValid: true, message: '' }; // Allow submission if validation fails
+    }
+  }, [contractSettings, formData.txts, provider]);
+
   // Load stake token balance (P3D)
   const loadStakeTokenBalance = useCallback(async () => {
     if (!selectedBridge || !provider || !account) return;
@@ -870,7 +1008,7 @@ const NewClaim = ({ isOpen, onClose, selectedToken = null, selectedTransfer = nu
       
       const bridgeContract = new ethers.Contract(
         selectedBridge.address,
-        COUNTERSTAKE_ABI,
+        getBridgeABI(selectedBridge.type),
         provider
       );
 
@@ -924,11 +1062,11 @@ const NewClaim = ({ isOpen, onClose, selectedToken = null, selectedTransfer = nu
       console.error('Error loading required stake:', error);
       setRequiredStake('0');
     }
-  }, [selectedBridge, provider, formData.tokenAddress, network?.id]);
+  }, [selectedBridge, provider, formData.tokenAddress, network?.id, getBridgeABI]);
 
 
   // Check allowance
-  const checkAllowance = useCallback(async () => {
+  const checkAllowance = useCallback(async (stakeAmount = requiredStake) => {
     if (!selectedBridge || !formData.amount || !provider || !account) return;
 
     try {
@@ -958,30 +1096,38 @@ const NewClaim = ({ isOpen, onClose, selectedToken = null, selectedTransfer = nu
       }
 
       // Parse the required stake with correct decimals
-      const stakeWei = ethers.utils.parseUnits(requiredStake, stakeTokenDecimals);
+      const stakeWei = ethers.utils.parseUnits(stakeAmount, stakeTokenDecimals);
       const allowanceWei = ethers.utils.parseUnits(currentAllowance, stakeTokenDecimals);
+      
+      // Check if current allowance is at maximum value and display "Max" instead
+      const isMaxAllowance = allowanceWei.eq(ethers.constants.MaxUint256) || allowanceWei.gt(ethers.utils.parseUnits('1000000000', stakeTokenDecimals));
       
       console.log('🔍 Allowance check results:', {
         currentAllowance,
-        requiredStake,
+        stakeAmount,
         allowanceWei: allowanceWei.toString(),
         stakeWei: stakeWei.toString(),
+        isMaxAllowance,
         needsApproval: allowanceWei.lt(stakeWei),
         allowanceComparison: `${allowanceWei.toString()} >= ${stakeWei.toString()} = ${allowanceWei.gte(stakeWei)}`
       });
       
       // Handle max allowance display
-      if (allowanceWei.eq(getMaxAllowance())) {
-        setAllowance('∞ (MAX)');
+      if (isMaxAllowance) {
+        setAllowance('Max');
+        // Automatically check the max allowance checkbox when max allowance is detected
+        setUseMaxAllowance(true);
       } else {
         setAllowance(currentAllowance);
       }
       
-      // Check if approval is needed based on max allowance preference
+      // Check if approval is needed
       let needsApprovalResult;
-      if (useMaxAllowance) {
-        needsApprovalResult = !allowanceWei.eq(getMaxAllowance());
+      if (isMaxAllowance) {
+        // Already has max allowance, no approval needed regardless of user preference
+        needsApprovalResult = false;
       } else {
+        // For non-max allowance cases, check if current allowance is sufficient for required stake
         needsApprovalResult = allowanceWei.lt(stakeWei);
       }
       
@@ -992,7 +1138,44 @@ const NewClaim = ({ isOpen, onClose, selectedToken = null, selectedTransfer = nu
       setAllowance('0');
       setNeedsApproval(true);
     }
-  }, [selectedBridge, formData.amount, provider, account, requiredStake, network?.id, useMaxAllowance]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedBridge, formData.amount, provider, account, network?.id]);
+
+  // Check allowance with retry mechanism for post-approval refresh
+  const checkAllowanceWithRetry = useCallback(async (maxRetries = 3) => {
+    for (let attempt = 1; attempt <= maxRetries; attempt++) {
+      try {
+        console.log(`🔍 Allowance check attempt ${attempt}/${maxRetries}`);
+        await checkAllowance();
+        
+        // Wait a bit for blockchain state to update
+        if (attempt < maxRetries) {
+          await new Promise(resolve => setTimeout(resolve, 1000 * attempt));
+        }
+      } catch (error) {
+        console.warn(`⚠️ Allowance check attempt ${attempt} failed:`, error);
+        if (attempt === maxRetries) {
+          console.error('❌ All allowance check attempts failed');
+        }
+      }
+    }
+  }, [checkAllowance]);
+
+  // Periodic allowance check to keep UI in sync
+  useEffect(() => {
+    if (!isOpen || !selectedBridge || !provider || !account) return;
+
+    // Check allowance immediately
+    checkAllowance();
+
+    // Set up periodic check every 10 seconds
+    const interval = setInterval(() => {
+      console.log('🔄 Periodic allowance check...');
+      checkAllowance();
+    }, 10000);
+
+    return () => clearInterval(interval);
+  }, [isOpen, selectedBridge, provider, account, checkAllowance]);
 
   // Load available tokens
   useEffect(() => {
@@ -1028,6 +1211,13 @@ const NewClaim = ({ isOpen, onClose, selectedToken = null, selectedTransfer = nu
       loadRequiredStakeWithAmount(amountToUse);
     }
   }, [selectedBridge, provider, loadRequiredStakeWithAmount, formData.amount]);
+
+  // Load contract settings when bridge is selected
+  useEffect(() => {
+    if (selectedBridge && provider) {
+      loadContractSettings();
+    }
+  }, [selectedBridge, provider, loadContractSettings]);
 
   // Load stake token balance when bridge is selected
   useEffect(() => {
@@ -1239,7 +1429,7 @@ const NewClaim = ({ isOpen, onClose, selectedToken = null, selectedTransfer = nu
         const approvalAmount = useMaxAllowance ? getMaxAllowance() : ethers.utils.parseUnits(requiredStake, decimals);
         
         console.log('💰 Parsed amount for 3DPass approval:', ethers.utils.formatUnits(approvalAmount, decimals));
-        console.log('🔐 3DPass approval amount:', useMaxAllowance ? 'MAX (∞)' : ethers.utils.formatUnits(approvalAmount, decimals));
+        console.log('🔐 3DPass approval amount:', useMaxAllowance ? 'Max' : ethers.utils.formatUnits(approvalAmount, decimals));
         
         // Check current allowance
         const currentAllowanceBN = await tokenContract.allowance(await signer.getAddress(), selectedBridge.address);
@@ -1334,7 +1524,7 @@ const NewClaim = ({ isOpen, onClose, selectedToken = null, selectedTransfer = nu
         const approvalAmount = useMaxAllowance ? getMaxAllowance() : ethers.utils.parseUnits(requiredStake, decimals);
         
         console.log('💰 Parsed amount for approval:', ethers.utils.formatUnits(approvalAmount, decimals));
-        console.log('🔐 Approval amount:', useMaxAllowance ? 'MAX (∞)' : ethers.utils.formatUnits(approvalAmount, decimals));
+        console.log('🔐 Approval amount:', useMaxAllowance ? 'Max' : ethers.utils.formatUnits(approvalAmount, decimals));
         
         // Check current allowance
         const currentAllowanceBN = await tokenContract.allowance(await signer.getAddress(), selectedBridge.address);
@@ -1425,9 +1615,9 @@ const NewClaim = ({ isOpen, onClose, selectedToken = null, selectedTransfer = nu
 
       toast.success('Stake token approval successful!');
       
-      // Check allowance immediately after transaction is confirmed
+      // Check allowance after approval with retry mechanism
       console.log('🔍 Checking allowance after approval...');
-      await checkAllowance();
+      await checkAllowanceWithRetry();
     } catch (error) {
       console.error('❌ Approval failed:', error);
       
@@ -1529,19 +1719,40 @@ const NewClaim = ({ isOpen, onClose, selectedToken = null, selectedTransfer = nu
 
      // Handle claim submission
    const handleSubmit = async (e) => {
+    console.log('🚀 ===== CLAIM SUBMISSION STARTED =====');
      e.preventDefault();
+    
+    console.log('🔍 Pre-submission checks...');
+    console.log('🔍 Signer:', !!signer);
+    console.log('🔍 Selected bridge:', !!selectedBridge);
+    console.log('🔍 Needs approval:', needsApproval);
      
      if (!signer || !selectedBridge) {
+      console.log('❌ Missing signer or bridge');
        toast.error('Please connect wallet and select a valid token');
        return;
      }
 
     if (needsApproval) {
+      console.log('❌ Approval needed');
       toast.error('Please approve the bridge to spend your tokens first');
       return;
     }
 
+    console.log('🔍 Validating timestamp requirement...');
+    // Validate timestamp requirement before submission
+    const timestampValidation = await validateTimestampRequirement();
+    console.log('🔍 Timestamp validation result:', timestampValidation);
+    if (!timestampValidation.isValid) {
+      console.log('❌ Timestamp validation failed');
+      toast.error(timestampValidation.message);
+      return;
+    }
+    console.log('✅ Timestamp validation passed');
+
+    console.log('🔍 Setting submitting state...');
     setSubmitting(true);
+    console.log('🔍 Starting try block...');
     try {
       console.log('🔍 Starting claim submission with data:', {
         bridgeAddress: selectedBridge.address,
@@ -1550,30 +1761,112 @@ const NewClaim = ({ isOpen, onClose, selectedToken = null, selectedTransfer = nu
         tokenMetadata: tokenMetadata,
         requiredStake: requiredStake
       });
+      
+      console.log('🔍 Step 1: Creating bridge contract...');
+
+      // Select the correct ABI based on bridge type (following bot's approach)
+      let contractABI;
+      switch (selectedBridge.type) {
+        case 'export':
+          contractABI = EXPORT_ABI;
+          console.log('🔍 Using EXPORT_ABI for export bridge');
+          break;
+        case 'import':
+          contractABI = IMPORT_ABI;
+          console.log('🔍 Using IMPORT_ABI for import bridge');
+          break;
+        case 'import_wrapper':
+          contractABI = IMPORT_WRAPPER_ABI;
+          console.log('🔍 Using IMPORT_WRAPPER_ABI for import wrapper bridge');
+          break;
+        default:
+          throw new Error(`Unknown bridge type: ${selectedBridge.type}`);
+      }
 
       const bridgeContract = new ethers.Contract(
         selectedBridge.address,
-        COUNTERSTAKE_ABI,
+        contractABI,
         signer
       );
+      console.log('✅ Bridge contract created successfully');
+      console.log('🔍 Contract details:');
+      console.log('  - Address:', selectedBridge.address);
+      console.log('  - Bridge type:', selectedBridge.type);
+      console.log('  - ABI length:', contractABI.length);
+      console.log('  - Has claim function:', !!bridgeContract.claim);
+      console.log('  - Claim function signature:', bridgeContract.interface.getFunction('claim').format());
+      
+      // Verify the contract address is valid
+      if (!ethers.utils.isAddress(selectedBridge.address)) {
+        throw new Error(`Invalid contract address: ${selectedBridge.address}`);
+      }
+      
+      // Check if the contract has the expected functions (compatible with older ethers versions)
+      const hasClaim = !!bridgeContract.claim;
+      const hasGetRequiredStake = !!bridgeContract.getRequiredStake;
+      const hasSettings = !!bridgeContract.settings;
+      
+      console.log('🔍 Contract function availability:');
+      console.log('  - has claim function:', hasClaim);
+      console.log('  - has getRequiredStake function:', hasGetRequiredStake);
+      console.log('  - has settings function:', hasSettings);
+      
+      if (!hasClaim) {
+        throw new Error(`Contract at ${selectedBridge.address} does not have a claim function`);
+      }
 
       // CRITICAL: Ensure exact format matching with bot expectations
       // Parse amounts with exact decimal precision to avoid format mismatches
+      console.log('🔍 Step 2: Parsing amounts...');
       const tokenDecimals = getTokenDecimals(network?.id, formData.tokenAddress);
+      console.log('🔍 Token decimals:', tokenDecimals);
+      
       const amountWei = ethers.utils.parseUnits(formData.amount, tokenDecimals);
-      const rewardWei = ethers.utils.parseUnits(formData.reward || '0', tokenDecimals);
+      console.log('🔍 Amount parsed:', amountWei.toString());
+      
+      // Validate and parse reward
+      const rewardValue = formData.reward || '0';
+      console.log('🔍 Raw reward value:', rewardValue, 'Type:', typeof rewardValue);
+      
+      // Ensure we have a valid string for parseUnits
+      const cleanRewardValue = rewardValue.toString().trim();
+      let rewardWei;
+      
+      if (!cleanRewardValue || cleanRewardValue === '') {
+        console.log('🔍 Reward is empty, using 0');
+        rewardWei = ethers.utils.parseUnits('0', tokenDecimals);
+        console.log('🔍 Reward parsed (default 0):', rewardWei.toString());
+      } else {
+        // Validate it's a valid number string
+        if (isNaN(parseFloat(cleanRewardValue))) {
+          throw new Error(`Invalid reward value: ${cleanRewardValue} - must be a valid number`);
+        }
+        
+        rewardWei = ethers.utils.parseUnits(cleanRewardValue, tokenDecimals);
+        console.log('🔍 Reward parsed:', rewardWei.toString());
+        
+        if (!rewardWei) {
+          throw new Error(`Failed to parse reward value: ${cleanRewardValue}`);
+        }
+      }
       
       // Keep amount as BigNumber for proper uint encoding
       const amountBigNumber = amountWei;
+      console.log('🔍 Amount BigNumber:', amountBigNumber.toString());
       
       // CRITICAL: Reward should be passed as int, not BigNumber for claim function
       // The ABI expects "int reward", not "uint reward" - convert to integer
-      const rewardInt = parseInt(rewardWei.toString());
+      console.log('🔍 Step 3: Converting reward to integer...');
+      const rewardBigNumber = rewardWei; // Keep as BigNumber, don't convert to int
+      console.log('🔍 Reward BigNumber:', rewardBigNumber.toString());
+      console.log('🔍 Reward BigNumber type:', typeof rewardBigNumber);
+      console.log('🔍 Reward BigNumber is BigNumber:', ethers.BigNumber.isBigNumber(rewardBigNumber));
       
       // Validate reward is within reasonable bounds
-      if (rewardInt < 0) {
+      if (rewardBigNumber.lt(0)) {
         throw new Error('Reward cannot be negative');
       }
+      console.log('✅ Reward validation passed');
       
       console.log('🔍 Bot-compatible format validation:', {
         originalAmount: formData.amount,
@@ -1581,22 +1874,28 @@ const NewClaim = ({ isOpen, onClose, selectedToken = null, selectedTransfer = nu
         amountWei: amountWei.toString(),
         rewardWei: rewardWei.toString(),
         amountBigNumber: amountBigNumber.toString(),
-        rewardInt: rewardInt,
+        rewardBigNumber: rewardBigNumber.toString(),
         tokenDecimals: tokenDecimals,
         formatConsistent: true
       });
       // txts should be passed as BigNumber for proper uint32 encoding
-      const txtsBigNumber = ethers.BigNumber.from(parseInt(formData.txts) || await getReliableTimestamp());
+      // Use the exact timestamp from the transfer event (bot pattern)
+      console.log('🔍 Step 4: Processing timestamp and addresses...');
+      const txtsBigNumber = ethers.BigNumber.from(parseInt(formData.txts));
+      console.log('🔍 Timestamp BigNumber:', txtsBigNumber.toString());
+      
       const stakeWei = ethers.utils.parseUnits(requiredStake, getStakeTokenDecimals(network?.id));
+      console.log('🔍 Stake Wei:', stakeWei.toString());
 
       const senderChecksummed = toChecksumAddress(formData.senderAddress);
       const recipientChecksummed = toChecksumAddress(formData.recipientAddress);
+      console.log('🔍 Addresses checksummed:', { senderChecksummed, recipientChecksummed });
 
       console.log('🔍 Parsed values:', {
         amountWei: amountWei.toString(),
         amountBigNumber: amountBigNumber.toString(),
         rewardWei: rewardWei.toString(),
-        rewardInt: rewardInt,
+        rewardBigNumber: rewardBigNumber.toString(),
         txtsBigNumber: txtsBigNumber.toString(),
         stakeWei: stakeWei.toString(),
         txid: formData.txid,
@@ -1606,19 +1905,31 @@ const NewClaim = ({ isOpen, onClose, selectedToken = null, selectedTransfer = nu
       });
 
       // Validate that all required fields are present
+      console.log('🔍 Step 5: Validating required fields...');
       if (!formData.txid || formData.txid.trim() === '') {
         throw new Error('Transaction ID is required');
       }
+      console.log('✅ Transaction ID validation passed');
+      
       if (!senderChecksummed || senderChecksummed.trim() === '') {
         throw new Error('Sender address is required');
       }
+      console.log('✅ Sender address validation passed');
+      
       if (!recipientChecksummed || recipientChecksummed.trim() === '') {
         throw new Error('Recipient address is required');
       }
-      if (!ethers.utils.isAddress(recipientChecksummed)) return;
+      console.log('✅ Recipient address validation passed');
+      
+      if (!ethers.utils.isAddress(recipientChecksummed)) {
+        throw new Error('Invalid recipient address format');
+      }
+      console.log('✅ Address format validation passed');
 
       // CRITICAL: Validate format consistency with original transfer data
+      console.log('🔍 Step 6: Validating format consistency...');
       if (selectedTransfer) {
+        console.log('🔍 Selected transfer found, validating format consistency');
         const tokenDecimals = getTokenDecimals(network?.id, formData.tokenAddress);
         
         // Validate amount format consistency
@@ -1704,23 +2015,28 @@ const NewClaim = ({ isOpen, onClose, selectedToken = null, selectedTransfer = nu
       }
 
       // Keep txid in original format (hex string with 0x prefix as expected by bot)
+      console.log('🔍 Step 7: Processing transaction ID...');
       const txidString = formData.txid;
+      console.log('🔍 Original txid:', txidString);
       
       // Validate txid format
       if (!txidString || txidString.trim() === '') {
         throw new Error('Transaction ID is required');
       }
+      console.log('✅ Transaction ID present');
       
       // Ensure txid is properly formatted
       let processedTxid = txidString.trim();
       if (!processedTxid.startsWith('0x')) {
         processedTxid = '0x' + processedTxid;
       }
+      console.log('🔍 Processed txid:', processedTxid);
       
       // Check if txid is a valid hex string
       if (!/^0x[0-9a-fA-F]+$/.test(processedTxid)) {
         throw new Error('Transaction ID must be a valid hexadecimal string');
       }
+      console.log('✅ Transaction ID format valid');
       
       // Check txid length (should be 66 characters for a 32-byte hash: 0x + 64 hex chars)
       if (processedTxid.length !== 66) {
@@ -1730,33 +2046,183 @@ const NewClaim = ({ isOpen, onClose, selectedToken = null, selectedTransfer = nu
           expectedLength: 66
         });
       }
+      console.log('✅ Transaction ID processing complete');
+      
+      // Ensure data parameter is properly formatted
+      console.log('🔍 Step 8: Processing data parameter...');
+      let processedData = formData.data || '0x';
+      console.log('🔍 Original data:', formData.data);
+      console.log('🔍 Processed data:', processedData);
+      
+      // Ensure data is a valid hex string
+      if (typeof processedData !== 'string') {
+        processedData = '0x';
+      }
+      
+      // Ensure data starts with 0x
+      if (!processedData.startsWith('0x')) {
+        processedData = '0x' + processedData;
+      }
+      
+      // Validate hex format
+      if (!/^0x[0-9a-fA-F]*$/.test(processedData)) {
+        console.warn('⚠️ Invalid data format, using default 0x');
+        processedData = '0x';
+      }
+      
+      console.log('🔍 Final data parameter:', processedData);
+      console.log('✅ Data parameter processing complete');
+      
+      // Comprehensive logging of all claim transaction parameters
+      console.log('🚀 ===== CLAIM TRANSACTION PARAMETERS =====');
+      console.log('🔍 Starting parameter logging...');
+      
+      try {
+        console.log('📋 Function: claim()');
+        console.log('📋 Bridge Contract:', selectedBridge?.address);
+        console.log('📋 Bridge Type:', selectedBridge?.type);
+        console.log('📋 Network ID:', network?.id);
+        console.log('📋 Network Name:', network?.name);
+        console.log('🔍 Basic info logged successfully');
+        
+        // Check each variable individually to identify the problematic one
+        console.log('🔍 Checking individual variables...');
+        console.log('🔍 processedTxid:', processedTxid);
+        console.log('🔍 txtsBigNumber:', txtsBigNumber?.toString());
+        console.log('🔍 amountBigNumber:', amountBigNumber?.toString());
+        console.log('🔍 rewardBigNumber:', rewardBigNumber.toString());
+        console.log('🔍 stakeWei:', stakeWei?.toString());
+        console.log('🔍 senderChecksummed:', senderChecksummed);
+        console.log('🔍 recipientChecksummed:', recipientChecksummed);
+        console.log('🔍 processedData:', processedData);
+        console.log('🔍 All variables checked successfully');
+      
+        console.log('🔍 Raw Parameters Array (in order):');
+        console.log('  [0] txid (bytes32):', processedTxid);
+        console.log('  [1] txts (uint32):', txtsBigNumber.toString());
+        console.log('  [2] amount (uint256):', amountBigNumber.toString());
+        console.log('  [3] reward (int256):', rewardBigNumber.toString());
+        console.log('  [4] stake (uint256):', stakeWei.toString(), '(will use stakeWeiForCheck in actual call)');
+        console.log('  [5] sender_address (string):', senderChecksummed);
+        console.log('  [6] recipient_address (address):', recipientChecksummed);
+        console.log('  [7] data (string):', processedData);
+        console.log('🔍 Raw parameters logged successfully');
+      
+        console.log('🔍 Parameter Details:');
+        console.log('  📄 Transaction ID:');
+        console.log('    - Original:', formData.txid);
+        console.log('    - Processed:', processedTxid);
+        console.log('    - Length:', processedTxid.length);
+        console.log('    - Valid hex:', /^0x[0-9a-fA-F]+$/.test(processedTxid));
+      
+        console.log('  ⏰ Timestamp:');
+        console.log('    - Raw value:', formData.txts);
+        console.log('    - BigNumber:', txtsBigNumber.toString());
+        console.log('    - Date:', new Date(parseInt(formData.txts) * 1000).toISOString());
+        
+        console.log('  💰 Amount:');
+        console.log('    - Original:', formData.amount);
+        console.log('    - Token decimals:', tokenDecimals);
+        console.log('    - Wei value:', amountWei.toString());
+        console.log('    - BigNumber:', amountBigNumber.toString());
+        
+        console.log('  🎁 Reward:');
+        console.log('    - Original:', formData.reward);
+        console.log('    - Wei value:', rewardWei.toString());
+        console.log('    - BigNumber value:', rewardBigNumber.toString());
+        
+        console.log('  🏦 Stake:');
+        console.log('    - Required stake:', requiredStake);
+        console.log('    - Stake token decimals:', getStakeTokenDecimals(network?.id));
+        console.log('    - Wei value:', stakeWei.toString());
+        console.log('    - Stake token address:', selectedBridge?.stakeTokenAddress);
+        console.log('    - Stake token symbol:', selectedBridge?.stakeTokenSymbol);
+        
+        console.log('  👤 Addresses:');
+        console.log('    - Sender (original):', formData.senderAddress);
+        console.log('    - Sender (checksummed):', senderChecksummed);
+        console.log('    - Recipient (original):', formData.recipientAddress);
+        console.log('    - Recipient (checksummed):', recipientChecksummed);
+        console.log('    - Current account:', account);
+        
+        console.log('  📊 Data:');
+        console.log('    - Original:', formData.data);
+        console.log('    - Processed:', processedData);
+        console.log('    - Length:', processedData.length);
+        console.log('    - Valid hex:', /^0x[0-9a-fA-F]*$/.test(processedData));
+        
+        console.log('🔍 Token Information:');
+        console.log('  - Token address:', formData.tokenAddress);
+        console.log('  - Token symbol:', tokenMetadata?.symbol);
+        console.log('  - Token name:', tokenMetadata?.name);
+        console.log('  - Token decimals:', tokenMetadata?.decimals);
+        console.log('  - Token balance:', tokenBalance);
+        
+        console.log('🔍 Bridge Information:');
+        console.log('  - Bridge address:', selectedBridge?.address);
+        console.log('  - Bridge type:', selectedBridge?.type);
+        console.log('  - Home network:', selectedBridge?.homeNetwork);
+        console.log('  - Foreign network:', selectedBridge?.foreignNetwork);
+        console.log('  - Home token address:', selectedBridge?.homeTokenAddress);
+        console.log('  - Foreign token address:', selectedBridge?.foreignTokenAddress);
+        console.log('  - Stake token address:', selectedBridge?.stakeTokenAddress);
+        console.log('  - Stake token symbol:', selectedBridge?.stakeTokenSymbol);
+        
+        console.log('🔍 Contract Settings:');
+        if (contractSettings) {
+          console.log('  - Min transaction age:', contractSettings.min_tx_age.toString(), 'seconds');
+          console.log('  - Counterstake coefficient:', contractSettings.counterstake_coef100.toString(), '%');
+          console.log('  - Ratio:', contractSettings.ratio100.toString(), '%');
+          console.log('  - Min stake:', contractSettings.min_stake.toString());
+          console.log('  - Large threshold:', contractSettings.large_threshold.toString());
+        } else {
+          console.log('  - Contract settings: Not loaded');
+        }
+        
+        console.log('🔍 Validation Results:');
+        console.log('  - Amount format valid:', formData.amount && !isNaN(parseFloat(formData.amount)));
+        console.log('  - Reward format valid:', !formData.reward || !isNaN(parseFloat(formData.reward)));
+        console.log('  - Timestamp valid:', formData.txts && !isNaN(parseInt(formData.txts)));
+        console.log('  - Sender address valid:', ethers.utils.isAddress(senderChecksummed));
+        console.log('  - Recipient address valid:', ethers.utils.isAddress(recipientChecksummed));
+        console.log('  - Transaction ID valid:', /^0x[0-9a-fA-F]+$/.test(processedTxid));
+        console.log('  - Data field valid:', /^0x[0-9a-fA-F]*$/.test(processedData));
+        
+        console.log('🔍 Third-party claim check:');
+        console.log('  - Is third-party claim:', isThirdPartyClaim);
+        console.log('  - Account:', account);
+        console.log('  - Recipient:', formData.recipientAddress);
+        console.log('  - Reward amount:', formData.reward);
+        console.log('🔍 All parameter details logged successfully');
+      
+        console.log('🚀 ===== END CLAIM TRANSACTION PARAMETERS =====');
       
       console.log('🔍 Calling claim function with parameters:', [
         processedTxid,
         txtsBigNumber,
         amountBigNumber,
-        rewardInt,
+          rewardBigNumber,
         stakeWei,
         senderChecksummed,
         recipientChecksummed,
-        formData.data
-      ]);
-      
-      console.log('🔍 Parameter details:', {
-        originalTxid: formData.txid,
-        processedTxid: processedTxid,
-        txtsBigNumber: txtsBigNumber.toString(),
-        amountWei: amountWei.toString(),
-        amountBigNumber: amountBigNumber.toString(),
-        rewardWei: rewardWei.toString(),
-        rewardInt: rewardInt,
-        stakeWei: stakeWei.toString(),
-        senderAddress: formData.senderAddress,
-        recipientAddress: formData.recipientAddress,
-        data: formData.data,
-        bridgeAddress: selectedBridge.address,
-        stakeTokenAddress: selectedBridge.stakeTokenAddress
-      });
+          processedData
+        ]);
+        
+      } catch (loggingError) {
+        console.error('❌ ===== PARAMETER LOGGING ERROR =====');
+        console.error('❌ Error during parameter logging:', loggingError);
+        console.error('❌ Error message:', loggingError.message);
+        console.error('❌ Error stack:', loggingError.stack);
+        console.error('❌ Error details:', {
+          name: loggingError.name,
+          message: loggingError.message,
+          stack: loggingError.stack
+        });
+        console.log('🚀 ===== END CLAIM TRANSACTION PARAMETERS (ERROR) =====');
+        
+        // Re-throw the error so it can be caught by the outer try-catch
+        throw loggingError;
+      }
 
       // Check if a claim already exists for this transfer
       try {
@@ -1771,7 +2237,7 @@ const NewClaim = ({ isOpen, onClose, selectedToken = null, selectedTransfer = nu
         // Check if any ongoing claim matches our parameters
         for (const claimNum of ongoingClaims) {
           try {
-            const claim = await bridgeContract.getClaim(claimNum);
+            const claim = await bridgeContract['getClaim(uint256)'](claimNum);
             console.log(`🔍 Claim ${claimNum}:`, {
               txid: claim.txid,
               sender_address: claim.sender_address,
@@ -1859,45 +2325,123 @@ const NewClaim = ({ isOpen, onClose, selectedToken = null, selectedTransfer = nu
         throw new Error(`Insufficient USDT allowance. Required: ${stakeFormatted}, Allowed: ${allowanceFormatted}`);
       }
 
-      // Estimate gas for the transaction
-      let gasLimit;
+      // Validate parameter ranges before calling
+      const txtsValue = parseInt(formData.txts);
+      if (txtsValue < 0 || txtsValue > 4294967295) { // uint32 max
+        throw new Error(`Invalid txts value: ${txtsValue}. Must be within uint32 range (0-4294967295)`);
+      }
+
+      // Use network-specific gas parameters (following bot's approach)
+      let gasParams;
+      if (network?.id === NETWORKS.THREEDPASS.id) {
+        // 3DPass-specific gas parameters (following bot's approach)
+        gasParams = {
+          value: 0, // For 3DPass, stake is always in P3D token, not native ETH
+          gasLimit: 500000,
+          maxFeePerGas: 100, // 100 wei (not gwei!)
+          maxPriorityFeePerGas: 10 // 10 wei (not gwei!)
+        };
+        console.log('🔍 Using 3DPass-specific gas parameters:', gasParams);
+      } else {
+        // For other networks, determine value based on stake token (following bot's logic)
+        const stakeTokenAddress = selectedBridge.stakeTokenAddress;
+        const isNativeToken = stakeTokenAddress === '0x0000000000000000000000000000000000000000';
+        
+        if (isNativeToken) {
+          // If staking with native token (ETH), send the stake amount as ETH value
+          gasParams = {
+            value: stakeWeiForCheck.toString()
+          };
+          console.log('🔍 Using native token stake - sending ETH value:', gasParams.value);
+        } else {
+          // If staking with ERC20 token, send 0 ETH value
+          gasParams = {
+            value: 0
+          };
+          console.log('🔍 Using ERC20 token stake - sending 0 ETH value');
+        }
+        console.log('🔍 Using default gas handling for network:', network?.name);
+      }
+
+      console.log('🔍 About to submit claim transaction...');
+      console.log('🔍 Transaction parameters:', {
+        processedTxid,
+        txtsValue,
+        amountBigNumber: amountBigNumber.toString(),
+        rewardBigNumber,
+        stakeWeiForCheck: stakeWeiForCheck.toString(),
+        senderChecksummed,
+        recipientChecksummed,
+        processedData,
+        gasParams
+      });
+      
+      console.log('🔍 Final parameters for claim call:');
+      console.log('  - txid:', processedTxid, '(string)');
+      console.log('  - txts:', txtsValue, '(uint32)');
+      console.log('  - amount:', amountBigNumber.toString(), '(uint256)');
+      console.log('  - reward:', rewardBigNumber.toString(), '(int256)');
+      console.log('  - stake:', stakeWeiForCheck.toString(), '(uint256)');
+      console.log('  - sender_address:', senderChecksummed, '(string)');
+      console.log('  - recipient_address:', recipientChecksummed, '(address)');
+      console.log('  - data:', processedData, '(string)');
+      
+      // Debug: Check if any values are undefined or invalid
+      console.log('🔍 Parameter validation:');
+      console.log('  - txid valid:', !!processedTxid && processedTxid.length > 0);
+      console.log('  - txts valid:', !isNaN(txtsValue) && txtsValue >= 0);
+      console.log('  - amount valid:', amountBigNumber && amountBigNumber.gt(0));
+      console.log('  - reward valid:', rewardBigNumber && ethers.BigNumber.isBigNumber(rewardBigNumber));
+      console.log('  - stake valid:', stakeWeiForCheck && stakeWeiForCheck.gt(0));
+      console.log('  - sender valid:', !!senderChecksummed && ethers.utils.isAddress(senderChecksummed));
+      console.log('  - recipient valid:', !!recipientChecksummed && ethers.utils.isAddress(recipientChecksummed));
+      console.log('  - data valid:', typeof processedData === 'string');
+      
+      // Debug: Log the exact transaction data being sent
+      console.log('🔍 About to call contract.claim with these exact parameters:');
+      console.log('  - processedTxid:', processedTxid, '(string)');
+      console.log('  - txtsValue:', txtsValue, '(number)');
+      console.log('  - amountBigNumber:', amountBigNumber.toString(), '(BigNumber)');
+      console.log('  - rewardBigNumber:', rewardBigNumber.toString(), '(BigNumber)');
+      console.log('  - stakeWeiForCheck:', stakeWeiForCheck.toString(), '(BigNumber)');
+      console.log('  - senderChecksummed:', senderChecksummed, '(string)');
+      console.log('  - recipientChecksummed:', recipientChecksummed, '(string)');
+      console.log('  - processedData:', processedData, '(string)');
+      console.log('  - gasParams:', gasParams);
+      
+      // Try to get the raw transaction data
       try {
-        const gasEstimate = await bridgeContract.estimateGas.claim(
+        const populatedTx = await bridgeContract.populateTransaction.claim(
           processedTxid,
-          txtsBigNumber,
+          txtsValue,
           amountBigNumber,
-          rewardInt,
+          rewardBigNumber,
           stakeWeiForCheck,
           senderChecksummed,
           recipientChecksummed,
-          formData.data
+          processedData
         );
-        gasLimit = gasEstimate.mul(120).div(100); // Add 20% buffer
-        console.log('🔍 Gas estimate:', gasEstimate.toString(), 'Gas limit with buffer:', gasLimit.toString());
-      } catch (gasError) {
-        console.warn('Gas estimation failed, using default gas limit:', gasError);
-        console.warn('Gas estimation error details:', {
-          message: gasError.message,
-          code: gasError.code,
-          data: gasError.data
-        });
-        gasLimit = ethers.BigNumber.from('500000'); // Fallback to default
+        console.log('🔍 Populated transaction data:', populatedTx);
+      } catch (populateError) {
+        console.error('🔍 Error populating transaction:', populateError);
       }
+
+      // Try the transaction with network-specific gas parameters
+      console.log('🔍 Attempting claim transaction with gas parameters:', gasParams);
 
       const claimTx = await bridgeContract.claim(
         processedTxid,
-        txtsBigNumber,
+        txtsValue, // Use validated uint32 value
         amountBigNumber,
-        rewardInt,
+        rewardBigNumber,
         stakeWeiForCheck,
         senderChecksummed,
         recipientChecksummed,
-        formData.data,
-        { 
-          value: 0, // No ETH value needed, USDT is transferred via transferFrom
-          gasLimit: gasLimit
-        }
+        processedData,
+        gasParams
       );
+      
+      console.log('✅ Claim transaction submitted successfully:', claimTx.hash);
 
       console.log('🔍 Claim transaction submitted:', claimTx.hash);
       toast.success('Claim submitted! Waiting for confirmation...');
@@ -1917,13 +2461,16 @@ const NewClaim = ({ isOpen, onClose, selectedToken = null, selectedTransfer = nu
       
       onClose();
     } catch (error) {
+      console.error('❌ ===== CLAIM SUBMISSION ERROR =====');
       console.error('❌ Error submitting claim:', error);
       console.error('❌ Error details:', {
         message: error.message,
         code: error.code,
         data: error.data,
-        transaction: error.transaction
+        transaction: error.transaction,
+        stack: error.stack
       });
+      console.error('❌ ===== END CLAIM SUBMISSION ERROR =====');
       
       // Handle different types of errors gracefully
       let errorMessage = 'Claim failed';
@@ -1948,44 +2495,12 @@ const NewClaim = ({ isOpen, onClose, selectedToken = null, selectedTransfer = nu
       
       toast.error(errorMessage);
     } finally {
+      console.log('🔍 Setting submitting state to false...');
       setSubmitting(false);
+      console.log('🚀 ===== CLAIM SUBMISSION COMPLETED =====');
     }
   };
 
-       // Check if form is valid (for button state)
-  const isFormValid = () => {
-    if (!isConnected) return false;
-    if (network?.id !== NETWORKS.THREEDPASS.id && network?.id !== NETWORKS.ETHEREUM.id) return false; // Support both 3DPass and Ethereum
-    if (!formData.tokenAddress) return false;
-    if (!formData.amount || parseFloat(formData.amount) <= 0) return false;
-    if (!formData.txid) return false;
-    if (!formData.senderAddress) return false;
-    if (!ethers.utils.isAddress(formData.senderAddress)) return false;
-    if (!formData.recipientAddress) return false;
-    if (!ethers.utils.isAddress(formData.recipientAddress)) return false;
-    if (!selectedBridge) return false;
-    // Note: needsApproval check removed - button visibility is controlled separately
-    
-    // Check stake token balance instead of claim token balance
-    // Skip balance check if still loading to prevent false negatives
-    if (!isLoadingStakeBalance) {
-      const stakeAmount = parseFloat(requiredStake);
-      const stakeBalance = parseFloat(stakeTokenBalance); // Stake token balance for staking
-      if (stakeAmount > stakeBalance) return false;
-    }
-    
-    // For third-party claims, check if user has enough tokens to burn
-    if (isThirdPartyClaim && formData.amount && formData.reward) {
-      const claimAmount = parseFloat(formData.amount);
-      const rewardAmount = parseFloat(formData.reward);
-      const tokensToBurn = claimAmount - rewardAmount;
-      const userTokenBalance = parseFloat(tokenBalance);
-      
-      if (tokensToBurn > userTokenBalance) return false;
-    }
-    
-    return true;
-  };
 
   if (!isOpen) return null;
 
@@ -2034,6 +2549,8 @@ const NewClaim = ({ isOpen, onClose, selectedToken = null, selectedTransfer = nu
                     <h3 className="text-lg font-semibold text-white">Token to receive</h3>
                   </div>
                   
+                  {/* Only show token selection if no transfer is pre-selected */}
+                  {!selectedTransfer && (
                   <div>
                     <label className="block text-sm font-medium text-secondary-300 mb-2">
                       Select a token to finish your transfer with
@@ -2061,6 +2578,21 @@ const NewClaim = ({ isOpen, onClose, selectedToken = null, selectedTransfer = nu
                       })}
                     </select>
                   </div>
+                  )}
+                  
+                  {/* Show pre-selected token info when transfer is provided */}
+                  {selectedTransfer && formData.tokenAddress && (
+                    <div className="p-3 bg-primary-800/30 rounded-lg border border-primary-700">
+                      <div className="flex items-center gap-2 mb-2">
+                        <CheckCircle className="w-4 h-4 text-primary-400" />
+                        <span className="text-sm font-medium text-primary-300">Token details</span>
+                      </div>
+                      <div className="text-sm text-secondary-300">
+                        <span className="font-medium">{tokenMetadata?.symbol || 'Token'}</span>
+                        <span className="text-secondary-400 ml-2">({ethers.utils.getAddress(formData.tokenAddress)})</span>
+                      </div>
+                    </div>
+                  )}
 
                   {/* Token Info */}
                   {tokenMetadata && (
@@ -2110,7 +2642,7 @@ const NewClaim = ({ isOpen, onClose, selectedToken = null, selectedTransfer = nu
                 <div className="card border-primary-700 bg-primary-900/20">
                   <div className="flex items-center gap-3 mb-4">
                     <Info className="w-5 h-5 text-primary-500" />
-                    <h3 className="text-lg font-semibold text-white">Selected Bridge</h3>
+                    <h3 className="text-lg font-semibold text-white">Bridge Interaction</h3>
                     <span className="px-2 py-1 bg-primary-600 text-white text-xs rounded-full capitalize">
                       {selectedBridge.type.replace('_', ' ')}
                     </span>
@@ -2124,7 +2656,10 @@ const NewClaim = ({ isOpen, onClose, selectedToken = null, selectedTransfer = nu
                     <div>
                       <p className="text-secondary-400">Direction</p>
                       <p className="font-medium text-white">
-                        {selectedBridge.type === 'export' ? '3DPass → External' : 'External → 3DPass'}
+                        {selectedBridge.type === 'export' ? 
+                          (selectedBridge.foreignNetwork || '3DPass') : 
+                          (selectedBridge.homeNetwork || 'External')
+                        } → {network?.name || 'Current Network'}
                       </p>
                     </div>
                     <div>
@@ -2156,9 +2691,24 @@ const NewClaim = ({ isOpen, onClose, selectedToken = null, selectedTransfer = nu
                     </div>
                   </div>
                   
-                  {selectedBridge.description && (
+                  
+                  {/* Contract Settings Info */}
+                  {contractSettings && (
                     <div className="mt-4 p-3 bg-dark-800 rounded-lg">
-                      <p className="text-sm text-secondary-400">{selectedBridge.description}</p>
+                      <div className="space-y-2 text-sm">
+                        <div className="flex justify-between">
+                          <span className="text-secondary-400">Min Transaction Age:</span>
+                          <span className="text-white">{contractSettings.min_tx_age.toString()}s</span>
+                        </div>
+                        <div className="flex justify-between">
+                          <span className="text-secondary-400">Counterstake Coefficient:</span>
+                          <span className="text-white">{contractSettings.counterstake_coef100.toString()}%</span>
+                        </div>
+                        <div className="flex justify-between">
+                          <span className="text-secondary-400">Ratio:</span>
+                          <span className="text-white">{contractSettings.ratio100.toString()}%</span>
+                        </div>
+                      </div>
                     </div>
                   )}
                 </div>
@@ -2355,7 +2905,7 @@ const NewClaim = ({ isOpen, onClose, selectedToken = null, selectedTransfer = nu
                   <div>
                     <div className="flex items-center justify-between mb-2">
                       <label className="block text-sm font-medium text-secondary-300">
-                        Timestamp (reliable external Unix timestamp)
+                        Timestamp (transfer block timestamp)
                       </label>
                       <div className="flex items-center gap-2">
                         <input
@@ -2378,7 +2928,7 @@ const NewClaim = ({ isOpen, onClose, selectedToken = null, selectedTransfer = nu
                       className={`input-field w-full ${
                         !customControls.txts ? 'opacity-50 cursor-not-allowed bg-dark-800' : ''
                       }`}
-                      placeholder="Reliable external Unix timestamp"
+                      placeholder="Transfer block Unix timestamp"
                     />
                   </div>
 
@@ -2493,7 +3043,7 @@ const NewClaim = ({ isOpen, onClose, selectedToken = null, selectedTransfer = nu
                       <strong>Required:</strong> {formatStakeTokenForDisplay(requiredStake, network?.id)} {selectedBridge?.stakeTokenSymbol || 'stake'} for staking
                     </p>
                     <p className="text-sm text-warning-200">
-                      <strong>Current allowance:</strong> {allowance === '∞ (MAX)' ? '∞ (MAX)' : formatStakeTokenForDisplay(allowance, network?.id)} {selectedBridge?.stakeTokenSymbol || 'stake'}
+                      <strong>Current allowance:</strong> {allowance === 'Max' ? 'Max' : formatStakeTokenForDisplay(allowance, network?.id)} {selectedBridge?.stakeTokenSymbol || 'stake'}
                     </p>
                   </div>
                   
@@ -2521,7 +3071,7 @@ const NewClaim = ({ isOpen, onClose, selectedToken = null, selectedTransfer = nu
                     <button
                       type="button"
                       onClick={handleApproval}
-                      disabled={submitting || !isFormValid()}
+                      disabled={submitting}
                       className="btn-warning w-full flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
                     >
                       {submitting ? (
@@ -2533,7 +3083,7 @@ const NewClaim = ({ isOpen, onClose, selectedToken = null, selectedTransfer = nu
                     </button>
                     
                     {/* Revoke Allowance Button - Show if there's any existing allowance */}
-                    {allowance !== '0' && allowance !== '∞ (MAX)' && (
+                    {allowance !== '0' && allowance !== 'Max' && (
                       <button
                         type="button"
                         onClick={handleRevokeAllowance}
@@ -2569,14 +3119,14 @@ const NewClaim = ({ isOpen, onClose, selectedToken = null, selectedTransfer = nu
                       <div className="flex justify-between">
                         <span className="text-success-300 text-sm">Current allowance:</span>
                         <span className="text-success-400 font-medium text-sm">
-                          {allowance === '∞ (MAX)' ? '∞ (MAX)' : formatStakeTokenForDisplay(allowance, network?.id)} {selectedBridge?.stakeTokenSymbol || 'stake'}
+                          {allowance === 'Max' ? 'Max' : formatStakeTokenForDisplay(allowance, network?.id)} {selectedBridge?.stakeTokenSymbol || 'stake'}
                         </span>
                       </div>
                       <div className="flex justify-between">
                         <span className="text-success-300 text-sm">Required for staking:</span>
                         <span className="text-success-400 font-medium text-sm">{formatStakeTokenForDisplay(requiredStake, network?.id)} {selectedBridge?.stakeTokenSymbol || 'stake'}</span>
                       </div>
-                      {allowance === '∞ (MAX)' && (
+                      {allowance === 'Max' && (
                         <div className="text-xs text-success-300 mt-2 p-2 bg-success-800/30 rounded border border-success-700">
                           ✅ Maximum allowance set - no future approvals needed for this token
                         </div>
@@ -2585,7 +3135,7 @@ const NewClaim = ({ isOpen, onClose, selectedToken = null, selectedTransfer = nu
                   </div>
                   
                   {/* Revoke Allowance Button - Show if there's any allowance */}
-                  {allowance !== '0' && allowance !== '∞ (MAX)' && (
+                  {allowance !== '0' && (
                     <button
                       type="button"
                       onClick={handleRevokeAllowance}
@@ -2616,7 +3166,7 @@ const NewClaim = ({ isOpen, onClose, selectedToken = null, selectedTransfer = nu
                 {!needsApproval && (
                   <button
                     type="submit"
-                    disabled={!isFormValid() || submitting}
+                    disabled={submitting}
                     className="btn-primary flex-1 flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
                   >
                     {submitting ? (

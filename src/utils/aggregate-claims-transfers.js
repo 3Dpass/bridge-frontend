@@ -432,9 +432,13 @@ export const aggregateClaimsAndTransfers = (claims, transfers) => {
         (matchingTransfer.eventType === 'NewRepatriation' && claim.bridgeType === 'export')
       );
 
+      // Check timestamp validation - claim.txts must match transfer.timestamp
+      const timestampMatch = claim.txts === matchingTransfer.timestamp;
+      const timestampMatchReason = timestampMatch ? 'match' : 'timestamp_mismatch';
+
       // Determine if this is suspicious due to parameter mismatches
-      // Check amount, sender, recipient, reward validation, data validation, and flow validity
-      const hasParameterMismatches = !amountMatch || !senderMatch || !recipientMatch || !rewardValid || !dataValid || !isValidFlow;
+      // Check amount, sender, recipient, reward validation, data validation, flow validity, and timestamp
+      const hasParameterMismatches = !amountMatch || !senderMatch || !recipientMatch || !rewardValid || !dataValid || !isValidFlow || !timestampMatch;
       
       console.log(`🔍 Parameter validation for claim ${claim.claimNum}:`, {
         amountMatch,
@@ -443,6 +447,7 @@ export const aggregateClaimsAndTransfers = (claims, transfers) => {
         rewardValid,
         dataValid,
         isValidFlow,
+        timestampMatch,
         hasParameterMismatches,
         claimAmount: claim.amount?.toString(),
         transferAmount: matchingTransfer.amount?.toString(),
@@ -458,7 +463,10 @@ export const aggregateClaimsAndTransfers = (claims, transfers) => {
         claimRecipientLower: claim.recipientAddress?.toLowerCase(),
         transferRecipientLower: matchingTransfer.recipientAddress?.toLowerCase(),
         claimBridgeType: claim.bridgeType,
-        transferEventType: matchingTransfer.eventType
+        transferEventType: matchingTransfer.eventType,
+        claimTimestamp: claim.txts,
+        transferTimestamp: matchingTransfer.timestamp,
+        timestampMatchReason
       });
 
           if (hasParameterMismatches) {
@@ -481,7 +489,9 @@ export const aggregateClaimsAndTransfers = (claims, transfers) => {
           rewardValidationReason: rewardValidationResult.reason,
           dataValid,
           dataValidationReason: dataValidationResult.reason,
-          isValidFlow
+          isValidFlow,
+          timestampMatch,
+          timestampMatchReason
         }
             };
 

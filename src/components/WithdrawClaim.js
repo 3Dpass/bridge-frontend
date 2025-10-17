@@ -290,7 +290,7 @@ const WithdrawClaim = ({ claim, onWithdrawSuccess, onClose }) => {
       console.log('🔍 Claim details before withdraw:');
       console.log('  - Claim number:', claimNum.toString());
       console.log('  - Bridge address:', claim.bridgeAddress);
-      console.log('  - Claim type:', claim.claimType);
+      console.log('  - Bridge type:', claim.bridgeType);
       console.log('  - Amount:', claim.amount);
       console.log('  - Current outcome:', claim.currentOutcome);
       console.log('  - Expiry timestamp:', claim.expiryTs);

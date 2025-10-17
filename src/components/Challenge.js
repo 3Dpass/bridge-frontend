@@ -14,6 +14,11 @@ import {
 import { motion, AnimatePresence } from 'framer-motion';
 import toast from 'react-hot-toast';
 
+// Get maximum allowance value (2^256 - 1)
+const getMaxAllowance = () => {
+  return ethers.constants.MaxUint256;
+};
+
 const Challenge = ({ claim, onChallengeSuccess, onClose }) => {
   const { account, provider, network, checkNetwork, switchToRequiredNetwork } = useWeb3();
   const { get3DPassTokenDecimals, get3DPassTokenDecimalsDisplayMultiplier, getAllNetworksWithSettings } = useSettings();
@@ -25,7 +30,7 @@ const Challenge = ({ claim, onChallengeSuccess, onClose }) => {
   const [requiredStake, setRequiredStake] = useState(null);
   const [userP3DBalance, setUserP3DBalance] = useState(null);
   const [currentAllowance, setCurrentAllowance] = useState(null);
-  const [error, setError] = useState('');
+  const [isRevoking, setIsRevoking] = useState(false);
 
   // Get actual claim number from the claim object (not the display number)
   const actualClaimNum = claim.actualClaimNum || claim.claim_num || claim.debug_claim_num;
@@ -252,7 +257,7 @@ const Challenge = ({ claim, onChallengeSuccess, onClose }) => {
       setRequiredStake(requiredStakeDisplay);
     } catch (error) {
       console.error('Error calculating required stake:', error);
-      setError('Failed to calculate required stake');
+      toast.error('Failed to calculate required stake');
     }
   }, [claim, provider, stakeInfo, convertActualToDisplay]);
 
@@ -280,7 +285,7 @@ const Challenge = ({ claim, onChallengeSuccess, onClose }) => {
       setUserP3DBalance(balanceDisplay);
     } catch (error) {
       console.error('Error getting stake token balance:', error);
-      setError('Failed to get stake token balance');
+      toast.error('Failed to get stake token balance');
     }
   }, [provider, account, stakeInfo, convertActualToDisplay]);
 
@@ -296,22 +301,38 @@ const Challenge = ({ claim, onChallengeSuccess, onClose }) => {
       const stakeTokenContract = new ethers.Contract(stakeTokenAddress, stakeTokenAbi, provider);
       const allowance = await stakeTokenContract.allowance(account, claim.bridgeAddress);
       
-      // Use decimals from bridge settings
-      const stakeDecimals = stakeInfo.stakeTokenDecimals || 18;
-      const allowanceFormatted = ethers.utils.formatUnits(allowance, stakeDecimals);
+      // Check if allowance is at maximum value and display "Max" instead
+      const maxAllowance = getMaxAllowance();
+      const isMaxAllowance = allowance.eq(maxAllowance);
       
-      // Apply multiplier for display if it's a P3D token
-      const allowanceDisplay = convertActualToDisplay(allowanceFormatted, stakeDecimals, stakeTokenAddress);
-      setCurrentAllowance(allowanceDisplay);
+      // Also check for very large numbers that might be close to MaxUint256
+      const isVeryLargeNumber = allowance.gt(ethers.utils.parseUnits('1000000000', 18)); // 1 billion tokens
       
-      console.log('🔍 Current allowance:', {
+      console.log('🔍 Allowance comparison:', {
         allowance: allowance.toString(),
-        allowanceFormatted,
-        allowanceDisplay,
-        stakeTokenAddress
+        maxAllowance: maxAllowance.toString(),
+        isMaxAllowance,
+        isVeryLargeNumber,
+        allowanceHex: allowance.toHexString(),
+        maxAllowanceHex: maxAllowance.toHexString()
       });
+      
+      if (isMaxAllowance || isVeryLargeNumber) {
+        console.log('🔍 Setting allowance to Max (detected as maximum or very large)');
+        setCurrentAllowance('Max');
+      } else {
+        // Use decimals from bridge settings
+        const stakeDecimals = stakeInfo.stakeTokenDecimals || 18;
+        const allowanceFormatted = ethers.utils.formatUnits(allowance, stakeDecimals);
+        
+        // Apply multiplier for display if it's a P3D token
+        const allowanceDisplay = convertActualToDisplay(allowanceFormatted, stakeDecimals, stakeTokenAddress);
+        console.log('🔍 Setting allowance to calculated value:', allowanceDisplay);
+        setCurrentAllowance(allowanceDisplay);
+      }
     } catch (error) {
       console.error('Error getting current allowance:', error);
+      toast.error('Failed to get current allowance');
       setCurrentAllowance('0');
     }
   }, [provider, account, claim.bridgeAddress, stakeInfo, convertActualToDisplay]);
@@ -324,7 +345,7 @@ const Challenge = ({ claim, onChallengeSuccess, onClose }) => {
         getCurrentAllowance();
       } else {
         console.warn('Network and stake info not available, cannot load challenge data');
-        setError('Unable to load challenge information. Please check your network connection.');
+        toast.error('Unable to load challenge information. Please check your network connection.');
       }
 
       // Auto-select the opposite outcome (you can only challenge with the opposite outcome)
@@ -343,27 +364,26 @@ const Challenge = ({ claim, onChallengeSuccess, onClose }) => {
 
   const handleChallenge = async () => {
     if (selectedOutcome === null) {
-      setError('Please select an outcome to challenge');
+      toast.error('Please select an outcome to challenge');
       return;
     }
 
     if (!stakeAmount || parseFloat(stakeAmount) <= 0) {
-      setError('Please enter a valid stake amount');
+      toast.error('Please enter a valid stake amount');
       return;
     }
 
     if (userP3DBalance && parseFloat(stakeAmount) > parseFloat(userP3DBalance)) {
-      setError(`Insufficient ${stakeInfo?.stakeTokenSymbol || 'stake token'} balance`);
+      toast.error(`Insufficient ${stakeInfo?.stakeTokenSymbol || 'stake token'} balance`);
       return;
     }
 
     if (!stakeInfo) {
-      setError('Unable to determine stake token information');
+      toast.error('Unable to determine stake token information');
       return;
     }
 
     setLoading(true);
-    setError('');
 
     try {
       // Validate stakeInfo is available
@@ -429,8 +449,8 @@ const Challenge = ({ claim, onChallengeSuccess, onClose }) => {
       console.log('Current allowance:', currentAllowance.toString());
       console.log('Required amount:', stakeAmountWei.toString());
       
-      // Only approve if current allowance is insufficient
-      if (currentAllowance.lt(stakeAmountWei)) {
+      // Only approve if current allowance is insufficient and not at maximum
+      if (!currentAllowance.eq(getMaxAllowance()) && currentAllowance.lt(stakeAmountWei)) {
         console.log(`Insufficient allowance, approving ${stakeInfo.stakeTokenSymbol} for bridge...`);
         try {
           const approveTx = await stakeTokenContract.approve(claim.bridgeAddress, stakeAmountWei);
@@ -500,32 +520,99 @@ const Challenge = ({ claim, onChallengeSuccess, onClose }) => {
       console.error('Error challenging claim:', error);
       
       // Handle different types of errors gracefully
-      let errorMessage = 'Failed to challenge claim';
-      
       if (error.code === 'ACTION_REJECTED' || error.message?.includes('user rejected')) {
-        errorMessage = 'Transaction was cancelled by user';
-        toast.error('Transaction cancelled');
+        toast.error('Transaction was cancelled by user');
       } else if (error.code === 'INSUFFICIENT_FUNDS') {
-        errorMessage = 'Insufficient funds for transaction';
-        toast.error('Insufficient funds');
+        toast.error('Insufficient funds for transaction');
       } else if (error.code === 'NETWORK_ERROR' || error.message?.includes('network')) {
-        errorMessage = 'Network error. Please check your connection';
-        toast.error('Network error');
+        toast.error('Network error. Please check your connection');
       } else if (error.message?.includes('gas')) {
-        errorMessage = 'Transaction failed due to gas issues';
-        toast.error('Gas error');
+        toast.error('Transaction failed due to gas issues');
       } else if (error.message?.includes('revert')) {
-        errorMessage = 'Transaction was reverted by the contract';
-        toast.error('Transaction reverted');
+        toast.error('Transaction was reverted by the contract');
       } else {
         // For other errors, show a generic message but log the full error
-        errorMessage = 'Transaction failed. Please try again';
-        toast.error('Transaction failed');
+        toast.error('Transaction failed. Please try again');
       }
-      
-      setError(errorMessage);
     } finally {
       setLoading(false);
+    }
+  };
+
+  // Handle revoke allowance
+  const handleRevokeAllowance = async () => {
+    setIsRevoking(true);
+    
+    try {
+      console.log('🔄 Starting allowance revocation...');
+      
+      if (!stakeInfo) {
+        throw new Error('Unable to determine stake token information');
+      }
+
+      const signer = provider.getSigner();
+      const stakeTokenAddress = stakeInfo.stakeTokenAddress;
+      const stakeTokenAbi = [
+        "function approve(address spender, uint256 amount) returns (bool)",
+        "function allowance(address owner, address spender) view returns (uint256)"
+      ];
+      
+      const stakeTokenContract = new ethers.Contract(stakeTokenAddress, stakeTokenAbi, signer);
+      
+      console.log('🔐 Revoking allowance (setting to 0)...');
+      const revokeTx = await stakeTokenContract.approve(claim.bridgeAddress, 0, { 
+        gasLimit: 100000 
+      });
+      
+      console.log('⏳ Waiting for revocation transaction confirmation...');
+      const receipt = await revokeTx.wait();
+      
+      console.log('✅ Allowance revoked successfully:', receipt.transactionHash);
+      
+      // Refresh allowance display
+      try {
+        await getCurrentAllowance();
+      } catch (e) {
+        console.warn('⚠️ Could not refresh allowance after revocation:', e);
+      }
+      
+      // Show success notification
+      toast.success(
+        <div>
+          <h3 className="text-success-400 font-medium">Allowance Revoked</h3>
+          <p className="text-success-300 text-sm mt-1">
+            The bridge contract can no longer spend your {stakeInfo.stakeTokenSymbol} tokens.
+          </p>
+        </div>,
+        {
+          duration: 6000,
+          style: {
+            background: '#065f46',
+            border: '1px solid #047857',
+            color: '#fff',
+            padding: '16px',
+            borderRadius: '8px',
+          },
+        }
+      );
+    } catch (error) {
+      console.error('❌ Error revoking allowance:', error);
+      
+      if (error.code === 'ACTION_REJECTED' || error.message?.includes('user rejected')) {
+        toast.error('Transaction was cancelled by user');
+      } else if (error.code === 'INSUFFICIENT_FUNDS') {
+        toast.error('Insufficient funds for transaction');
+      } else if (error.code === 'NETWORK_ERROR' || error.message?.includes('network')) {
+        toast.error('Network error. Please check your connection');
+      } else if (error.message?.includes('gas')) {
+        toast.error('Transaction failed due to gas issues');
+      } else if (error.message?.includes('revert')) {
+        toast.error('Transaction was reverted by the contract');
+      } else {
+        toast.error('Transaction failed. Please try again');
+      }
+    } finally {
+      setIsRevoking(false);
     }
   };
 
@@ -689,7 +776,7 @@ const Challenge = ({ claim, onChallengeSuccess, onClose }) => {
 
           {/* Challenge Outcome Selection */}
           <div className="mb-6">
-            <h3 className="text-lg font-semibold text-white mb-3">Challenge Outcome</h3>
+            <h3 className="text-lg font-semibold text-white mb-3">Outcome</h3>
             <div className="grid grid-cols-2 gap-3">
               <button
                 onClick={() => setSelectedOutcome(1)}
@@ -757,25 +844,42 @@ const Challenge = ({ claim, onChallengeSuccess, onClose }) => {
             {currentAllowance !== null && stakeAmount && (
               <div className="mt-1 text-sm">
                 <span className="text-secondary-400">Current allowance: </span>
-                <span className={parseFloat(currentAllowance) >= parseFloat(stakeAmount) ? 'text-success-400' : 'text-warning-400'}>
+                <span className={currentAllowance === 'Max' || parseFloat(currentAllowance) >= parseFloat(stakeAmount) ? 'text-success-400' : 'text-warning-400'}>
                   {currentAllowance} {stakeInfo?.stakeTokenSymbol || 'Token'}
                 </span>
-                {parseFloat(currentAllowance) < parseFloat(stakeAmount) && (
+                {currentAllowance !== 'Max' && parseFloat(currentAllowance) < parseFloat(stakeAmount) && (
                   <span className="text-warning-400 ml-1">(Approval required)</span>
+                )}
+                {currentAllowance === 'Max' && (
+                  <span className="text-success-400 ml-1">(Maximum allowance set)</span>
                 )}
               </div>
             )}
           </div>
 
-          {/* Error Message */}
-          {error && (
-            <div className="mb-6 p-3 bg-error-500/10 border border-error-500/30 rounded-lg">
-              <div className="flex items-center gap-2 text-error-400">
-                <AlertTriangle className="w-4 h-4" />
-                <span className="text-sm">{error}</span>
-              </div>
+          {/* Revoke Allowance Button - Show if there's any existing allowance */}
+          {currentAllowance !== null && currentAllowance !== '0' && (
+            <div className="mb-6">
+              <button
+                onClick={handleRevokeAllowance}
+                disabled={isRevoking}
+                className="w-full btn-secondary py-2 text-sm font-medium disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
+              >
+                {isRevoking ? (
+                  <>
+                    <Loader className="w-4 h-4 animate-spin" />
+                    <span>Revoking Allowance...</span>
+                  </>
+                ) : (
+                  <>
+                    <XCircle className="w-4 h-4" />
+                    <span>Revoke Allowance</span>
+                  </>
+                )}
+              </button>
             </div>
           )}
+
 
           {/* Action Buttons */}
           <div className="flex gap-3">

@@ -12,6 +12,7 @@ import {
   // testProviderWithRetry, // Available for future use
   // getProviderHealthWithRetry // Available for future use
 } from '../utils/enhanced-fetch';
+import { COUNTERSTAKE_ABI } from '../contracts/abi';
 // Cache functionality is handled internally for performance
 import { 
   Clock, 
@@ -111,6 +112,15 @@ const getMatchStatus = (claim) => {
     mismatches.push({ field: 'flow', reason: 'invalid flow' });
   }
   
+  if (!claim.parameterMismatches.timestampMatch) {
+    const timestampReason = claim.parameterMismatches.timestampMatchReason;
+    if (timestampReason === 'timestamp_mismatch') {
+      mismatches.push({ field: 'timestamp', reason: 'timestamp mismatch' });
+    } else {
+      mismatches.push({ field: 'timestamp', reason: 'mismatch' });
+    }
+  }
+  
   return { hasMismatches: mismatches.length > 0, mismatches };
 };
 
@@ -132,6 +142,15 @@ const getFieldMatchStatus = (claim, field) => {
     const rewardMismatch = mismatches.find(m => m.field === 'reward');
     if (rewardMismatch) {
       return { isMatch: false, reason: rewardMismatch.reason };
+    }
+    return { isMatch: true, reason: null };
+  }
+
+  // Check if timestamp matches (for timestamp field)
+  if (field === 'timestamp') {
+    const timestampMismatch = mismatches.find(m => m.field === 'timestamp');
+    if (timestampMismatch) {
+      return { isMatch: false, reason: timestampMismatch.reason };
     }
     return { isMatch: true, reason: null };
   }
@@ -163,6 +182,7 @@ const ClaimList = () => {
   const [showWithdrawModal, setShowWithdrawModal] = useState(false);
   const [showChallengeModal, setShowChallengeModal] = useState(false);
   const [selectedClaim, setSelectedClaim] = useState(null);
+  const [contractSettings, setContractSettings] = useState({});
   // Cache stats removed from UI - cache still works internally for performance
 
   // Network switching functions
@@ -237,6 +257,103 @@ const ClaimList = () => {
     console.log('❌ No required network found for claim:', claim.bridgeAddress);
     return null;
   }, [getNetworkWithSettings]);
+
+  // Load contract settings for all bridges
+  const loadContractSettings = useCallback(async () => {
+    try {
+      console.log('🔍 Loading contract settings for all bridges...');
+      const allBridges = getBridgeInstancesWithSettings();
+      const settingsMap = {};
+      
+      for (const [, bridge] of Object.entries(allBridges)) {
+        try {
+          const networkConfig = getNetworkWithSettings(bridge.homeNetwork);
+          if (networkConfig?.rpcUrl) {
+            const provider = new ethers.providers.JsonRpcProvider(networkConfig.rpcUrl);
+            const bridgeContract = new ethers.Contract(bridge.address, COUNTERSTAKE_ABI, provider);
+            
+            const settings = await bridgeContract.settings();
+            settingsMap[bridge.address] = {
+              min_tx_age: settings.min_tx_age,
+              counterstake_coef100: settings.counterstake_coef100,
+              ratio100: settings.ratio100,
+              min_stake: settings.min_stake,
+              large_threshold: settings.large_threshold
+            };
+            
+            console.log(`🔍 Loaded settings for bridge ${bridge.address}:`, {
+              min_tx_age: settings.min_tx_age.toString(),
+              counterstake_coef100: settings.counterstake_coef100.toString(),
+              ratio100: settings.ratio100.toString()
+            });
+          }
+        } catch (error) {
+          console.warn(`⚠️ Failed to load settings for bridge ${bridge.address}:`, error);
+        }
+      }
+      
+      setContractSettings(settingsMap);
+      console.log('🔍 Contract settings loaded for all bridges:', Object.keys(settingsMap));
+    } catch (error) {
+      console.error('❌ Error loading contract settings:', error);
+    }
+  }, [getBridgeInstancesWithSettings, getNetworkWithSettings]);
+
+  // Check if a transfer is ready to be claimed based on min_tx_age
+  const isTransferReadyToClaim = useCallback((transfer) => {
+    if (!transfer || !transfer.timestamp) return true; // Default to true if no timestamp
+    if (!currentBlock) return true; // Default to true if no current block
+    
+    const bridgeAddress = transfer.bridgeAddress;
+    const settings = contractSettings[bridgeAddress];
+    
+    if (!settings || !settings.min_tx_age) return true; // Default to true if no settings
+    
+    try {
+      const currentTimestamp = currentBlock.timestamp;
+      const transferTimestamp = transfer.timestamp;
+      const minTxAge = settings.min_tx_age.toNumber();
+      const requiredTimestamp = transferTimestamp + minTxAge;
+      
+      return currentTimestamp >= requiredTimestamp;
+    } catch (error) {
+      console.error('Error checking transfer readiness:', error);
+      return true; // Default to true on error
+    }
+  }, [contractSettings, currentBlock]);
+
+  // Get remaining time until transfer can be claimed
+  const getTimeUntilClaimable = useCallback((transfer) => {
+    if (!transfer || !transfer.timestamp) return null;
+    if (!currentBlock) return null;
+    
+    const bridgeAddress = transfer.bridgeAddress;
+    const settings = contractSettings[bridgeAddress];
+    
+    if (!settings || !settings.min_tx_age) return null;
+    
+    try {
+      const currentTimestamp = currentBlock.timestamp;
+      const transferTimestamp = transfer.timestamp;
+      const minTxAge = settings.min_tx_age.toNumber();
+      const requiredTimestamp = transferTimestamp + minTxAge;
+      const timeRemaining = requiredTimestamp - currentTimestamp;
+      
+      if (timeRemaining <= 0) return null;
+      
+      const hours = Math.floor(timeRemaining / 3600);
+      const minutes = Math.floor((timeRemaining % 3600) / 60);
+      
+      if (hours > 0) {
+        return `${hours}h ${minutes}m`;
+      } else {
+        return `${minutes}m`;
+      }
+    } catch (error) {
+      console.error('Error calculating time until claimable:', error);
+      return null;
+    }
+  }, [contractSettings, currentBlock]);
 
   const checkNetwork = useCallback(async () => {
     try {
@@ -1099,6 +1216,11 @@ const ClaimList = () => {
 
 
 
+  // Load contract settings on mount
+  useEffect(() => {
+    loadContractSettings();
+  }, [loadContractSettings]);
+
   // Load claims and transfers on mount and when dependencies change
   useEffect(() => {
     // Always load data - no wallet connection required
@@ -1197,9 +1319,6 @@ const ClaimList = () => {
     }
   };
 
-  const formatDate = (timestamp) => {
-    return new Date(timestamp * 1000).toLocaleString();
-  };
 
   const getTimeRemaining = (expiryTs) => {
     if (!currentBlock) return '';
@@ -1225,9 +1344,6 @@ const ClaimList = () => {
     }
   };
 
-  const getOutcomeText = (outcome) => {
-    return outcome === 0 ? 'NO' : 'YES';
-  };
 
   return (
     <div className="max-w-4xl mx-auto">
@@ -1567,7 +1683,12 @@ const ClaimList = () => {
                     </span>
                     {!isPending && !isTransfer && isThirdPartyClaim(claim) && (
                       <span className="text-xs bg-green-600/20 text-green-400 px-2 py-1 rounded">
-                        Fast-forwarded
+                        Assisted
+                      </span>
+                    )}
+                    {!isPending && !isTransfer && !isThirdPartyClaim(claim) && claim.claimant_address && (
+                      <span className="text-xs bg-blue-600/20 text-blue-400 px-2 py-1 rounded">
+                        Self-claimed
                       </span>
                     )}
                   </div>
@@ -1644,6 +1765,12 @@ const ClaimList = () => {
                             <div>
                               <span className="text-secondary-400">Block:</span>
                               <span className="text-white ml-2">{claim.transfer.blockNumber}</span>
+                            </div>
+                            <div>
+                              <span className="text-secondary-400">Timestamp:</span>
+                              <span className="text-white ml-2">
+                                {claim.transfer.timestamp ? new Date(claim.transfer.timestamp * 1000).toLocaleString() : 'N/A'}
+                              </span>
                             </div>
                             <div>
                               <span className="text-secondary-400">Data:</span>
@@ -1802,6 +1929,25 @@ const ClaimList = () => {
                             <div>
                               <span className="text-secondary-400">Claim Block:</span>
                               <span className="text-white ml-2">{claim.blockNumber || 'N/A'}</span>
+                            </div>
+                            <div>
+                              <span className="text-secondary-400">Timestamp:</span>
+                              <span className="text-white ml-2">
+                                {claim.txts ? new Date(claim.txts * 1000).toLocaleString() : 'N/A'}
+                              </span>
+                              {(() => {
+                                const matchStatus = getFieldMatchStatus(claim, 'timestamp');
+                                if (matchStatus.isMatch) {
+                                  return <CheckCircle className="w-4 h-4 text-green-500 ml-2 inline" />;
+                                } else {
+                                  return (
+                                    <span className="ml-2 inline-flex items-center">
+                                      <X className="w-4 h-4 text-red-500 mr-1" />
+                                      <span className="text-red-400 text-xs">{matchStatus.reason}</span>
+                                    </span>
+                                  );
+                                }
+                              })()}
                             </div>
                             <div>
                               <span className="text-secondary-400">Data:</span>
@@ -2076,137 +2222,133 @@ const ClaimList = () => {
                   {/* Only show claim-specific data for actual claims, not pending transfers */}
                   {!isPending && (
                     <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 text-sm mb-3">
+                      <div className="col-span-full">
                       <div>
-                        <span className="text-secondary-400">Current Outcome:</span>
-                        <span className="text-white ml-2 font-medium">
-                          {getOutcomeText(claim.currentOutcome)}
+                      <h4 className="text-sm font-medium text-secondary-300 mb-3">
+                        <span className="text-secondary-400 mb-3">Period {claim.period_number !== undefined ? `#${claim.period_number + 1} -` : ''}</span>
+                        <span className="text-white ml-2 mb-3">
+                          {getTimeRemaining(claim.expiryTs)}
                         </span>
+                      </h4>
                       </div>
-                      
-                      {claim.reward && claim.reward !== '0' && claim.reward !== '0x0' && (
-                        <div>
-                          <span className="text-secondary-400">Reward:</span>
-                          <span className="text-white ml-2 font-medium">
-                            {(() => {
-                              const decimals = getTokenDecimals(claim);
-                              const formatted = formatAmount(claim.reward, decimals);
-                              return `${formatted} ${getTransferTokenSymbol(claim)}`;
-                            })()}
-                          </span>
+                        <div className="grid grid-cols-2 gap-3">
+                          <button
+                            onClick={() => {
+                              if (!account) {
+                                toast.error('Please connect your wallet to challenge claims');
+                                return;
+                              }
+                              if (claim.currentOutcome !== 1) {
+                                handleChallenge(claim);
+                              }
+                            }}
+                            disabled={claim.currentOutcome === 1 || !canChallengeClaim(claim)}
+                            className={`p-4 rounded-lg border-2 transition-colors ${
+                              claim.currentOutcome === 1
+                                ? 'border-success-500 bg-success-500/10 text-success-500 cursor-default'
+                                : canChallengeClaim(claim)
+                                  ? 'border-dark-700 bg-dark-800 text-secondary-400 hover:border-success-500 hover:bg-success-500/5 hover:text-success-400 cursor-pointer'
+                                  : 'border-dark-700 bg-dark-800 text-secondary-400 cursor-not-allowed opacity-50'
+                            }`}
+                          >
+                            <div className="text-center">
+                              <div className="text-lg font-semibold mb-1">YES</div>
+                              <div className="text-xs text-secondary-400">
+                                {claim.yesStake ? formatAmount(claim.yesStake, getStakeTokenDecimals(claim), getStakeTokenAddress(claim)) : '0'} {getStakeTokenSymbol(claim)}
+                              </div>
+                            </div>
+                          </button>
+                          <button
+                            onClick={() => {
+                              if (!account) {
+                                toast.error('Please connect your wallet to challenge claims');
+                                return;
+                              }
+                              if (claim.currentOutcome !== 0) {
+                                handleChallenge(claim);
+                              }
+                            }}
+                            disabled={claim.currentOutcome === 0 || !canChallengeClaim(claim)}
+                            className={`p-4 rounded-lg border-2 transition-colors ${
+                              claim.currentOutcome === 0
+                                ? 'border-red-500 bg-red-500/10 text-red-500 cursor-default'
+                                : canChallengeClaim(claim)
+                                  ? 'border-dark-700 bg-dark-800 text-secondary-400 hover:border-red-500 hover:bg-red-500/5 hover:text-red-400 cursor-pointer'
+                                  : 'border-dark-700 bg-dark-800 text-secondary-400 cursor-not-allowed opacity-50'
+                            }`}
+                          >
+                            <div className="text-center">
+                              <div className="text-lg font-semibold mb-1">NO</div>
+                              <div className="text-xs text-secondary-400">
+                                {claim.noStake ? formatAmount(claim.noStake, getStakeTokenDecimals(claim), getStakeTokenAddress(claim)) : '0'} {getStakeTokenSymbol(claim)}
+                              </div>
+                            </div>
+                          </button>
                         </div>
-                      )}
-                      
-                      <div>
-                        <span className="text-secondary-400">YES Stakes:</span>
-                        <span className="text-white ml-2 font-medium">
-                          {(() => {
-                            const stakeDecimals = getStakeTokenDecimals(claim);
-                            const stakeTokenAddress = getStakeTokenAddress(claim);
-                            const formatted = formatAmount(claim.yesStake, stakeDecimals, stakeTokenAddress);
-                            console.log(`🔍 YES Stake formatting for claim:`, {
-                              rawStake: claim.yesStake?.toString(),
-                              rawStakeType: typeof claim.yesStake,
-                              rawStakeHasToNumber: typeof claim.yesStake?.toNumber === 'function',
-                              stakeTokenSymbol: getStakeTokenSymbol(claim),
-                              stakeTokenAddress,
-                              stakeDecimals,
-                              formatted
-                            });
-                            return `${formatted} ${getStakeTokenSymbol(claim)}`;
-                          })()}
-                        </span>
                       </div>
                       
-                      <div>
-                        <span className="text-secondary-400">NO Stakes:</span>
-                        <span className="text-white ml-2 font-medium">
-                          {(() => {
-                            const stakeDecimals = getStakeTokenDecimals(claim);
-                            const stakeTokenAddress = getStakeTokenAddress(claim);
-                            const formatted = formatAmount(claim.noStake, stakeDecimals, stakeTokenAddress);
-                            console.log(`🔍 NO Stake formatting for claim:`, {
-                              rawStake: claim.noStake?.toString(),
-                              rawStakeType: typeof claim.noStake,
-                              rawStakeHasToNumber: typeof claim.noStake?.toNumber === 'function',
-                              stakeTokenSymbol: getStakeTokenSymbol(claim),
-                              stakeTokenAddress,
-                              stakeDecimals,
-                              formatted
-                            });
-                            return `${formatted} ${getStakeTokenSymbol(claim)}`;
-                          })()}
-                        </span>
-                      </div>
+
+                      
                     </div>
                   )}
 
-                  {/* Only show expiry information for actual claims, not pending transfers */}
-                  {!isPending && (
-                    <>
-                      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 text-sm mb-3">
-                        <div>
-                          <span className="text-secondary-400">Expiry:</span>
-                          <span className="text-white ml-2">
-                            {formatDate(claim.expiryTs)}
-                          </span>
-                        </div>
-                      </div>
-
-                      {status === 'active' && (
-                        <div className="mt-2">
-                          <span className="text-warning-400 text-sm font-medium">
-                            {getTimeRemaining(claim.expiryTs)}
-                          </span>
-                        </div>
-                      )}
-                    </>
-                  )}
 
                   {/* Action Buttons */}
                   <div className="mt-3 flex gap-2">
                     {/* Create Claim Button for Pending Transfers */}
                     {isPending && (
-                      <button
-                        onClick={async () => {
-                          if (!account) {
-                            toast.error('Please connect your wallet to create claims');
-                            return;
-                          }
-                          
-                          try {
-                            // Determine the required network for this transfer
-                            const requiredNetwork = getRequiredNetwork(claim);
-                            console.log('🔍 Required network result:', requiredNetwork);
-                            
-                            if (!requiredNetwork) {
-                              toast.error('Could not determine the required network for this transfer');
-                              return;
-                            }
-                            
-                            // Switch to the required network before opening the dialog
-                            console.log('🔄 Starting network switch to:', requiredNetwork.name);
-                            toast(`Switching to ${requiredNetwork.name} network...`);
-                            const switchResult = await switchToRequiredNetwork(requiredNetwork);
-                            console.log('🔄 Network switch result:', switchResult);
-                            
-                            if (!switchResult) {
-                              toast.error('Failed to switch to the required network');
-                              return;
-                            }
-                            
-                            // Set the transfer data and open the NewClaim dialog
-                            setSelectedTransfer(claim);
-                            setShowNewClaim(true);
-                          } catch (error) {
-                            console.error('Error switching network:', error);
-                            toast.error(`Failed to switch network: ${error.message}`);
-                          }
-                        }}
-                        className="btn-primary flex items-center gap-2 text-sm"
-                      >
-                        <Plus className="w-4 h-4" />
-                        Claim
-                      </button>
+                      <>
+                        {isTransferReadyToClaim(claim) ? (
+                          <button
+                            onClick={async () => {
+                              if (!account) {
+                                toast.error('Please connect your wallet to create claims');
+                                return;
+                              }
+                              
+                              try {
+                                // Determine the required network for this transfer
+                                const requiredNetwork = getRequiredNetwork(claim);
+                                console.log('🔍 Required network result:', requiredNetwork);
+                                
+                                if (!requiredNetwork) {
+                                  toast.error('Could not determine the required network for this transfer');
+                                  return;
+                                }
+                                
+                                // Switch to the required network before opening the dialog
+                                console.log('🔄 Starting network switch to:', requiredNetwork.name);
+                                toast(`Switching to ${requiredNetwork.name} network...`);
+                                const switchResult = await switchToRequiredNetwork(requiredNetwork);
+                                console.log('🔄 Network switch result:', switchResult);
+                                
+                                if (!switchResult) {
+                                  toast.error('Failed to switch to the required network');
+                                  return;
+                                }
+                                
+                                // Set the transfer data and open the NewClaim dialog
+                                setSelectedTransfer(claim);
+                                setShowNewClaim(true);
+                              } catch (error) {
+                                console.error('Error switching network:', error);
+                                toast.error(`Failed to switch network: ${error.message}`);
+                              }
+                            }}
+                            className="btn-primary flex items-center gap-2 text-sm"
+                          >
+                            <Plus className="w-4 h-4" />
+                            Claim
+                          </button>
+                        ) : (
+                          <div className="flex items-center gap-2 text-sm text-gray-500 bg-gray-100 px-3 py-2 rounded-md">
+                            <Clock className="w-4 h-4" />
+                            <span>
+                              Finalizing... will be available to claim in ~ {getTimeUntilClaimable(claim) || 'calculating...'}
+                            </span>
+                          </div>
+                        )}
+                      </>
                     )}
                     
                     {/* Withdraw Button for Expired Claims with YES Outcome */}
@@ -2226,22 +2368,6 @@ const ClaimList = () => {
                       </button>
                     )}
                     
-                    {/* Challenge Button for Active Claims */}
-                    {!isTransfer && !isPending && canChallengeClaim(claim) && (
-                      <button
-                        onClick={() => {
-                          if (!account) {
-                            toast.error('Please connect your wallet to challenge claims');
-                            return;
-                          }
-                          handleChallenge(claim);
-                        }}
-                        className="btn-secondary flex items-center gap-2 text-sm"
-                      >
-                        <AlertTriangle className="w-4 h-4" />
-                        Challenge
-                      </button>
-                    )}
                   </div>
                   
                   {/* Info for claims that can't be withdrawn */}
