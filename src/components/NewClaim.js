@@ -2721,13 +2721,13 @@ const NewClaim = ({ isOpen, onClose, selectedToken = null, selectedTransfer = nu
                     <Info className="w-5 h-5 text-primary-500" />
                     <h3 className="text-lg font-semibold text-white">Third-Party Claim</h3>
                     <span className="px-2 py-1 bg-warning-600 text-white text-xs rounded-full">
-                      Token Burning Required
+                      Extra Token Required
                     </span>
                   </div>
                   
                   <div className="space-y-3">
                     <p className="text-sm text-secondary-400">
-                      You are about to claim on behalf of the sender to speed up the transfer and get rewarded.
+                      You are about to claim on behalf of the sender to speed up the transfer and get rewarded for that.
                     </p>
                     
                     <div className="bg-dark-800 border border-secondary-700 rounded-lg p-3">
@@ -2741,7 +2741,7 @@ const NewClaim = ({ isOpen, onClose, selectedToken = null, selectedTransfer = nu
                           <span className="font-medium text-white">{formData.reward} {tokenMetadata?.symbol}</span>
                         </div>
                         <div className="flex justify-between">
-                          <span className="text-secondary-400">Tokens to Burn:</span>
+                          <span className="text-secondary-400">Tokens to Transfer:</span>
                           <span className="font-medium text-white">
                             {formData.amount && formData.reward ? 
                               (parseFloat(formData.amount) - parseFloat(formData.reward)).toFixed(6) : 
@@ -2770,10 +2770,12 @@ const NewClaim = ({ isOpen, onClose, selectedToken = null, selectedTransfer = nu
                     </div>
                     
                     <p className="text-xs text-secondary-400">
-                      <strong>Note:</strong> The bridge will burn {formData.amount && formData.reward ? 
+                      <strong>Note:</strong> The bridge will charge your balance with {formData.amount && formData.reward ? 
                         (parseFloat(formData.amount) - parseFloat(formData.reward)).toFixed(6) : 
                         '0'
-                      } {tokenMetadata?.symbol} from your balance and mint the same amount to the recipient.
+                      } {tokenMetadata?.symbol} excluding the reward and transfer it to the recipient. 
+                      After the challenge period expires, you will be able to withdraw both the stake 
+                      and the transferred amount back to your balance, as long as you win the counterstake.
                     </p>
                   </div>
                 </div>

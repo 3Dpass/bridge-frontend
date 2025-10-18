@@ -50,68 +50,126 @@ function App() {
             </section>
           )}
 
-          {/* How It Works Section */}
-          <section className="mb-16">
-            <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-              <motion.div
-                initial={{ opacity: 0, y: 20 }}
-                whileInView={{ opacity: 1, y: 0 }}
-                viewport={{ once: true }}
-                className="text-center mb-12"
-              >
-                <h2 className="text-3xl font-bold text-white mb-4" id="how-it-works">How It Works</h2>
-                <p className="text-secondary-300 max-w-2xl mx-auto">
-                  The cross-chain transfer process is simple
-                </p>
-              </motion.div>
+          {/* How It Works Section - Bridge Tab */}
+          {activeTab === 'bridge' && (
+            <section className="mb-16">
+              <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+                <motion.div
+                  initial={{ opacity: 0, y: 20 }}
+                  whileInView={{ opacity: 1, y: 0 }}
+                  viewport={{ once: true }}
+                  className="text-center mb-12"
+                >
+                  <h2 className="text-3xl font-bold text-white mb-4" id="how-it-works">How It Works</h2>
+                  <p className="text-secondary-300 max-w-2xl mx-auto">
+                    The cross-chain transfer process is simple
+                  </p>
+                </motion.div>
 
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-8">
-                {[
-                  {
-                    step: '1',
-                    title: 'Initiate Transfer',
-                    description: 'Select the source and destination. Offer 2-3% fee to the bridge nodes, if you would like them to speed up your transfer.',
-                  },
-                  {
-                    step: '2',
-                    title: (
-                      <a 
-                        href="https://counterstake.org/how-it-works" 
-                        target="_blank" 
-                        rel="noopener noreferrer"
-                        className="text-primary-400 hover:text-primary-300 underline"
-                      >
-                        Counterstake consensus
-                      </a>
-                    ),
-                    description: 'The nodes are going to claim valid transfers and challenge fraudulent ones. You may as well claim yourself, if the nodes refused to assist.',
-                  },
-                  {
-                    step: '3',
-                    title: 'Receive Tokens',
-                    description: 'Receive your tokens on the destination chain. For self-claimed transfers you have to wait for the challenging period to expire before withdrawing.',
-                  },
-                ].map((item, index) => (
-                  <motion.div
-                    key={item.step}
-                    initial={{ opacity: 0, y: 20 }}
-                    whileInView={{ opacity: 1, y: 0 }}
-                    viewport={{ once: true }}
-                    transition={{ delay: index * 0.1 }}
-                    className="card text-center relative"
-                  >
-                    <div className="absolute -top-4 left-1/2 transform -translate-x-1/2">
-                      <div className="w-8 h-8 bg-primary-600 rounded-full flex items-center justify-center border-2 border-dark-800">
-                        <span className="text-white font-bold text-sm">{item.step}</span>
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-8">
+                  {[
+                    {
+                      step: '1',
+                      title: 'Initiate Transfer',
+                      description: 'Select the source and destination. Offer 2-3% fee to the bridge nodes, if you would like them to speed up your transfer.',
+                    },
+                    {
+                      step: '2',
+                      title: (
+                        <a 
+                          href="https://counterstake.org/how-it-works" 
+                          target="_blank" 
+                          rel="noopener noreferrer"
+                          className="text-primary-400 hover:text-primary-300 underline"
+                        >
+                          Counterstake consensus
+                        </a>
+                      ),
+                      description: 'The nodes are going to claim valid transfers and challenge fraudulent ones. You may as well claim yourself, if the nodes refused to assist.',
+                    },
+                    {
+                      step: '3',
+                      title: 'Receive Tokens',
+                      description: 'Receive your tokens on the destination chain. For self-claimed transfers you have to wait for the challenging period to expire before withdrawing.',
+                    },
+                  ].map((item, index) => (
+                    <motion.div
+                      key={item.step}
+                      initial={{ opacity: 0, y: 20 }}
+                      whileInView={{ opacity: 1, y: 0 }}
+                      viewport={{ once: true }}
+                      transition={{ delay: index * 0.1 }}
+                      className="card text-center relative"
+                    >
+                      <div className="absolute -top-4 left-1/2 transform -translate-x-1/2">
+                        <div className="w-8 h-8 bg-primary-600 rounded-full flex items-center justify-center border-2 border-dark-800">
+                          <span className="text-white font-bold text-sm">{item.step}</span>
+                        </div>
                       </div>
-                    </div>
-                    <h3 className="text-lg font-semibold text-white mb-2">{item.title}</h3>
-                    <p className="text-secondary-400 text-sm">{item.description}</p>
-                  </motion.div>
-                ))}
+                      <h3 className="text-lg font-semibold text-white mb-2">{item.title}</h3>
+                      <p className="text-secondary-400 text-sm">{item.description}</p>
+                    </motion.div>
+                  ))}
+                </div>
               </div>
-            </div>
-          </section>
+            </section>
+          )}
+
+          {/* How It Works Section - Pools Tab */}
+          {activeTab === 'pools' && (
+            <section className="mb-16">
+              <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+                <motion.div
+                  initial={{ opacity: 0, y: 20 }}
+                  whileInView={{ opacity: 1, y: 0 }}
+                  viewport={{ once: true }}
+                  className="text-center mb-12"
+                >
+                  <h2 className="text-3xl font-bold text-white mb-4" id="how-pools-work">How Liquidity Pools Work</h2>
+                  <p className="text-secondary-300 max-w-2xl mx-auto">
+                    Provide liquidity to the bridge assistants and earn fees from cross-chain transfers
+                  </p>
+                </motion.div>
+
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-8">
+                  {[
+                    {
+                      step: '1',
+                      title: 'Deposit Liquidity',
+                      description: 'Deposit stake tokens into a bridge assistant to provide liquidity for cross-chain transfers. You receive share tokens representing your stake.',
+                    },
+                    {
+                      step: '2',
+                      title: 'Earn Fees',
+                      description: 'As users make cross-chain transfers, the assistant earns management fees, success fees, and swap fees. These are distributed to liquidity providers.',
+                    },
+                    {
+                      step: '3',
+                      title: 'Withdraw Anytime',
+                      description: 'Withdraw your liquidity plus earned fees at any time. Your share tokens are burned and you receive your proportional share of the pool.',
+                    },
+                  ].map((item, index) => (
+                    <motion.div
+                      key={item.step}
+                      initial={{ opacity: 0, y: 20 }}
+                      whileInView={{ opacity: 1, y: 0 }}
+                      viewport={{ once: true }}
+                      transition={{ delay: index * 0.1 }}
+                      className="card text-center relative"
+                    >
+                      <div className="absolute -top-4 left-1/2 transform -translate-x-1/2">
+                        <div className="w-8 h-8 bg-primary-600 rounded-full flex items-center justify-center border-2 border-dark-800">
+                          <span className="text-white font-bold text-sm">{item.step}</span>
+                        </div>
+                      </div>
+                      <h3 className="text-lg font-semibold text-white mb-2">{item.title}</h3>
+                      <p className="text-secondary-400 text-sm">{item.description}</p>
+                    </motion.div>
+                  ))}
+                </div>
+              </div>
+            </section>
+          )}
         </main>
 
         {/* Footer */}
