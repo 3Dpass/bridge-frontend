@@ -223,38 +223,31 @@ const WithdrawClaim = ({ claim, onWithdrawSuccess, onClose }) => {
           throw new Error('Claim has already been withdrawn');
         }
         
-        // Check if outcome is YES (only YES outcomes can be withdrawn)
-        if (claimDetails.current_outcome !== 1) {
-          throw new Error(`Claim has NO outcome (${claimDetails.current_outcome}). Only YES outcomes can be withdrawn.`);
+        // Check if user has stakes on the current outcome (both YES and NO outcomes can be withdrawn if user has stakes)
+        const currentOutcome = claimDetails.current_outcome;
+        const userStake = await contract.stakes(claimNum, currentOutcome, signerAddress);
+        console.log('🔍 User stake on current outcome:', userStake.toString());
+        
+        // User can withdraw if they have stakes on the current outcome OR if they are the original claimant with YES outcome
+        const hasStakesOnCurrentOutcome = userStake && userStake.gt(0);
+        const isOriginalClaimantWithYesOutcome = (signerAddress.toLowerCase() === claimDetails.claimant_address.toLowerCase()) && (currentOutcome === 1);
+        
+        if (!hasStakesOnCurrentOutcome && !isOriginalClaimantWithYesOutcome) {
+          throw new Error(`You cannot withdraw this claim. You need stakes on the current outcome (${currentOutcome === 1 ? 'YES' : 'NO'}) or be the original claimant with YES outcome.`);
         }
         
+        // Additional validation for third-party vs regular claims
         if (isThirdPartyClaim) {
-          // For third-party claims, check if user is the claimant (assistant) who made the claim
-          if (signerAddress.toLowerCase() !== claimDetails.claimant_address.toLowerCase()) {
-            // If not the claimant, check if they have stakes on the winning outcome
-            try {
-              const yesStake = await contract.stakes(claimNum, 1, signerAddress); // 1 = YES outcome
-              console.log('🔍 User YES stake:', yesStake.toString());
-              if (yesStake.isZero()) {
-                throw new Error('You are not the claimant and have no stakes on the winning outcome');
-              }
-            } catch (stakeErr) {
-              throw new Error('You are not the claimant and have no stakes on the winning outcome');
-            }
+          // For third-party claims, user must be either the claimant or have stakes on current outcome
+          const isClaimant = signerAddress.toLowerCase() === claimDetails.claimant_address.toLowerCase();
+          if (!isClaimant && !hasStakesOnCurrentOutcome) {
+            throw new Error('For third-party claims, you must be the claimant or have stakes on the current outcome');
           }
         } else {
-          // For regular claims, check if user is the recipient (the person who will receive the funds)
-          if (signerAddress.toLowerCase() !== claimDetails.recipient_address.toLowerCase()) {
-            // If not the recipient, check if they have stakes on the winning outcome
-            try {
-              const yesStake = await contract.stakes(claimNum, 1, signerAddress); // 1 = YES outcome
-              console.log('🔍 User YES stake:', yesStake.toString());
-              if (yesStake.isZero()) {
-                throw new Error('You are not the recipient and have no stakes on the winning outcome');
-              }
-            } catch (stakeErr) {
-              throw new Error('You are not the recipient and have no stakes on the winning outcome');
-            }
+          // For regular claims, user must be either the recipient or have stakes on current outcome
+          const isRecipient = signerAddress.toLowerCase() === claimDetails.recipient_address.toLowerCase();
+          if (!isRecipient && !hasStakesOnCurrentOutcome) {
+            throw new Error('For regular claims, you must be the recipient or have stakes on the current outcome');
           }
         }
         
@@ -481,21 +474,12 @@ const WithdrawClaim = ({ claim, onWithdrawSuccess, onClose }) => {
     const isExpired = expiryTime <= now;
     
     if (isExpired) {
-      if (claim.currentOutcome === 1) {
-        return {
-          status: 'ready',
-          text: 'Ready to Withdraw (Expired + YES Outcome)',
-          color: 'text-green-400',
-          icon: <CheckCircle className="w-4 h-4" />
-        };
-      } else {
-        return {
-          status: 'no-outcome',
-          text: 'Cannot Withdraw (NO Outcome)',
-          color: 'text-red-400',
-          icon: <XCircle className="w-4 h-4" />
-        };
-      }
+      return {
+        status: 'ready',
+        text: `Ready to Withdraw (Expired + ${claim.currentOutcome === 1 ? 'YES' : 'NO'} Outcome)`,
+        color: 'text-green-400',
+        icon: <CheckCircle className="w-4 h-4" />
+      };
     }
     
     return {
@@ -630,7 +614,7 @@ const WithdrawClaim = ({ claim, onWithdrawSuccess, onClose }) => {
                             console.log('🔘 WithdrawClaim button clicked!');
                             handleWithdraw();
                           }}
-                          disabled={loading || isProcessing || claim.withdrawn || !isExpired || claim.currentOutcome !== 1}
+                          disabled={loading || isProcessing || claim.withdrawn || !isExpired}
                           className="flex-1 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-500 disabled:opacity-50 disabled:cursor-not-allowed transition-colors flex items-center justify-center gap-2"
                         >
               {loading || isProcessing ? (
@@ -661,13 +645,6 @@ const WithdrawClaim = ({ claim, onWithdrawSuccess, onClose }) => {
             </div>
           )}
           
-          {isExpired && !claim.withdrawn && claim.currentOutcome !== 1 && (
-            <div className="bg-red-900/20 border border-red-500/50 rounded-lg p-3">
-              <p className="text-red-400 text-sm">
-                This claim has a NO outcome and cannot be withdrawn. Only claims with YES outcomes can be withdrawn.
-              </p>
-            </div>
-          )}
         </div>
       </motion.div>
     </motion.div>

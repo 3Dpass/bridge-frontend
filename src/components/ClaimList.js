@@ -12,6 +12,7 @@ import {
   // testProviderWithRetry, // Available for future use
   // getProviderHealthWithRetry // Available for future use
 } from '../utils/enhanced-fetch';
+import { clearAllCachedEvents } from '../utils/event-cache';
 import { COUNTERSTAKE_ABI } from '../contracts/abi';
 // Cache functionality is handled internally for performance
 import { 
@@ -183,6 +184,7 @@ const ClaimList = () => {
   const [showChallengeModal, setShowChallengeModal] = useState(false);
   const [selectedClaim, setSelectedClaim] = useState(null);
   const [contractSettings, setContractSettings] = useState({});
+  const [userStakes, setUserStakes] = useState({}); // Cache for user stake information
   // Cache stats removed from UI - cache still works internally for performance
 
   // Network switching functions
@@ -759,6 +761,92 @@ const ClaimList = () => {
     return 18;
   }, [network?.symbol, getNetworkWithSettings, getStakeTokenSymbol]);
 
+  // Helper function to check if user has stakes on the current outcome
+  const checkUserHasStakesOnCurrentOutcome = useCallback(async (claim, userAddress) => {
+    try {
+      if (!claim.bridgeAddress || !userAddress) {
+        return false;
+      }
+
+      // Get the network configuration for this claim
+      const networkConfig = getNetworkWithSettings(claim.networkKey);
+      if (!networkConfig?.rpcUrl) {
+        console.log('🔍 No RPC URL for network:', claim.networkKey);
+        return false;
+      }
+
+      // Create provider and contract instance
+      const provider = new ethers.providers.JsonRpcProvider(networkConfig.rpcUrl);
+      const contract = new ethers.Contract(claim.bridgeAddress, COUNTERSTAKE_ABI, provider);
+
+      // Get the current outcome (0 = NO, 1 = YES)
+      const currentOutcome = claim.currentOutcome;
+      
+      // Call the contract's stakes function to get user's stake on the current outcome
+      // stakes(claim_num, side, address) where side is 0 for NO, 1 for YES
+      const userStake = await contract.stakes(claim.actualClaimNum || claim.claimNum, currentOutcome, userAddress);
+      
+      // Check if user has any stake on the current outcome
+      const hasStake = userStake && userStake.gt(0);
+      
+      console.log('🔍 Stake check result:', {
+        claimNum: claim.actualClaimNum || claim.claimNum,
+        currentOutcome,
+        userAddress,
+        userStake: userStake?.toString(),
+        hasStake
+      });
+      
+      return hasStake;
+    } catch (error) {
+      console.error('🔍 Error checking user stakes:', error);
+      return false;
+    }
+  }, [getNetworkWithSettings]);
+
+  // Function to load stake information for all claims
+  const loadStakeInformation = useCallback(async (claims) => {
+    if (!account || !claims || claims.length === 0) {
+      return;
+    }
+
+    console.log('🔍 Loading stake information for', claims.length, 'claims');
+    
+    const stakePromises = claims.map(async (claim) => {
+      if (!claim.bridgeAddress || (!claim.actualClaimNum && !claim.claimNum)) {
+        return null;
+      }
+
+      const claimKey = `${claim.bridgeAddress}-${claim.actualClaimNum || claim.claimNum}-${account}`;
+      
+      // Skip if we already have this information
+      if (userStakes[claimKey] !== undefined) {
+        return null;
+      }
+
+      try {
+        const hasStakes = await checkUserHasStakesOnCurrentOutcome(claim, account);
+        return { claimKey, hasStakes };
+      } catch (error) {
+        console.error('🔍 Error loading stake for claim:', claim.actualClaimNum || claim.claimNum, error);
+        return { claimKey, hasStakes: false };
+      }
+    });
+
+    const results = await Promise.all(stakePromises);
+    const newUserStakes = { ...userStakes };
+    
+    results.forEach(result => {
+      if (result) {
+        newUserStakes[result.claimKey] = result.hasStakes;
+      }
+    });
+
+    if (Object.keys(newUserStakes).length > Object.keys(userStakes).length) {
+      setUserStakes(newUserStakes);
+    }
+  }, [account, checkUserHasStakesOnCurrentOutcome, userStakes]);
+
   // Helper function to check if a claim can be withdrawn
   const canWithdrawClaim = useCallback((claim) => {
     // Check if claim is not already withdrawn
@@ -766,10 +854,6 @@ const ClaimList = () => {
       return false;
     }
     
-    // Check if the outcome is YES (only YES outcomes can be withdrawn)
-    if (claim.currentOutcome !== 1) {
-      return false;
-    }
     
     // Check if current user is the recipient (the person who will receive the funds)
     if (!account || !claim.recipientAddress) {
@@ -791,18 +875,50 @@ const ClaimList = () => {
       return false;
     }
     
+    // Create a unique key for this claim and user combination
+    const claimKey = `${claim.bridgeAddress}-${claim.actualClaimNum || claim.claimNum}-${account}`;
+    const userHasStakesOnCurrentOutcome = userStakes[claimKey];
+    
     // Check if this is a third-party claim (claimant_address differs from recipient_address)
     const isThirdPartyClaim = claim.claimant_address && 
                              claim.claimant_address.toLowerCase() !== claim.recipientAddress.toLowerCase();
     
     if (isThirdPartyClaim) {
       // For third-party claims, the claimant (assistant) can withdraw
-      return account.toLowerCase() === claim.claimant_address.toLowerCase();
+      const isOriginalClaimant = account.toLowerCase() === claim.claimant_address.toLowerCase();
+      
+      // Original claimant can withdraw if current outcome is YES
+      if (isOriginalClaimant && claim.currentOutcome === 1) {
+        return true;
+      }
+      
+      // User can withdraw if they have stakes on the current winning outcome
+      if (userHasStakesOnCurrentOutcome === true) {
+        return true;
+      }
+      
+      // If we don't have stake information yet, allow withdrawal for original claimant
+      // This will be refined when stake information is loaded
+      return isOriginalClaimant && userHasStakesOnCurrentOutcome !== false;
     } else {
       // For regular claims, the recipient can withdraw
-      return account.toLowerCase() === claim.recipientAddress.toLowerCase();
+      const isRecipient = account.toLowerCase() === claim.recipientAddress.toLowerCase();
+      
+      // Recipient can withdraw if current outcome is YES
+      if (isRecipient && claim.currentOutcome === 1) {
+        return true;
+      }
+      
+      // User can withdraw if they have stakes on the current winning outcome
+      if (userHasStakesOnCurrentOutcome === true) {
+        return true;
+      }
+      
+      // If we don't have stake information yet, allow withdrawal for recipient
+      // This will be refined when stake information is loaded
+      return isRecipient && userHasStakesOnCurrentOutcome !== false;
     }
-  }, [account, currentBlock]);
+  }, [account, currentBlock, userStakes]);
 
   // Helper function to check if current user is the recipient
   const isCurrentUserRecipient = useCallback((claim) => {
@@ -1161,6 +1277,9 @@ const ClaimList = () => {
       }
       setClaims(allClaims);
 
+      // Load stake information for all claims
+      loadStakeInformation(allClaims);
+
       // Set current block from the first available network for timestamp calculations
       if (!currentBlock && allClaims.length > 0) {
         try {
@@ -1212,7 +1331,7 @@ const ClaimList = () => {
         setIsInitialLoad(false);
       }
     }
-  }, [account, currentBlock, getNetworkWithSettings, getBridgeInstancesWithSettings, filter, getTransferTokenSymbol, getTokenDecimals, getHistorySearchDepth, getClaimSearchDepth, isInitialLoad]);
+  }, [account, currentBlock, getNetworkWithSettings, getBridgeInstancesWithSettings, filter, getTransferTokenSymbol, getTokenDecimals, getHistorySearchDepth, getClaimSearchDepth, isInitialLoad, loadStakeInformation]);
 
 
 
@@ -1220,6 +1339,11 @@ const ClaimList = () => {
   useEffect(() => {
     loadContractSettings();
   }, [loadContractSettings]);
+
+  // Clear user stakes when account changes
+  useEffect(() => {
+    setUserStakes({});
+  }, [account]);
 
   // Load claims and transfers on mount and when dependencies change
   useEffect(() => {
@@ -1249,7 +1373,18 @@ const ClaimList = () => {
       0;
     
     if (claim.finished) {
-      return claim.withdrawn ? 'withdrawn' : 'finished';
+      // For NO outcomes: show "withdrawn" if finished=true and withdrawn=false
+      if (claim.currentOutcome === 0 && !claim.withdrawn) {
+        return 'withdrawn';
+      }
+      
+      // For YES outcomes: use the contract's withdrawn flag (original claimant logic)
+      if (claim.currentOutcome === 1 && claim.withdrawn) {
+        return 'withdrawn';
+      }
+      
+      // Default to finished if not withdrawn
+      return 'finished';
     }
     
     if (now > expiryTime) {
@@ -1664,6 +1799,18 @@ const ClaimList = () => {
             });
           }
           
+          // Debug NO outcome claims to check status logic
+          if (claim.currentOutcome === 0 && claim.finished) {
+            console.log(`🔍 NO OUTCOME CLAIM STATUS DEBUG:`, {
+              claimNum: claim.claimNum || claim.actualClaimNum,
+              withdrawn: claim.withdrawn,
+              finished: claim.finished,
+              currentOutcome: claim.currentOutcome,
+              status: status,
+              shouldBeWithdrawn: claim.currentOutcome === 0 && !claim.withdrawn
+            });
+          }
+          
           return (
             <motion.div
               key={`${claim.bridgeAddress}-${claim.actualClaimNum || claim.claimNum || claim.transactionHash}`}
@@ -1674,7 +1821,7 @@ const ClaimList = () => {
               className={`card mb-4 ${
                 isSuspicious ? 'border-red-500 bg-red-900/10' : 
                 isPending ? 'border-yellow-500 bg-yellow-900/10' : 
-                claim.withdrawn ? 'border-green-500 bg-green-900/10' :
+                status === 'withdrawn' ? 'border-green-500 bg-green-900/10' :
                 'border-dark-700'
               }`}
             >
@@ -1685,7 +1832,7 @@ const ClaimList = () => {
                     <span className="text-sm font-medium text-white">
                       {isPending ? `Transfer #${index + 1}` : (isTransfer ? `Transfer #${index + 1}` : `Claim #${claim.actualClaimNum || claim.claimNum}`)}
                     </span>
-                    {isSuspicious && claim.withdrawn && <CheckCircle className="w-4 h-4 text-green-500" />}
+                    {isSuspicious && status === 'withdrawn' && <CheckCircle className="w-4 h-4 text-green-500" />}
                     {isSuspicious && status === 'active' && <Clock className="w-4 h-4 text-warning-500" />}
                     {isSuspicious && <AlertTriangle className="w-4 h-4 text-red-500" />}
                     {isPending && <Clock className="w-4 h-4 text-yellow-500" />}
@@ -2410,22 +2557,22 @@ const ClaimList = () => {
                   </div>
                   
                   {/* Info for claims that can't be withdrawn */}
-                  {claim.finished && !claim.withdrawn && isCurrentUserRecipient(claim) && claim.currentOutcome !== 1 && (
+                  {claim.finished && !claim.withdrawn && isCurrentUserRecipient(claim) && !canWithdrawClaim(claim) && (
                     <div className="mt-3">
                       <div className="bg-gray-700 rounded-lg p-3">
                         <p className="text-gray-400 text-sm">
-                          ⚠️ This claim has a NO outcome and cannot be withdrawn. Only expired claims with YES outcomes can be withdrawn.
+                          ⚠️ This claim cannot be withdrawn. You may not have stakes on the current outcome or the claim may not be expired yet.
                         </p>
                       </div>
                     </div>
                   )}
 
                   {/* Info for non-expired claims */}
-                  {claim.finished && !claim.withdrawn && isCurrentUserRecipient(claim) && claim.currentOutcome === 1 && !canWithdrawClaim(claim) && (
+                  {claim.finished && !claim.withdrawn && isCurrentUserRecipient(claim) && !canWithdrawClaim(claim) && (
                     <div className="mt-3">
                       <div className="bg-yellow-900/20 border border-yellow-500/50 rounded-lg p-3">
                         <p className="text-yellow-400 text-sm">
-                          ⏰ This claim has a YES outcome but is not yet expired. You can withdraw it once it expires.
+                          ⏰ This claim is not yet expired. You can withdraw it once it expires.
                         </p>
                       </div>
                     </div>
@@ -2479,9 +2626,11 @@ const ClaimList = () => {
         <WithdrawClaim
           claim={selectedClaim}
           onWithdrawSuccess={(claimNum) => {
-            console.log(`🔍 Withdraw successful for claim #${claimNum}, refreshing claims...`);
+            console.log(`🔍 Withdraw successful for claim #${claimNum}, clearing cache and refreshing claims...`);
             setShowWithdrawModal(false);
             setSelectedClaim(null);
+            // Clear cache to ensure fresh data is fetched
+            clearAllCachedEvents();
             // Refresh the claims list
             loadClaimsAndTransfers();
           }}
@@ -2497,9 +2646,11 @@ const ClaimList = () => {
         <Challenge
           claim={selectedClaim}
           onChallengeSuccess={(claimNum) => {
-            console.log(`🔍 Challenge successful for claim #${claimNum}, refreshing claims...`);
+            console.log(`🔍 Challenge successful for claim #${claimNum}, clearing cache and refreshing claims...`);
             setShowChallengeModal(false);
             setSelectedClaim(null);
+            // Clear cache to ensure fresh data is fetched
+            clearAllCachedEvents();
             // Refresh the claims list
             loadClaimsAndTransfers();
           }}
