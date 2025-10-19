@@ -2318,11 +2318,11 @@ const NewClaim = ({ isOpen, onClose, selectedToken = null, selectedTransfer = nu
       console.log('🔍 Allowance sufficient:', allowance.gte(stakeWeiForCheck));
       
       if (balance.lt(stakeWeiForCheck)) {
-        throw new Error(`Insufficient USDT balance. Required: ${stakeFormatted}, Available: ${balanceFormatted}`);
+        throw new Error(`Insufficient balance. Required: ${stakeFormatted}, Available: ${balanceFormatted}`);
       }
       
       if (allowance.lt(stakeWeiForCheck)) {
-        throw new Error(`Insufficient USDT allowance. Required: ${stakeFormatted}, Allowed: ${allowanceFormatted}`);
+        throw new Error(`Insufficient allowance. Required: ${stakeFormatted}, Allowed: ${allowanceFormatted}`);
       }
 
       // Validate parameter ranges before calling
