@@ -958,11 +958,8 @@ const ClaimList = () => {
     }
     
     // Check if the claim is expired (only expired claims can be withdrawn)
-    if (!currentBlock) {
-      return false; // Can't determine expiration without current block
-    }
-    
-    const now = currentBlock.timestamp;
+    // Use current block timestamp if available, otherwise use current time as fallback
+    const now = currentBlock ? currentBlock.timestamp : Math.floor(Date.now() / 1000);
     const expiryTime = claim.expiryTs ? 
       (typeof claim.expiryTs.toNumber === 'function' ? claim.expiryTs.toNumber() : claim.expiryTs) : 
       0;
@@ -1040,11 +1037,8 @@ const ClaimList = () => {
     }
     
     // Check if challenging period hasn't expired
-    if (!currentBlock) {
-      return false; // Can't determine expiration without current block
-    }
-    
-    const now = currentBlock.timestamp;
+    // Use current block timestamp if available, otherwise use current time as fallback
+    const now = currentBlock ? currentBlock.timestamp : Math.floor(Date.now() / 1000);
     const expiryTime = claim.expiryTs ? 
       (typeof claim.expiryTs.toNumber === 'function' ? claim.expiryTs.toNumber() : claim.expiryTs) : 
       0;
@@ -1106,7 +1100,7 @@ const ClaimList = () => {
   }, [getRequiredNetworkForClaim, checkNetwork, switchToRequiredNetwork, prepareClaimForWithdraw]);
 
   // Load cached data from browser storage
-  const loadCachedData = useCallback(() => {
+  const loadCachedData = useCallback(async () => {
     try {
       console.log('🔍 Loading cached data from browser storage...');
       
@@ -1177,15 +1171,16 @@ const ClaimList = () => {
                 const networkConfig = getNetworkWithSettings(networksWithSettings[0].symbol);
                 if (networkConfig?.rpcUrl) {
                   const networkProvider = new ethers.providers.JsonRpcProvider(networkConfig.rpcUrl);
-                  networkProvider.getBlock('latest').then(block => {
+                  try {
+                    const block = await networkProvider.getBlock('latest');
                     setCurrentBlock(block);
                     console.log(`🔍 Set current block for cached data from ${networksWithSettings[0].symbol}:`, {
                       blockNumber: block.number,
                       timestamp: block.timestamp
                     });
-                  }).catch(error => {
+                  } catch (error) {
                     console.log(`🔍 Could not get block for cached data:`, error.message);
-                  });
+                  }
                 }
               }
             } catch (error) {
@@ -1236,7 +1231,7 @@ const ClaimList = () => {
 
     // Step 1: Try to load cached data first (unless force refresh)
     if (!forceRefresh && isInitialLoad) {
-      const hasCachedData = loadCachedData();
+      const hasCachedData = await loadCachedData();
       if (hasCachedData) {
         console.log('✅ Displaying cached data. User can manually refresh if needed.');
         // Don't automatically fetch fresh data - let user decide
@@ -1690,6 +1685,14 @@ const ClaimList = () => {
       // Fetch fresh claim data using getClaim function
       const claimNum = claim.actualClaimNum || claim.claimNum;
       const claimData = await contract.getClaim(claimNum);
+
+      // Update currentBlock to ensure button states are correct
+      const block = await provider.getBlock('latest');
+      setCurrentBlock(block);
+      console.log(`🔍 Updated current block for claim refresh:`, {
+        blockNumber: block.number,
+        timestamp: block.timestamp
+      });
 
       console.log(`🔍 Raw claim data from contract:`, claimData);
 
@@ -2146,9 +2149,6 @@ const ClaimList = () => {
                 </>
               ) : (
                 <span className="text-green-400">Fresh data loaded</span>
-              )}
-              {cacheStatus.isRefreshing && (
-                <span className="text-yellow-400">• Refreshing...</span>
               )}
             </div>
             <div className="flex items-center gap-2">
