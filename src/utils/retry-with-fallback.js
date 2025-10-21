@@ -43,9 +43,13 @@ export const createSearchDepthAwareRetry = (getHistorySearchDepth, getClaimSearc
           maxDelay
         );
         
+        // Apply minimum timeout of 300ms for transfers search
+        const minDelay = 300;
+        const finalDelay = Math.max(delay, minDelay);
+        
         const jitteredDelay = jitter 
-          ? delay + Math.random() * delay * 0.1 
-          : delay;
+          ? finalDelay + Math.random() * finalDelay * 0.1 
+          : finalDelay;
         
         console.log(`⏳ Retry attempt ${attempt}/${maxAttempts} in ${jitteredDelay}ms (search depth: ${searchDepthLimit}h)`);
         
@@ -96,8 +100,10 @@ export const fetchWithRateLimitHandling = async (fn, networkKey, options = {}) =
           return await fetchWithFallbackProvider(fn, networkKey);
         }
         
-        // Exponential backoff with jitter
-        const delay = baseDelay * Math.pow(2, attempt - 1) + Math.random() * 1000;
+        // Exponential backoff with jitter and minimum timeout
+        const calculatedDelay = baseDelay * Math.pow(2, attempt - 1) + Math.random() * 1000;
+        const minDelay = 300; // Minimum 300ms timeout for transfers search
+        const delay = Math.max(calculatedDelay, minDelay);
         console.log(`⏳ Waiting ${delay}ms before retry ${attempt + 1}`);
         await new Promise(resolve => setTimeout(resolve, delay));
         

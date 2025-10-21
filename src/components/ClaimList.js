@@ -13,9 +13,13 @@ import {
   // getProviderHealthWithRetry // Available for future use
 } from '../utils/enhanced-fetch';
 import { clearAllCachedEvents } from '../utils/event-cache';
-import { COUNTERSTAKE_ABI } from '../contracts/abi';
-// Cache functionality is handled internally for performance
 import { 
+  COUNTERSTAKE_ABI,
+  EXPORT_ABI,
+  IMPORT_ABI,
+  IMPORT_WRAPPER_ABI
+} from '../contracts/abi';
+import {
   Clock, 
   CheckCircle, 
   User,
@@ -25,13 +29,52 @@ import {
   ArrowDown,
   AlertTriangle,
   Copy,
-  X
+  X,
+  RefreshCw
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import toast from 'react-hot-toast';
 import NewClaim from './NewClaim';
 import WithdrawClaim from './WithdrawClaim';
 import Challenge from './Challenge';
+
+// Browser storage utilities for claims and transfers
+const STORAGE_KEYS = {
+  CLAIMS: 'bridge_claims_cache',
+  TRANSFERS: 'bridge_transfers_cache',
+  AGGREGATED: 'bridge_aggregated_cache',
+  TIMESTAMP: 'bridge_cache_timestamp',
+  SETTINGS: 'bridge_cache_settings'
+};
+
+const getCachedData = (key) => {
+  try {
+    const cached = localStorage.getItem(key);
+    return cached ? JSON.parse(cached) : null;
+  } catch (error) {
+    console.warn('Failed to parse cached data:', error);
+    return null;
+  }
+};
+
+const setCachedData = (key, data) => {
+  try {
+    localStorage.setItem(key, JSON.stringify(data));
+    localStorage.setItem(STORAGE_KEYS.TIMESTAMP, Date.now().toString());
+  } catch (error) {
+    console.warn('Failed to cache data:', error);
+  }
+};
+
+const clearCachedData = () => {
+  try {
+    Object.values(STORAGE_KEYS).forEach(key => {
+      localStorage.removeItem(key);
+    });
+  } catch (error) {
+    console.warn('Failed to clear cached data:', error);
+  }
+};
 
 // Helper functions for match/mismatch indicators
 const getMatchStatus = (claim) => {
@@ -185,6 +228,23 @@ const ClaimList = () => {
   const [selectedClaim, setSelectedClaim] = useState(null);
   const [contractSettings, setContractSettings] = useState({});
   const [userStakes, setUserStakes] = useState({}); // Cache for user stake information
+  
+  // Cache status tracking
+  const [cacheStatus, setCacheStatus] = useState({
+    hasCachedData: false,
+    isShowingCached: false,
+    isRefreshing: false,
+    lastUpdated: null,
+    cacheAge: null
+  });
+
+  // Individual claim update tracking
+  const [claimUpdates, setClaimUpdates] = useState({
+    updatedClaims: new Set(), // Track which claims have been updated
+    updateTimestamps: {}, // Track when each claim was last updated
+    isUpdating: false, // Track if we're currently updating claims (legacy)
+    updatingClaims: new Set() // Track which specific claims are being updated
+  });
   // Cache stats removed from UI - cache still works internally for performance
 
   // Network switching functions
@@ -260,6 +320,21 @@ const ClaimList = () => {
     return null;
   }, [getNetworkWithSettings]);
 
+  // Helper function to get the correct ABI based on bridge type
+  const getBridgeABI = useCallback((bridgeType) => {
+    switch (bridgeType) {
+      case 'export':
+        return EXPORT_ABI;
+      case 'import':
+        return IMPORT_ABI;
+      case 'import_wrapper':
+        return IMPORT_WRAPPER_ABI;
+      default:
+        console.warn(`Unknown bridge type: ${bridgeType}, using COUNTERSTAKE_ABI as fallback`);
+        return COUNTERSTAKE_ABI;
+    }
+  }, []);
+
   // Load contract settings for all bridges
   const loadContractSettings = useCallback(async () => {
     try {
@@ -272,7 +347,8 @@ const ClaimList = () => {
           const networkConfig = getNetworkWithSettings(bridge.homeNetwork);
           if (networkConfig?.rpcUrl) {
             const provider = new ethers.providers.JsonRpcProvider(networkConfig.rpcUrl);
-            const bridgeContract = new ethers.Contract(bridge.address, COUNTERSTAKE_ABI, provider);
+            const bridgeABI = getBridgeABI(bridge.type);
+            const bridgeContract = new ethers.Contract(bridge.address, bridgeABI, provider);
             
             const settings = await bridgeContract.settings();
             settingsMap[bridge.address] = {
@@ -299,7 +375,7 @@ const ClaimList = () => {
     } catch (error) {
       console.error('❌ Error loading contract settings:', error);
     }
-  }, [getBridgeInstancesWithSettings, getNetworkWithSettings]);
+  }, [getBridgeInstancesWithSettings, getNetworkWithSettings, getBridgeABI]);
 
   // Check if a transfer is ready to be claimed based on min_tx_age
   const isTransferReadyToClaim = useCallback((transfer) => {
@@ -478,13 +554,14 @@ const ClaimList = () => {
         type: typeof amount,
         hasToNumber: typeof amount?.toNumber === 'function',
         isBigNumber: amount?._isBigNumber,
-        decimals
+        decimals,
+        tokenAddress
       });
       
       const ethers = require('ethers');
       let amountString;
       
-      // Handle BigNumber objects
+      // Handle BigNumber objects (including deserialized ones from cache)
       if (typeof amount?.toNumber === 'function') {
         amountString = amount.toString();
         console.log(`🔍 formatAmount: converted BigNumber to string: ${amountString}`);
@@ -494,6 +571,22 @@ const ClaimList = () => {
       } else if (typeof amount === 'number') {
         amountString = amount.toString();
         console.log(`🔍 formatAmount: converted number to string: ${amountString}`);
+      } else if (typeof amount === 'object' && amount !== null) {
+        // Handle deserialized BigNumber objects from cache
+        // They might have properties like _hex, _isBigNumber, or be plain objects with hex values
+        if (amount._hex) {
+          amountString = amount._hex;
+          console.log(`🔍 formatAmount: using _hex from deserialized BigNumber: ${amountString}`);
+        } else if (amount.hex) {
+          amountString = amount.hex;
+          console.log(`🔍 formatAmount: using hex from deserialized BigNumber: ${amountString}`);
+        } else if (amount.toString && typeof amount.toString === 'function') {
+          amountString = amount.toString();
+          console.log(`🔍 formatAmount: using toString from deserialized object: ${amountString}`);
+        } else {
+          console.log(`🔍 formatAmount: unknown object type, returning 0.000000`);
+          return '0.000000';
+        }
       } else if (!amount) {
         console.log(`🔍 formatAmount: null/undefined amount, returning 0.000000`);
         return '0.000000';
@@ -508,8 +601,11 @@ const ClaimList = () => {
         return '0.000000';
       }
       
+      // Debug: Log the amount string before formatting
+      console.log(`🔍 formatAmount: amountString before formatUnits:`, amountString);
+      
       const rawValue = parseFloat(ethers.utils.formatUnits(amountString, decimals));
-      console.log(`🔍 formatAmount: rawValue after formatUnits: ${rawValue}`);
+        console.log(`🔍 formatAmount: rawValue after formatUnits: ${rawValue}`);
       
       // Check if this is a P3D token and apply decimalsDisplayMultiplier
       if (tokenAddress) {
@@ -777,7 +873,8 @@ const ClaimList = () => {
 
       // Create provider and contract instance
       const provider = new ethers.providers.JsonRpcProvider(networkConfig.rpcUrl);
-      const contract = new ethers.Contract(claim.bridgeAddress, COUNTERSTAKE_ABI, provider);
+      const bridgeABI = getBridgeABI(claim.bridgeType);
+      const contract = new ethers.Contract(claim.bridgeAddress, bridgeABI, provider);
 
       // Get the current outcome (0 = NO, 1 = YES)
       const currentOutcome = claim.currentOutcome;
@@ -802,7 +899,7 @@ const ClaimList = () => {
       console.error('🔍 Error checking user stakes:', error);
       return false;
     }
-  }, [getNetworkWithSettings]);
+  }, [getNetworkWithSettings, getBridgeABI]);
 
   // Function to load stake information for all claims
   const loadStakeInformation = useCallback(async (claims) => {
@@ -1008,17 +1105,148 @@ const ClaimList = () => {
     setShowWithdrawModal(true);
   }, [getRequiredNetworkForClaim, checkNetwork, switchToRequiredNetwork, prepareClaimForWithdraw]);
 
+  // Load cached data from browser storage
+  const loadCachedData = useCallback(() => {
+    try {
+      console.log('🔍 Loading cached data from browser storage...');
+      
+      const cachedClaims = getCachedData(STORAGE_KEYS.CLAIMS);
+      const cachedTransfers = getCachedData(STORAGE_KEYS.TRANSFERS);
+      const cachedAggregated = getCachedData(STORAGE_KEYS.AGGREGATED);
+      const cachedSettings = getCachedData(STORAGE_KEYS.SETTINGS);
+      
+      if (cachedClaims || cachedTransfers || cachedAggregated) {
+        console.log('✅ Found cached data:', {
+          claims: cachedClaims?.length || 0,
+          transfers: cachedTransfers?.length || 0,
+          aggregated: !!cachedAggregated
+        });
+        
+        // Set cached data immediately
+        if (cachedClaims) {
+          console.log('🔍 Loading cached claims:', cachedClaims.length, 'claims');
+          // Debug: Log first few cached claims to see their structure
+          if (cachedClaims.length > 0) {
+            console.log('🔍 First cached claim structure:', {
+              claimNum: cachedClaims[0].claimNum,
+              actualClaimNum: cachedClaims[0].actualClaimNum,
+              amount: cachedClaims[0].amount?.toString(),
+              reward: cachedClaims[0].reward?.toString(),
+              yesStake: cachedClaims[0].yesStake?.toString(),
+              noStake: cachedClaims[0].noStake?.toString(),
+              currentOutcome: cachedClaims[0].currentOutcome,
+              finished: cachedClaims[0].finished,
+              withdrawn: cachedClaims[0].withdrawn,
+              txid: cachedClaims[0].txid,
+              blockNumber: cachedClaims[0].blockNumber,
+              claimTransactionHash: cachedClaims[0].claimTransactionHash
+            });
+            
+            // Debug: Check if reward is actually zero or missing
+            console.log('🔍 Reward field analysis:', {
+              reward: cachedClaims[0].reward,
+              rewardType: typeof cachedClaims[0].reward,
+              rewardString: cachedClaims[0].reward?.toString(),
+              isZero: cachedClaims[0].reward === 0 || cachedClaims[0].reward === '0' || cachedClaims[0].reward === '0x0',
+              isNull: cachedClaims[0].reward === null,
+              isUndefined: cachedClaims[0].reward === undefined
+            });
+            
+            // Debug: Check if stakes are actually zero or missing
+            console.log('🔍 Stakes field analysis:', {
+              yesStake: cachedClaims[0].yesStake,
+              yesStakeType: typeof cachedClaims[0].yesStake,
+              yesStakeString: cachedClaims[0].yesStake?.toString(),
+              yesStakeIsZero: cachedClaims[0].yesStake === 0 || cachedClaims[0].yesStake === '0' || cachedClaims[0].yesStake === '0x0',
+              noStake: cachedClaims[0].noStake,
+              noStakeType: typeof cachedClaims[0].noStake,
+              noStakeString: cachedClaims[0].noStake?.toString(),
+              noStakeIsZero: cachedClaims[0].noStake === 0 || cachedClaims[0].noStake === '0' || cachedClaims[0].noStake === '0x0'
+            });
+          }
+          setClaims(cachedClaims);
+          
+          // Try to set currentBlock immediately for cached data
+          if (!currentBlock) {
+            try {
+              const networksWithSettings = Object.values(NETWORKS).filter(network => 
+                getNetworkWithSettings(network.symbol)?.rpcUrl
+              );
+              
+              if (networksWithSettings.length > 0) {
+                const networkConfig = getNetworkWithSettings(networksWithSettings[0].symbol);
+                if (networkConfig?.rpcUrl) {
+                  const networkProvider = new ethers.providers.JsonRpcProvider(networkConfig.rpcUrl);
+                  networkProvider.getBlock('latest').then(block => {
+                    setCurrentBlock(block);
+                    console.log(`🔍 Set current block for cached data from ${networksWithSettings[0].symbol}:`, {
+                      blockNumber: block.number,
+                      timestamp: block.timestamp
+                    });
+                  }).catch(error => {
+                    console.log(`🔍 Could not get block for cached data:`, error.message);
+                  });
+                }
+              }
+            } catch (error) {
+              console.log(`🔍 Error setting current block for cached data:`, error.message);
+            }
+          }
+        }
+        if (cachedAggregated) setAggregatedData(cachedAggregated);
+        if (cachedSettings) setContractSettings(cachedSettings);
+        
+        // Update cache status
+        const timestamp = localStorage.getItem(STORAGE_KEYS.TIMESTAMP);
+        const lastUpdated = timestamp ? new Date(parseInt(timestamp)) : null;
+        const cacheAge = timestamp ? Date.now() - parseInt(timestamp) : null;
+        
+        setCacheStatus({
+          hasCachedData: true,
+          isShowingCached: true,
+          isRefreshing: false,
+          lastUpdated,
+          cacheAge
+        });
+        
+        return true;
+      } else {
+        console.log('❌ No cached data found');
+        setCacheStatus(prev => ({ ...prev, hasCachedData: false, isShowingCached: false }));
+        return false;
+      }
+    } catch (error) {
+      console.error('❌ Error loading cached data:', error);
+      setCacheStatus(prev => ({ ...prev, hasCachedData: false, isShowingCached: false }));
+      return false;
+    }
+  }, [currentBlock, getNetworkWithSettings]);
+
+  // updateIndividualClaims function removed - no longer needed since we don't do background updates
+
   // Cache statistics removed from UI - cache still works internally
 
   // Load claims and transfers from all networks with fraud detection
-  const loadClaimsAndTransfers = useCallback(async () => {
+  const loadClaimsAndTransfers = useCallback(async (forceRefresh = false) => {
     // No connection check needed - we can load all data without wallet connection
-        console.log('🔍 loadClaimsAndTransfers: Loading claims and transfers from all networks (no wallet connection required)');
-        console.log('🔍 Current filter:', filter);
-        console.log('🔍 Current account:', account);
+    console.log('🔍 loadClaimsAndTransfers: Loading claims and transfers from all networks (no wallet connection required)');
+    console.log('🔍 Current filter:', filter);
+    console.log('🔍 Current account:', account);
+    console.log('🔍 Force refresh:', forceRefresh);
 
-    // Only show loading spinner on initial load
-    if (isInitialLoad) {
+    // Step 1: Try to load cached data first (unless force refresh)
+    if (!forceRefresh && isInitialLoad) {
+      const hasCachedData = loadCachedData();
+      if (hasCachedData) {
+        console.log('✅ Displaying cached data. User can manually refresh if needed.');
+        // Don't automatically fetch fresh data - let user decide
+        return; // Exit early, just show cached data
+      }
+    }
+
+    // Step 2: Only fetch fresh data if no cached data or force refresh
+    // Only show loading spinner if we don't have cached data or it's a force refresh
+    if (isInitialLoad && (!cacheStatus.hasCachedData || forceRefresh)) {
       setLoading(true);
     }
     
@@ -1191,6 +1419,8 @@ const ClaimList = () => {
       }
 
       // Apply time window filtering based on History Search Depth to the aggregated result
+      let filteredAggregated = aggregated; // Default to unfiltered
+      
       try {
         const cutoffTs = Math.floor(Date.now() / 1000) - Math.floor(historySearchDepth * 3600);
         const withinWindow = (ts) => typeof ts === 'number' && ts >= cutoffTs;
@@ -1248,7 +1478,7 @@ const ClaimList = () => {
           return false;
         });
 
-        const filteredAggregated = {
+        filteredAggregated = {
           ...aggregated,
           completedTransfers: filteredCompleted,
           pendingTransfers: filteredPending,
@@ -1267,29 +1497,58 @@ const ClaimList = () => {
           completedTransfers: filteredAggregated.completedTransfers.length,
           pendingTransfers: filteredAggregated.pendingTransfers.length,
           suspiciousClaims: filteredAggregated.suspiciousClaims.length,
-        });
-
-        // Set the aggregated data
-        setAggregatedData(filteredAggregated);
+      });
       } catch (filterErr) {
         console.warn('⚠️ Failed to apply time filtering to aggregated data, using unfiltered results:', filterErr);
-        setAggregatedData(aggregated);
       }
+
+      // Update claims and aggregated data
+      // Since we're not auto-updating cached data anymore, always set fresh data directly
+        setAggregatedData(filteredAggregated);
       setClaims(allClaims);
+
+      // Cache the fresh data
+      console.log('💾 Caching fresh data to browser storage...');
+      setCachedData(STORAGE_KEYS.CLAIMS, allClaims);
+      setCachedData(STORAGE_KEYS.TRANSFERS, allTransfers);
+      setCachedData(STORAGE_KEYS.AGGREGATED, filteredAggregated);
+      setCachedData(STORAGE_KEYS.SETTINGS, contractSettings);
+
+      // Update cache status
+      setCacheStatus(prev => ({
+        ...prev,
+        hasCachedData: true,
+        isShowingCached: false,
+        isRefreshing: false,
+        lastUpdated: new Date(),
+        cacheAge: 0
+      }));
 
       // Load stake information for all claims
       loadStakeInformation(allClaims);
 
       // Set current block from the first available network for timestamp calculations
-      if (!currentBlock && allClaims.length > 0) {
+      if (!currentBlock) {
         try {
-          const firstNetworkKey = allClaims[0].networkKey;
-          const networkConfig = getNetworkWithSettings(firstNetworkKey);
+          // Try to get current block from any available network
+          const networksWithSettings = Object.values(NETWORKS).filter(network => 
+            getNetworkWithSettings(network.symbol)?.rpcUrl
+          );
+          
+          if (networksWithSettings.length > 0) {
+            const networkConfig = getNetworkWithSettings(networksWithSettings[0].symbol);
           if (networkConfig?.rpcUrl) {
             const networkProvider = new ethers.providers.JsonRpcProvider(networkConfig.rpcUrl);
             const block = await networkProvider.getBlock('latest');
             setCurrentBlock(block);
-            console.log(`🔍 Set current block from ${firstNetworkKey}:`, block.number);
+              console.log(`🔍 Set current block from ${networksWithSettings[0].symbol}:`, {
+                blockNumber: block.number,
+                timestamp: block.timestamp,
+                timestampDate: new Date(block.timestamp * 1000).toISOString()
+              });
+            }
+          } else {
+            console.log('⚠️ No networks with RPC URLs available for current block');
               }
             } catch (error) {
           console.log(`🔍 Could not get block for timestamp calculations:`, error.message);
@@ -1303,6 +1562,21 @@ const ClaimList = () => {
         pendingTransfers: aggregated.stats.pendingTransfers,
         fraudDetected: aggregated.fraudDetected
       });
+
+      // Debug: Log first few fresh claims to see their structure
+      if (allClaims.length > 0) {
+        console.log('🔍 First fresh claim structure:', {
+          claimNum: allClaims[0].claimNum,
+          actualClaimNum: allClaims[0].actualClaimNum,
+          amount: allClaims[0].amount?.toString(),
+          reward: allClaims[0].reward?.toString(),
+          yesStake: allClaims[0].yesStake?.toString(),
+          noStake: allClaims[0].noStake?.toString(),
+          currentOutcome: allClaims[0].currentOutcome,
+          finished: allClaims[0].finished,
+          withdrawn: allClaims[0].withdrawn
+        });
+      }
 
       // Clear retry status on success
       setRetryStatus(null);
@@ -1331,7 +1605,241 @@ const ClaimList = () => {
         setIsInitialLoad(false);
       }
     }
-  }, [account, currentBlock, getNetworkWithSettings, getBridgeInstancesWithSettings, filter, getTransferTokenSymbol, getTokenDecimals, getHistorySearchDepth, getClaimSearchDepth, isInitialLoad, loadStakeInformation]);
+  }, [account, currentBlock, getNetworkWithSettings, getBridgeInstancesWithSettings, filter, getTransferTokenSymbol, getTokenDecimals, getHistorySearchDepth, getClaimSearchDepth, isInitialLoad, loadStakeInformation, loadCachedData, cacheStatus.hasCachedData, contractSettings]);
+
+  // Cache management functions
+  const clearCache = useCallback(() => {
+    console.log('🗑️ Clearing browser cache...');
+    clearCachedData();
+    setCacheStatus({
+      hasCachedData: false,
+      isShowingCached: false,
+      isRefreshing: false,
+      lastUpdated: null,
+      cacheAge: null
+    });
+    toast.success('Cache cleared successfully');
+  }, []);
+
+  const refreshData = useCallback(() => {
+    console.log('🔄 Force refreshing data...');
+    setCacheStatus(prev => ({ ...prev, isRefreshing: true }));
+    loadClaimsAndTransfers(true);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []); // Removed loadClaimsAndTransfers from dependencies to prevent infinite loop
+
+  // Check if a claim was recently updated
+  const isClaimRecentlyUpdated = useCallback((claim) => {
+    const key = `${claim.bridgeAddress}-${claim.actualClaimNum || claim.claimNum}`;
+    const updateTime = claimUpdates.updateTimestamps[key];
+    if (!updateTime) return false;
+    
+    // Consider a claim "recently updated" if it was updated within the last 30 seconds
+    const thirtySecondsAgo = Date.now() - 30000;
+    return updateTime > thirtySecondsAgo;
+  }, [claimUpdates.updateTimestamps]);
+
+  // Manual update for a specific claim
+  const updateSpecificClaim = useCallback(async (claim) => {
+    const claimKey = `${claim.bridgeAddress}-${claim.actualClaimNum || claim.claimNum}`;
+    
+    try {
+      // Set updating state for this specific claim
+      setClaimUpdates(prev => ({ 
+        ...prev, 
+        isUpdating: true,
+        updatingClaims: new Set([...prev.updatingClaims, claimKey])
+      }));
+      
+      console.log(`🔄 Manually updating claim ${claim.actualClaimNum || claim.claimNum}...`);
+      console.log(`🔍 Original claim data:`, {
+        amount: claim.amount?.toString(),
+        reward: claim.reward?.toString(),
+        yesStake: claim.yesStake?.toString(),
+        noStake: claim.noStake?.toString(),
+        currentOutcome: claim.currentOutcome,
+        finished: claim.finished,
+        withdrawn: claim.withdrawn
+      });
+      console.log(`🔍 Claim details:`, {
+        bridgeAddress: claim.bridgeAddress,
+        bridgeType: claim.bridgeType,
+        networkKey: claim.networkKey,
+        claimNum: claim.actualClaimNum || claim.claimNum
+      });
+      
+      // Get the network configuration for this claim
+      const networkConfig = getNetworkWithSettings(claim.networkKey);
+      if (!networkConfig?.rpcUrl) {
+        toast.error('Could not find network configuration for this claim');
+        return;
+      }
+
+      // Get the correct ABI based on bridge type
+      const bridgeABI = getBridgeABI(claim.bridgeType);
+      console.log(`🔍 Using ABI for bridge type: ${claim.bridgeType}`, {
+        bridgeType: claim.bridgeType,
+        abiLength: bridgeABI.length,
+        hasGetClaim: bridgeABI.some(item => item.includes('getClaim'))
+      });
+      
+      // Create provider and contract instance
+      const provider = new ethers.providers.JsonRpcProvider(networkConfig.rpcUrl);
+      const contract = new ethers.Contract(claim.bridgeAddress, bridgeABI, provider);
+
+      // Fetch fresh claim data using getClaim function
+      const claimNum = claim.actualClaimNum || claim.claimNum;
+      const claimData = await contract.getClaim(claimNum);
+
+      console.log(`🔍 Raw claim data from contract:`, claimData);
+
+      // The getClaim function returns a tuple, so we need to destructure it
+      // Based on the ABI: tuple(uint amount, address recipient_address, uint32 txts, uint32 ts, address claimant_address, uint32 expiry_ts, uint16 period_number, uint8 current_outcome, bool is_large, bool withdrawn, bool finished, string sender_address, string data, uint yes_stake, uint no_stake)
+      const [
+        amount,
+        recipientAddress,
+        txts,
+        ts,
+        claimantAddress,
+        expiryTs,
+        periodNumber,
+        currentOutcome,
+        isLarge,
+        withdrawn,
+        finished,
+        senderAddress,
+        data,
+        yesStake,
+        noStake
+      ] = claimData;
+
+      console.log(`🔍 Destructured claim data:`, {
+        amount: amount?.toString(),
+        recipientAddress,
+        txts,
+        ts,
+        claimantAddress,
+        expiryTs,
+        periodNumber,
+        currentOutcome,
+        isLarge,
+        withdrawn,
+        finished,
+        senderAddress,
+        data,
+        yesStake: yesStake?.toString(),
+        noStake: noStake?.toString()
+      });
+
+      // Create updated claim object
+      // Note: reward, txid, blockNumber, and claimTransactionHash come from NewClaim events, not from getClaim
+      // So we preserve the original values for these fields
+      const updatedClaim = {
+        ...claim,
+        // Update fields that come from getClaim
+        amount: amount,
+        recipientAddress: recipientAddress,
+        txts: txts,
+        ts: ts,
+        claimantAddress: claimantAddress,
+        expiryTs: expiryTs,
+        periodNumber: periodNumber,
+        currentOutcome: currentOutcome,
+        isLarge: isLarge,
+        withdrawn: withdrawn,
+        finished: finished,
+        senderAddress: senderAddress,
+        data: data,
+        yesStake: yesStake,
+        noStake: noStake,
+        // Preserve fields that come from events (not available in getClaim)
+        reward: claim.reward, // Keep original reward from NewClaim event
+        txid: claim.txid, // Keep original txid from NewClaim event
+        blockNumber: claim.blockNumber, // Keep original blockNumber from NewClaim event
+        claimTransactionHash: claim.claimTransactionHash // Keep original claimTransactionHash from NewClaim event
+      };
+
+      // Update the specific claim in state
+      setClaims(prevClaims => 
+        prevClaims.map(c => 
+          c.bridgeAddress === claim.bridgeAddress && 
+          (c.actualClaimNum || c.claimNum) === claimNum 
+            ? updatedClaim 
+            : c
+        )
+      );
+
+      // Also update the claim in aggregatedData if it exists
+      setAggregatedData(prevAggregated => {
+        if (!prevAggregated) return prevAggregated;
+        
+        const updatedAggregated = { ...prevAggregated };
+        
+        // Update in completedTransfers
+        updatedAggregated.completedTransfers = prevAggregated.completedTransfers.map(c => 
+          c.bridgeAddress === claim.bridgeAddress && 
+          (c.actualClaimNum || c.claimNum) === claimNum 
+            ? { ...c, ...updatedClaim }
+            : c
+        );
+        
+        // Update in suspiciousClaims
+        updatedAggregated.suspiciousClaims = prevAggregated.suspiciousClaims.map(c => 
+          c.bridgeAddress === claim.bridgeAddress && 
+          (c.actualClaimNum || c.claimNum) === claimNum 
+            ? { ...c, ...updatedClaim }
+            : c
+        );
+        
+        return updatedAggregated;
+      });
+
+      // Mark as updated
+      const key = `${claim.bridgeAddress}-${claimNum}`;
+      setClaimUpdates(prev => ({
+        ...prev,
+        updatedClaims: new Set([...prev.updatedClaims, key]),
+        updateTimestamps: {
+          ...prev.updateTimestamps,
+          [key]: Date.now()
+        }
+      }));
+
+      toast.success(`Claim #${claimNum} updated from contract`);
+      console.log(`Claim #${claimNum} updated successfully:`, {
+        amount: amount.toString(),
+        reward: updatedClaim.reward?.toString(),
+        currentOutcome,
+        finished,
+        withdrawn,
+        yesStake: yesStake.toString(),
+        noStake: noStake.toString(),
+        txid: updatedClaim.txid
+      });
+      console.log(`✅ Final updated claim object:`, {
+        amount: updatedClaim.amount?.toString(),
+        reward: updatedClaim.reward?.toString(),
+        yesStake: updatedClaim.yesStake?.toString(),
+        noStake: updatedClaim.noStake?.toString(),
+        currentOutcome: updatedClaim.currentOutcome,
+        finished: updatedClaim.finished,
+        withdrawn: updatedClaim.withdrawn,
+        txid: updatedClaim.txid
+      });
+    } catch (error) {
+      console.error('Error updating specific claim:', error);
+      toast.error(`Failed to update claim: ${error.message}`);
+    } finally {
+      // Clear updating state for this specific claim
+      setClaimUpdates(prev => ({ 
+        ...prev, 
+        isUpdating: false,
+        updatingClaims: new Set([...prev.updatingClaims].filter(key => key !== claimKey))
+      }));
+    }
+  }, [getNetworkWithSettings, getBridgeABI]);
+
+  // getTimeSinceUpdate function removed - no longer needed since Updated badge was removed
 
 
 
@@ -1349,28 +1857,56 @@ const ClaimList = () => {
   useEffect(() => {
     // Always load data - no wallet connection required
     loadClaimsAndTransfers();
-  }, [loadClaimsAndTransfers, filter]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [filter]); // Removed loadClaimsAndTransfers from dependencies to prevent infinite loop
 
-  // Auto-refresh every 6 minutes
-  useEffect(() => {
-    const interval = setInterval(() => {
-      loadClaimsAndTransfers();
-    }, 360000);
-
-    return () => clearInterval(interval);
-  }, [loadClaimsAndTransfers]);
+  // Auto-refresh disabled - users can manually refresh when needed
+  // This prevents unnecessary network requests and gives users control
 
   // No wallet connection required to view claims
   // Wallet connection is only needed for actions like withdraw/challenge
 
   const getClaimStatus = (claim) => {
-    if (!currentBlock) return 'unknown';
+    // Debug: Log status calculation details
+    console.log('🔍 getClaimStatus debug:', {
+      claimNum: claim.claimNum || claim.actualClaimNum,
+      currentBlock: !!currentBlock,
+      currentBlockTimestamp: currentBlock?.timestamp,
+      finished: claim.finished,
+      withdrawn: claim.withdrawn,
+      currentOutcome: claim.currentOutcome,
+      expiryTs: claim.expiryTs?.toString(),
+      expiryTsType: typeof claim.expiryTs
+    });
+    
+    if (!currentBlock) {
+      console.log('⚠️ No currentBlock available, using fallback status logic');
+      // Fallback logic when currentBlock is not available
+      if (claim.finished) {
+        if (claim.currentOutcome === 0 && !claim.withdrawn) {
+          return 'withdrawn';
+        }
+        if (claim.currentOutcome === 1 && claim.withdrawn) {
+          return 'withdrawn';
+        }
+        return 'finished';
+      }
+      // If not finished and no currentBlock, assume active
+      return 'active';
+    }
     
     const now = currentBlock.timestamp;
     // Handle both BigNumber and regular number types for expiryTs
     const expiryTime = claim.expiryTs ? 
       (typeof claim.expiryTs.toNumber === 'function' ? claim.expiryTs.toNumber() : claim.expiryTs) : 
       0;
+    
+    console.log('🔍 Status calculation:', {
+      now,
+      expiryTime,
+      isExpired: now > expiryTime,
+      finished: claim.finished
+    });
     
     if (claim.finished) {
       // For NO outcomes: show "withdrawn" if finished=true and withdrawn=false
@@ -1456,13 +1992,56 @@ const ClaimList = () => {
 
 
   const getTimeRemaining = (expiryTs) => {
-    if (!currentBlock) return '';
+    console.log('🔍 getTimeRemaining called with:', {
+      expiryTs,
+      expiryTsType: typeof expiryTs,
+      currentBlock: !!currentBlock,
+      currentBlockTimestamp: currentBlock?.timestamp
+    });
     
-    const now = currentBlock.timestamp;
-    // Handle both BigNumber and regular number types for expiry_ts
-    const expiryTime = expiryTs ? 
-      (typeof expiryTs.toNumber === 'function' ? expiryTs.toNumber() : expiryTs) : 
-      0;
+    // Use currentBlock timestamp if available, otherwise fallback to current time
+    const now = currentBlock?.timestamp || Math.floor(Date.now() / 1000);
+    
+    if (!currentBlock) {
+      console.log('🔍 getTimeRemaining: No currentBlock available, using current timestamp as fallback');
+    }
+    
+    // Handle BigNumber deserialization (same pattern as formatAmount)
+    let expiryTime = 0;
+    if (expiryTs) {
+      if (typeof expiryTs.toNumber === 'function') {
+        // Live BigNumber object
+        expiryTime = expiryTs.toNumber();
+      } else if (typeof expiryTs === 'number') {
+        // Regular number
+        expiryTime = expiryTs;
+      } else if (typeof expiryTs === 'string') {
+        // String representation
+        expiryTime = parseInt(expiryTs, 10);
+      } else if (typeof expiryTs === 'object' && expiryTs !== null) {
+        // Deserialized BigNumber object - try to extract the value
+        if (expiryTs._hex) {
+          expiryTime = parseInt(expiryTs._hex, 16);
+        } else if (expiryTs.hex) {
+          expiryTime = parseInt(expiryTs.hex, 16);
+        } else if (expiryTs.toString && typeof expiryTs.toString === 'function') {
+          expiryTime = parseInt(expiryTs.toString(), 10);
+        } else {
+          console.warn('🔍 Unknown expiryTs object type:', expiryTs);
+          expiryTime = 0;
+        }
+      }
+    }
+    
+    // Debug: Log the expiry time calculation
+    console.log('🔍 getTimeRemaining debug:', {
+      expiryTs,
+      expiryTsType: typeof expiryTs,
+      expiryTime,
+      now,
+      timeRemaining: expiryTime - now
+    });
+    
     const timeRemaining = expiryTime - now;
     
     if (timeRemaining <= 0) {
@@ -1549,6 +2128,78 @@ const ClaimList = () => {
         </div>
       </div>
 
+      {/* Prominent update notification removed - using green link in cache status instead */}
+
+      {/* Cache Status */}
+      {cacheStatus.hasCachedData && (
+        <div className="mb-4 p-3">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-2 text-sm">
+              <span className="text-secondary-400">Data Status:</span>
+              {cacheStatus.isShowingCached ? (
+                <>
+                  {cacheStatus.lastUpdated && (
+              <span className="text-secondary-400">
+                      (Updated {Math.round((Date.now() - cacheStatus.lastUpdated.getTime()) / 60000)}m ago)
+              </span>
+                  )}
+                </>
+              ) : (
+                <span className="text-green-400">Fresh data loaded</span>
+              )}
+              {cacheStatus.isRefreshing && (
+                <span className="text-yellow-400">• Refreshing...</span>
+              )}
+            </div>
+            <div className="flex items-center gap-2">
+              {cacheStatus.isRefreshing ? (
+                <>
+                  <div className="w-2 h-2 bg-yellow-500 rounded-full animate-pulse"></div>
+                  <span className="text-xs text-yellow-400">Refreshing...</span>
+                </>
+              ) : cacheStatus.isShowingCached ? (
+                <>
+                  <div className="w-2 h-2 bg-blue-500 rounded-full"></div>
+                  <span className="text-xs text-blue-400">Cached</span>
+                </>
+              ) : (
+                <>
+              <div className="w-2 h-2 bg-green-500 rounded-full"></div>
+                  <span className="text-xs text-green-400">Fresh</span>
+                </>
+              )}
+              <button
+                onClick={refreshData}
+                className="text-xs text-primary-400 hover:text-primary-300 underline"
+                title="Refresh current data from contracts"
+              >
+                Refresh
+              </button>
+              {cacheStatus.isShowingCached && (
+                <button
+                  onClick={() => {
+                    console.log('🔄 Manual update triggered by user');
+                    setCacheStatus(prev => ({ ...prev, isRefreshing: true }));
+                    loadClaimsAndTransfers(true); // Force refresh to get fresh data
+                  }}
+                  className="text-xs text-green-400 hover:text-green-300 underline ml-2"
+                  title="Scan through the blockchain"
+                >
+                  Discover
+                </button>
+              )}
+              <button
+                onClick={clearCache}
+                className="text-xs text-red-400 hover:text-red-300 underline"
+                title="Clear cache"
+              >
+                Clear Cache
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Retry Status - Only show when actively retrying */}
       {retryStatus && (
         <div className="mb-4 p-3 bg-dark-800 rounded-lg border border-dark-700">
@@ -1576,7 +2227,12 @@ const ClaimList = () => {
       {loading && (
         <div className="text-center py-12">
           <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary-500 mx-auto mb-4"></div>
-          <p className="text-secondary-400">Discovering transfers for the last {getHistorySearchDepth()} hours...</p>
+          <p className="text-secondary-400">
+            {cacheStatus.isShowingCached 
+              ? `Refreshing data from the last ${getHistorySearchDepth()} hours...`
+              : `Discovering transfers for the last ${getHistorySearchDepth()} hours...`
+            }
+          </p>
         </div>
       )}
 
@@ -1762,10 +2418,19 @@ const ClaimList = () => {
             actualClaimNum: claim.actualClaimNum,
             amount: claim.amount,
             amountType: typeof claim.amount,
+            amountString: claim.amount?.toString(),
+            reward: claim.reward,
+            rewardType: typeof claim.reward,
+            rewardString: claim.reward?.toString(),
             yesStake: claim.yesStake,
             yesStakeType: typeof claim.yesStake,
+            yesStakeString: claim.yesStake?.toString(),
             noStake: claim.noStake,
             noStakeType: typeof claim.noStake,
+            noStakeString: claim.noStake?.toString(),
+            currentOutcome: claim.currentOutcome,
+            finished: claim.finished,
+            withdrawn: claim.withdrawn,
             bridgeType: claim.bridgeType,
             homeTokenSymbol: claim.homeTokenSymbol,
             foreignTokenSymbol: claim.foreignTokenSymbol,
@@ -1815,13 +2480,21 @@ const ClaimList = () => {
             <motion.div
               key={`${claim.bridgeAddress}-${claim.actualClaimNum || claim.claimNum || claim.transactionHash}`}
               initial={{ opacity: 0, y: 20 }}
-              animate={{ opacity: 1, y: 0 }}
+              animate={{ 
+                opacity: 1, 
+                y: 0,
+                ...(isClaimRecentlyUpdated(claim) && {
+                  scale: [1, 1.02, 1],
+                  transition: { duration: 0.3 }
+                })
+              }}
               exit={{ opacity: 0, y: -20 }}
               transition={{ delay: index * 0.1 }}
-              className={`card mb-4 ${
+              className={`card mb-4 transition-all duration-300 ${
                 isSuspicious ? 'border-red-500 bg-red-900/10' : 
                 isPending ? 'border-yellow-500 bg-yellow-900/10' : 
                 status === 'withdrawn' ? 'border-green-500 bg-green-900/10' :
+                isClaimRecentlyUpdated(claim) ? 'border-green-400 bg-green-900/5' :
                 'border-dark-700'
               }`}
             >
@@ -1861,6 +2534,22 @@ const ClaimList = () => {
                       <span className="text-xs bg-blue-600/20 text-blue-400 px-2 py-1 rounded">
                         Self-claimed
                       </span>
+                    )}
+                    {/* Updated indicator removed - redundant with refresh button */}
+                    {/* Manual refresh button for individual claims */}
+                    {!isPending && !isTransfer && (
+                        <button
+                          onClick={() => updateSpecificClaim(claim)}
+                          className="p-1 hover:bg-blue-600/20 rounded transition-colors"
+                          title="Refresh this claim's data from contract"
+                          disabled={claimUpdates.updatingClaims.has(`${claim.bridgeAddress}-${claim.actualClaimNum || claim.claimNum}`)}
+                        >
+                          <RefreshCw 
+                            className={`w-4 h-4 text-blue-400 hover:text-blue-300 ${
+                              claimUpdates.updatingClaims.has(`${claim.bridgeAddress}-${claim.actualClaimNum || claim.claimNum}`) ? 'animate-spin' : ''
+                            }`} 
+                          />
+                        </button>
                     )}
                   </div>
 
@@ -1979,6 +2668,17 @@ const ClaimList = () => {
                                 }
                               })()}
                             </div>
+                            {(() => {
+                              console.log('🔍 UI: Checking if reward should be displayed:', {
+                                reward: claim.reward,
+                                rewardType: typeof claim.reward,
+                                rewardString: claim.reward?.toString(),
+                                isTruthy: !!claim.reward,
+                                isNotZero: claim.reward !== '0' && claim.reward !== '0x0',
+                                claimNum: claim.claimNum || claim.actualClaimNum
+                              });
+                              return null;
+                            })()}
                             {claim.reward && claim.reward !== '0' && claim.reward !== '0x0' && (
                               <div>
                                 <span className="text-secondary-400">Reward:</span>
@@ -2408,6 +3108,23 @@ const ClaimList = () => {
                   {/* Only show claim-specific data for actual claims, not pending transfers */}
                   {!isPending && (
                     <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 text-sm mb-3">
+                      {/* Debug: Show raw claim data if missing */}
+                      {(!claim.amount || !claim.yesStake || !claim.noStake) && (
+                        <div className="col-span-full mb-3 p-2 bg-yellow-900/20 border border-yellow-500/50 rounded text-xs">
+                          <div className="text-yellow-400 font-medium mb-1">⚠️ Missing Claim Data:</div>
+                          <div className="text-yellow-300">
+                            Amount: {claim.amount ? '✅' : '❌'} | 
+                            Reward: {claim.reward ? '✅' : '❌'} | 
+                            YES Stake: {claim.yesStake ? '✅' : '❌'} | 
+                            NO Stake: {claim.noStake ? '✅' : '❌'} |
+                            Current Outcome: {claim.currentOutcome !== undefined ? '✅' : '❌'} |
+                            Finished: {claim.finished !== undefined ? '✅' : '❌'}
+                          </div>
+                        </div>
+                      )}
+                      
+                      {/* Debug: Show currentBlock status - removed warning message */}
+                      
                       <div className="col-span-full">
                       <div>
                       <h4 className="text-sm font-medium text-secondary-300 mb-3">
@@ -2440,7 +3157,24 @@ const ClaimList = () => {
                             <div className="text-center">
                               <div className="text-lg font-semibold mb-1">YES</div>
                               <div className="text-xs text-secondary-400">
-                                {claim.yesStake ? formatAmount(claim.yesStake, getStakeTokenDecimals(claim), getStakeTokenAddress(claim)) : '0'} {getStakeTokenSymbol(claim)}
+                                {(() => {
+                                  const stakeAmount = claim.yesStake;
+                                  const stakeDecimals = getStakeTokenDecimals(claim);
+                                  const stakeAddress = getStakeTokenAddress(claim);
+                                  const stakeSymbol = getStakeTokenSymbol(claim);
+                                  
+                                  console.log('🔍 YES stake debug:', {
+                                    stakeAmount: stakeAmount?.toString(),
+                                    stakeAmountType: typeof stakeAmount,
+                                    stakeDecimals,
+                                    stakeAddress,
+                                    stakeSymbol,
+                                    isZero: stakeAmount === 0 || stakeAmount === '0' || stakeAmount === '0x0',
+                                    formatted: stakeAmount ? formatAmount(stakeAmount, stakeDecimals, stakeAddress) : '0'
+                                  });
+                                  
+                                  return stakeAmount ? formatAmount(stakeAmount, stakeDecimals, stakeAddress) : '0';
+                                })()} {getStakeTokenSymbol(claim)}
                               </div>
                             </div>
                           </button>
@@ -2466,7 +3200,24 @@ const ClaimList = () => {
                             <div className="text-center">
                               <div className="text-lg font-semibold mb-1">NO</div>
                               <div className="text-xs text-secondary-400">
-                                {claim.noStake ? formatAmount(claim.noStake, getStakeTokenDecimals(claim), getStakeTokenAddress(claim)) : '0'} {getStakeTokenSymbol(claim)}
+                                {(() => {
+                                  const stakeAmount = claim.noStake;
+                                  const stakeDecimals = getStakeTokenDecimals(claim);
+                                  const stakeAddress = getStakeTokenAddress(claim);
+                                  const stakeSymbol = getStakeTokenSymbol(claim);
+                                  
+                                  console.log('🔍 NO stake debug:', {
+                                    stakeAmount: stakeAmount?.toString(),
+                                    stakeAmountType: typeof stakeAmount,
+                                    stakeDecimals,
+                                    stakeAddress,
+                                    stakeSymbol,
+                                    isZero: stakeAmount === 0 || stakeAmount === '0' || stakeAmount === '0x0',
+                                    formatted: stakeAmount ? formatAmount(stakeAmount, stakeDecimals, stakeAddress) : '0'
+                                  });
+                                  
+                                  return stakeAmount ? formatAmount(stakeAmount, stakeDecimals, stakeAddress) : '0';
+                                })()} {getStakeTokenSymbol(claim)}
                               </div>
                             </div>
                           </button>
