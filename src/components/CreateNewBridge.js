@@ -4,7 +4,7 @@ import { useWeb3 } from '../contexts/Web3Context';
 import { useSettings } from '../contexts/SettingsContext';
 import { getNetworkWithSettings } from '../utils/settings';
 import { NETWORKS } from '../config/networks';
-import { COUNTERSTAKE_FACTORY_ABI } from '../contracts/abi';
+import { COUNTERSTAKE_FACTORY_ABI, FACTORY_ABI } from '../contracts/abi';
 import { 
   X, 
   CheckCircle, 
@@ -54,6 +54,12 @@ const CreateNewBridge = ({ networkKey, onClose, onBridgeCreated }) => {
     const settingsFactory = settings[networkKey]?.contracts?.counterstakeFactory;
     const configFactory = networkConfig?.contracts?.counterstakeFactory;
     return settingsFactory || configFactory;
+  };
+
+  // Get network name from network key
+  const getNetworkName = (networkKey) => {
+    const network = getNetworkWithSettings(networkKey);
+    return network?.name || networkKey;
   };
 
   // Get available oracles for this network
@@ -255,23 +261,29 @@ const CreateNewBridge = ({ networkKey, onClose, onBridgeCreated }) => {
     
     if (bridgeType === 'export' || bridgeType === 'export_wrapper') {
       // Export bridges: home = current network, foreign = user selected
-      finalHomeNetwork = networkKey;
-      finalForeignNetwork = foreignNetwork;
+      finalHomeNetwork = getNetworkName(networkKey);
+      finalForeignNetwork = getNetworkName(foreignNetwork);
       finalHomeAsset = stakeToken; // Home asset is the stake token
       finalForeignAsset = foreignAsset; // User selects foreign asset
     } else if (bridgeType === 'import') {
       // Import bridges: home = user selected, foreign = current network
-      finalHomeNetwork = homeNetwork;
-      finalForeignNetwork = networkKey;
+      finalHomeNetwork = getNetworkName(homeNetwork);
+      finalForeignNetwork = getNetworkName(networkKey);
       finalHomeAsset = homeAsset; // User selects home asset
       finalForeignAsset = stakeToken; // Foreign asset is the stake token
     } else if (bridgeType === 'import_wrapper') {
       // Import wrapper bridges: home = user selected, foreign = current network
-      finalHomeNetwork = homeNetwork;
-      finalForeignNetwork = networkKey;
+      finalHomeNetwork = getNetworkName(homeNetwork);
+      finalForeignNetwork = getNetworkName(networkKey);
       finalHomeAsset = homeAsset; // User selects home asset
       finalForeignAsset = foreignAsset; // User selects foreign asset (non-native precompile)
     }
+
+    console.log('Final Network/Asset Assignment:');
+    console.log('  Home Network:', finalHomeNetwork, '(from key:', bridgeType === 'export' || bridgeType === 'export_wrapper' ? networkKey : homeNetwork, ')');
+    console.log('  Foreign Network:', finalForeignNetwork, '(from key:', bridgeType === 'import' || bridgeType === 'import_wrapper' ? networkKey : foreignNetwork, ')');
+    console.log('  Home Asset:', finalHomeAsset);
+    console.log('  Foreign Asset:', finalForeignAsset);
 
     // Validate required fields based on bridge type
     if (bridgeType === 'import') {
@@ -299,13 +311,36 @@ const CreateNewBridge = ({ networkKey, onClose, onBridgeCreated }) => {
 
     setIsCreating(true);
     try {
-      const factoryContract = new ethers.Contract(factoryAddress, COUNTERSTAKE_FACTORY_ABI, signer);
+      // Use the correct ABI based on network type
+      const factoryABI = isHybridNetwork ? COUNTERSTAKE_FACTORY_ABI : FACTORY_ABI;
+      const factoryContract = new ethers.Contract(factoryAddress, factoryABI, signer);
+      
+      console.log('=== Bridge Creation Parameters ===');
+      console.log('Network:', networkKey, '(Hybrid:', isHybridNetwork, ')');
+      console.log('Bridge Type:', bridgeType);
+      console.log('Factory Address:', factoryAddress);
+      console.log('Factory ABI Type:', isHybridNetwork ? 'COUNTERSTAKE_FACTORY_ABI' : 'FACTORY_ABI');
+      console.log('Account:', account);
       
       let tx;
       
       if (bridgeType === 'export') {
         // Create export bridge
         // For export bridges: foreign_network, foreign_asset, tokenAddress (stake token)
+        const exportParams = {
+          foreign_network: finalForeignNetwork,
+          foreign_asset: finalForeignAsset,
+          tokenAddress: finalHomeAsset,
+          counterstake_coef100: parseInt(counterstakeCoef),
+          ratio100: parseInt(ratio),
+          large_threshold: ethers.utils.parseEther(largeThreshold),
+          challenging_periods: challengingPeriods,
+          large_challenging_periods: largeChallengingPeriods,
+          gasLimit: GAS_LIMIT
+        };
+        
+        console.log('Creating Export Bridge with parameters:', exportParams);
+        
         tx = await factoryContract.createExport(
           finalForeignNetwork, // foreign_network
           finalForeignAsset, // foreign_asset
@@ -320,6 +355,23 @@ const CreateNewBridge = ({ networkKey, onClose, onBridgeCreated }) => {
       } else if (bridgeType === 'import') {
         // Create import bridge
         // For import bridges: home_network, home_asset, stakeTokenAddr
+        const importParams = {
+          home_network: finalHomeNetwork,
+          home_asset: finalHomeAsset,
+          name: tokenName.trim(),
+          symbol: tokenSymbol.trim(),
+          stakeTokenAddr: stakeToken,
+          oracleAddr: oracleAddress,
+          counterstake_coef100: parseInt(counterstakeCoef),
+          ratio100: parseInt(ratio),
+          large_threshold: ethers.utils.parseEther(largeThreshold),
+          challenging_periods: challengingPeriods,
+          large_challenging_periods: largeChallengingPeriods,
+          gasLimit: GAS_LIMIT
+        };
+        
+        console.log('Creating Import Bridge with parameters:', importParams);
+        
         tx = await factoryContract.createImport(
           finalHomeNetwork, // home_network
           finalHomeAsset, // home_asset
@@ -337,6 +389,22 @@ const CreateNewBridge = ({ networkKey, onClose, onBridgeCreated }) => {
       } else if (bridgeType === 'import_wrapper') {
         // Create import wrapper bridge
         // For import wrapper: home_network, home_asset, precompileAddress, stakeTokenAddr, oracleAddr
+        const importWrapperParams = {
+          home_network: finalHomeNetwork,
+          home_asset: finalHomeAsset,
+          precompileAddress: finalForeignAsset,
+          stakeTokenAddr: stakeToken,
+          oracleAddr: oracleAddress,
+          counterstake_coef100: parseInt(counterstakeCoef),
+          ratio100: parseInt(ratio),
+          large_threshold: ethers.utils.parseEther(largeThreshold),
+          challenging_periods: challengingPeriods,
+          large_challenging_periods: largeChallengingPeriods,
+          gasLimit: GAS_LIMIT
+        };
+        
+        console.log('Creating Import Wrapper Bridge with parameters:', importWrapperParams);
+        
         tx = await factoryContract.createImportWrapper(
           finalHomeNetwork, // home_network
           finalHomeAsset, // home_asset
@@ -353,6 +421,21 @@ const CreateNewBridge = ({ networkKey, onClose, onBridgeCreated }) => {
       } else if (bridgeType === 'export_wrapper') {
         // Create export wrapper bridge
         // For export wrapper: foreign_network, foreign_asset, precompileAddress, stakeTokenAddr (NO oracle)
+        const exportWrapperParams = {
+          foreign_network: finalForeignNetwork,
+          foreign_asset: finalForeignAsset,
+          precompileAddress: finalHomeAsset,
+          stakeTokenAddr: finalHomeAsset,
+          counterstake_coef100: parseInt(counterstakeCoef),
+          ratio100: parseInt(ratio),
+          large_threshold: ethers.utils.parseEther(largeThreshold),
+          challenging_periods: challengingPeriods,
+          large_challenging_periods: largeChallengingPeriods,
+          gasLimit: GAS_LIMIT
+        };
+        
+        console.log('Creating Export Wrapper Bridge with parameters:', exportWrapperParams);
+        
         tx = await factoryContract.createExportWrapper(
           finalForeignNetwork, // foreign_network
           finalForeignAsset, // foreign_asset
@@ -368,7 +451,16 @@ const CreateNewBridge = ({ networkKey, onClose, onBridgeCreated }) => {
       }
 
       toast.loading('Creating bridge contract...');
+      
+      // Wait for transaction confirmation
+      console.log('Transaction sent, waiting for confirmation...');
       const receipt = await tx.wait();
+      console.log('Transaction confirmed:', receipt.transactionHash);
+      
+      // Check if transaction failed
+      if (receipt.status === 0) {
+        throw new Error('Transaction failed during execution');
+      }
       
       // Find the bridge address from events
       let bridgeAddress;
@@ -399,8 +491,8 @@ const CreateNewBridge = ({ networkKey, onClose, onBridgeCreated }) => {
         const bridgeConfig = {
           address: bridgeAddress,
           type: bridgeType,
-          homeNetwork: bridgeType === 'export' || bridgeType === 'export_wrapper' ? networkKey : homeNetwork,
-          foreignNetwork: bridgeType === 'import' || bridgeType === 'import_wrapper' ? networkKey : foreignNetwork,
+          homeNetwork: finalHomeNetwork,
+          foreignNetwork: finalForeignNetwork,
           homeAsset: bridgeType === 'export' || bridgeType === 'export_wrapper' ? stakeToken : homeAsset,
           stakeToken,
           counterstakeCoef: parseInt(counterstakeCoef),
@@ -428,27 +520,52 @@ const CreateNewBridge = ({ networkKey, onClose, onBridgeCreated }) => {
     } catch (error) {
       console.error('Error creating bridge:', error);
       
+      // Dismiss any loading toasts first
+      toast.dismiss();
+      
       // Handle different types of errors gracefully
-      if (error.code === 4001 || error.message?.includes('User denied transaction')) {
+      if (error.code === 4001 || 
+          error.code === 'ACTION_REJECTED' || 
+          error.message?.includes('User denied transaction') ||
+          error.message?.includes('user rejected transaction') ||
+          error.message?.includes('User rejected')) {
         // User cancelled the transaction in MetaMask
-        toast.dismiss(); // Dismiss the loading toast
         toast.error('Transaction cancelled by user');
-      } else if (error.code === -32603 || error.message?.includes('insufficient funds')) {
+      } else if (error.code === -32603 || 
+                 error.message?.includes('insufficient funds') ||
+                 error.message?.includes('insufficient balance')) {
         // Insufficient funds
-        toast.dismiss();
-        toast.error('Insufficient funds for transaction');
-      } else if (error.message?.includes('gas')) {
+        toast.error('Insufficient funds for transaction. Please check your wallet balance.');
+      } else if (error.message?.includes('gas') || 
+                 error.message?.includes('Gas') ||
+                 error.code === -32000) {
         // Gas related errors
-        toast.dismiss();
-        toast.error('Transaction failed due to gas issues. Please try again.');
-      } else if (error.message?.includes('revert')) {
+        toast.error('Transaction failed due to gas issues. Please try again or increase gas limit.');
+      } else if (error.message?.includes('revert') || 
+                 error.message?.includes('execution reverted')) {
         // Contract revert
-        toast.dismiss();
         toast.error('Transaction failed. Please check your inputs and try again.');
+      } else if (error.message?.includes('network') || 
+                 error.message?.includes('Network')) {
+        // Network related errors
+        toast.error('Network error. Please check your connection and try again.');
+      } else if (error.message?.includes('timeout') || 
+                 error.message?.includes('Timeout')) {
+        // Timeout errors
+        toast.error('Transaction timed out. Please try again.');
+      } else if (error.message?.includes('nonce')) {
+        // Nonce errors
+        toast.error('Transaction nonce error. Please try again.');
       } else {
-        // Generic error
-        toast.dismiss();
-        toast.error(`Failed to create bridge: ${error.message}`);
+        // Generic error - show a more user-friendly message
+        const errorMessage = error.message || 'Unknown error occurred';
+        console.error('Unhandled error details:', {
+          code: error.code,
+          message: error.message,
+          reason: error.reason,
+          action: error.action
+        });
+        toast.error(`Failed to create bridge: ${errorMessage}`);
       }
     } finally {
       setIsCreating(false);
@@ -1002,8 +1119,8 @@ const CreateNewBridge = ({ networkKey, onClose, onBridgeCreated }) => {
                   <div className="text-sm text-secondary-300">
                     <div>Address: {createdBridgeAddress}</div>
                     <div>Type: {bridgeType}</div>
-                    <div>Home Network: {bridgeType === 'export' || bridgeType === 'export_wrapper' ? NETWORKS[networkKey]?.name : homeNetwork}</div>
-                    <div>Foreign Network: {bridgeType === 'import' || bridgeType === 'import_wrapper' ? NETWORKS[networkKey]?.name : foreignNetwork}</div>
+                    <div>Home Network: {bridgeType === 'export' || bridgeType === 'export_wrapper' ? getNetworkName(networkKey) : getNetworkName(homeNetwork)}</div>
+                    <div>Foreign Network: {bridgeType === 'import' || bridgeType === 'import_wrapper' ? getNetworkName(networkKey) : getNetworkName(foreignNetwork)}</div>
                   </div>
                 </div>
               )}

@@ -70,7 +70,7 @@ export const NETWORKS = {
         homeNetwork: 'Ethereum',
         homeTokenSymbol: 'USDT',
         homeTokenAddress: '0xdAC17F958D2ee523a2206206994597C13D831ec7',
-        foreignNetwork: '3DPass',
+        foreignNetwork: '3dpass',
         foreignTokenSymbol: 'wUSDT',
         foreignTokenAddress: '0xfBFBfbFA000000000000000000000000000000de',
         stakeTokenSymbol: 'USDT',
@@ -132,8 +132,8 @@ export const NETWORKS = {
   // },
   THREEDPASS: {
     id: 1333,
-    name: '3DPass',
-    symbol: '3DPass',
+    name: '3dpass',
+    symbol: 'P3D',
     rpcUrl: 'https://rpc-http.3dpass.org',
     explorer: 'https://3dpscan.xyz',
     isHybrid: true,
@@ -142,7 +142,7 @@ export const NETWORKS = {
     blockTime: 60, // Average block time in seconds (1 minute)
     claimBlockRatio: 0.5, // Average claims per block (configurable) - lower activity
     nativeCurrency: {
-      name: 'P3D',
+      name: '3dpass',
       symbol: 'P3D',
       decimals: 18,
       decimalsDisplayMultiplier: 1000000,
@@ -208,7 +208,7 @@ export const NETWORKS = {
       homeNetwork: 'Ethereum',
       homeTokenSymbol: 'USDT',
       homeTokenAddress: '0xdAC17F958D2ee523a2206206994597C13D831ec7',
-      foreignNetwork: '3DPass',
+      foreignNetwork: '3dpass',
       foreignTokenSymbol: 'wUSDT',
       foreignTokenAddress: '0xfBFBfbFA000000000000000000000000000000de',
       stakeTokenSymbol: 'P3D',
