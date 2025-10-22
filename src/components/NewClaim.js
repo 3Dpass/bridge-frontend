@@ -369,16 +369,12 @@ const NewClaim = ({ isOpen, onClose, selectedToken = null, selectedTransfer = nu
             // Transfer amounts from blockchain events are already in wei format
             amount: selectedTransfer.amount ? 
               (typeof selectedTransfer.amount === 'string' ? 
-                (selectedTransfer.amount.startsWith('0x') ? 
-                  selectedTransfer.amount : // Keep hex format as-is
-                  selectedTransfer.amount) : // Keep wei format as-is
-               selectedTransfer.amount.toString()) : '', // Convert BigNumber to string (wei format)
+                selectedTransfer.amount : // Keep string format as-is
+                selectedTransfer.amount.toString()) : '', // Convert BigNumber to string (wei format)
             reward: selectedTransfer.reward ? 
               (typeof selectedTransfer.reward === 'string' ? 
-                (selectedTransfer.reward.startsWith('0x') ? 
-                  selectedTransfer.reward : // Keep hex format as-is
-                  selectedTransfer.reward) : // Keep wei format as-is
-               selectedTransfer.reward.toString()) : '0', // Convert BigNumber to string (wei format)
+                selectedTransfer.reward : // Keep string format as-is
+                selectedTransfer.reward.toString()) : '0', // Convert BigNumber to string (wei format)
             txid: selectedTransfer.txid || selectedTransfer.transactionHash || '',
             txts: txtsValue,
             senderAddress: toChecksumAddress(selectedTransfer.fromAddress || selectedTransfer.senderAddress || ''),
