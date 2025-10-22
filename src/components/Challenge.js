@@ -22,7 +22,7 @@ const getMaxAllowance = () => {
 
 const Challenge = ({ claim, onChallengeSuccess, onClose }) => {
   const { account, provider, network, checkNetwork, switchToRequiredNetwork } = useWeb3();
-  const { get3DPassTokenDecimals, get3DPassTokenDecimalsDisplayMultiplier, getAllNetworksWithSettings } = useSettings();
+  const { get3DPassTokenDecimalsDisplayMultiplier, getAllNetworksWithSettings } = useSettings();
 
   
   const [loading, setLoading] = useState(false);

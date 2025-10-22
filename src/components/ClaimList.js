@@ -213,7 +213,7 @@ const getFieldMatchStatus = (claim, field) => {
 
 const ClaimList = () => {
   const { account, network, getNetworkWithSettings } = useWeb3();
-  const { getBridgeInstancesWithSettings, getHistorySearchDepth, getClaimSearchDepth, get3DPassTokenDecimalsDisplayMultiplier } = useSettings();
+  const { getBridgeInstancesWithSettings, getHistorySearchDepth, getClaimSearchDepth, getTokenDecimalsDisplayMultiplier } = useSettings();
   const [claims, setClaims] = useState([]);
   const [aggregatedData, setAggregatedData] = useState(null);
   const [loading, setLoading] = useState(false);
@@ -587,10 +587,21 @@ const ClaimList = () => {
       
       // Check if this is a P3D token and apply decimalsDisplayMultiplier
       if (tokenAddress) {
-        const decimalsDisplayMultiplier = get3DPassTokenDecimalsDisplayMultiplier(tokenAddress);
+        const decimalsDisplayMultiplier = getTokenDecimalsDisplayMultiplier(tokenAddress);
+        console.log('🔍 formatAmount multiplier check:', {
+          tokenAddress,
+          decimalsDisplayMultiplier,
+          rawValue,
+          hasMultiplier: !!decimalsDisplayMultiplier
+        });
         if (decimalsDisplayMultiplier) {
           // Apply the multiplier: 0.000001 * 1000000 = 1.0
           const multipliedNumber = rawValue * decimalsDisplayMultiplier;
+          console.log('🔍 Multiplier applied:', {
+            rawValue,
+            multiplier: decimalsDisplayMultiplier,
+            result: multipliedNumber
+          });
           return multipliedNumber.toFixed(6).replace(/\.?0+$/, '') || '0';
         }
       }
@@ -630,7 +641,7 @@ const ClaimList = () => {
       console.error('Error formatting amount:', amount, error);
       return '0.000000';
     }
-  }, [get3DPassTokenDecimalsDisplayMultiplier]);
+  }, [getTokenDecimalsDisplayMultiplier]);
 
   const getTransferTokenSymbol = useCallback((claim) => {
     // First, try to use the token symbol from bridge settings (most accurate)
@@ -762,6 +773,52 @@ const ClaimList = () => {
     
     return null;
   }, [network?.symbol, getNetworkWithSettings, getStakeTokenSymbol]);
+
+  const getTransferTokenAddress = useCallback((claim) => {
+    // Get transfer token symbol first
+    const tokenSymbol = getTransferTokenSymbol(claim);
+    
+    console.log('🔍 getTransferTokenAddress called:', {
+      tokenSymbol,
+      claimNetwork: claim.networkKey,
+      currentNetwork: network?.symbol,
+      claimType: claim.bridgeType
+    });
+    
+    // Try to get address from current network tokens first
+    const networkConfig = getNetworkWithSettings(network?.symbol);
+    if (networkConfig && networkConfig.tokens) {
+      const token = networkConfig.tokens[tokenSymbol];
+      if (token && token.address) {
+        console.log('🔍 Found token in current network:', {
+          tokenSymbol,
+          tokenAddress: token.address,
+          hasMultiplier: !!token.decimalsDisplayMultiplier
+        });
+        return token.address;
+      }
+    }
+    
+    // Try to get address from other networks
+    for (const networkKey of Object.keys(NETWORKS)) {
+      const network = NETWORKS[networkKey];
+      if (network.tokens && network.tokens[tokenSymbol]) {
+        const token = network.tokens[tokenSymbol];
+        if (token && token.address) {
+          console.log('🔍 Found token in other network:', {
+            networkKey,
+            tokenSymbol,
+            tokenAddress: token.address,
+            hasMultiplier: !!token.decimalsDisplayMultiplier
+          });
+          return token.address;
+        }
+      }
+    }
+    
+    console.log('🔍 Token address not found for symbol:', tokenSymbol);
+    return null;
+  }, [network?.symbol, getNetworkWithSettings, getTransferTokenSymbol]);
 
   const getStakeTokenDecimals = useCallback((claim) => {
     // Get stake token symbol first
@@ -986,12 +1043,12 @@ const ClaimList = () => {
 
     return {
       ...claim,
-      formattedAmount: formatAmount(claim.amount, decimals),
+      formattedAmount: formatAmount(claim.amount, decimals, getTransferTokenAddress(claim)),
       tokenSymbol: getTransferTokenSymbol(claim),
-      formattedStake: formatAmount(totalStake, stakeDecimals),
+      formattedStake: formatAmount(totalStake, stakeDecimals, getStakeTokenAddress(claim)),
       stakeTokenSymbol: getStakeTokenSymbol(claim)
     };
-  }, [getTokenDecimals, getStakeTokenDecimals, getTransferTokenSymbol, getStakeTokenSymbol, formatAmount]);
+  }, [getTokenDecimals, getStakeTokenDecimals, getTransferTokenSymbol, getStakeTokenSymbol, getTransferTokenAddress, getStakeTokenAddress, formatAmount]);
 
   const handleWithdraw = useCallback(async (claim) => {
     console.log('🔘 Withdraw button clicked for claim:', claim.actualClaimNum || claim.claimNum);
@@ -2343,7 +2400,8 @@ const ClaimList = () => {
                               <span className="text-white ml-2 font-medium">
                                 {(() => {
                                   const decimals = getTokenDecimals(claim.transfer);
-                                  const formatted = formatAmount(claim.transfer.amount, decimals);
+                                  const tokenAddress = getTransferTokenAddress(claim.transfer);
+                                  const formatted = formatAmount(claim.transfer.amount, decimals, tokenAddress);
                                   return `${formatted} ${getTransferTokenSymbol(claim.transfer)}`;
                                 })()}
                               </span>
@@ -2354,7 +2412,8 @@ const ClaimList = () => {
                                 <span className="text-white ml-2 font-medium">
                                   {(() => {
                                     const decimals = getTokenDecimals(claim.transfer);
-                                    const formatted = formatAmount(claim.transfer.reward, decimals);
+                                    const tokenAddress = getTransferTokenAddress(claim.transfer);
+                                    const formatted = formatAmount(claim.transfer.reward, decimals, tokenAddress);
                                     return `${formatted} ${getTransferTokenSymbol(claim.transfer)}`;
                                   })()}
                                 </span>
@@ -2427,7 +2486,8 @@ const ClaimList = () => {
                               <span className="text-white ml-2 font-medium">
                                 {(() => {
                                   const decimals = getTokenDecimals(claim);
-                                  const formatted = formatAmount(claim.amount, decimals);
+                                  const tokenAddress = getTransferTokenAddress(claim);
+                                  const formatted = formatAmount(claim.amount, decimals, tokenAddress);
                                   return `${formatted} ${getTransferTokenSymbol(claim)}`;
                                 })()}
                               </span>
@@ -2451,7 +2511,8 @@ const ClaimList = () => {
                                 <span className="text-white ml-2 font-medium">
                                   {(() => {
                                     const decimals = getTokenDecimals(claim);
-                                    const formatted = formatAmount(claim.reward, decimals);
+                                    const tokenAddress = getTransferTokenAddress(claim);
+                                    const formatted = formatAmount(claim.reward, decimals, tokenAddress);
                                     return `${formatted} ${getTransferTokenSymbol(claim)}`;
                                   })()}
                                 </span>
@@ -2634,7 +2695,8 @@ const ClaimList = () => {
                         <span className="text-white ml-2 font-medium">
                           {(() => {
                             const decimals = getTokenDecimals(claim);
-                            const formatted = formatAmount(claim.amount, decimals);
+                            const tokenAddress = getTransferTokenAddress(claim);
+                            const formatted = formatAmount(claim.amount, decimals, tokenAddress);
                             return `${formatted} ${getTransferTokenSymbol(claim)}`;
                           })()}
                         </span>
@@ -2646,7 +2708,8 @@ const ClaimList = () => {
                           <span className="text-white ml-2 font-medium">
                             {(() => {
                               const decimals = getTokenDecimals(claim);
-                              const formatted = formatAmount(claim.reward, decimals);
+                              const tokenAddress = getTransferTokenAddress(claim);
+                              const formatted = formatAmount(claim.reward, decimals, tokenAddress);
                               return `${formatted} ${getTransferTokenSymbol(claim)}`;
                             })()}
                           </span>
@@ -2707,7 +2770,8 @@ const ClaimList = () => {
                         <span className="text-white ml-2 font-medium">
                           {(() => {
                             const decimals = getTokenDecimals(claim);
-                            const formatted = formatAmount(claim.amount, decimals);
+                            const tokenAddress = getTransferTokenAddress(claim);
+                            const formatted = formatAmount(claim.amount, decimals, tokenAddress);
                             return `${formatted} ${getTransferTokenSymbol(claim)}`;
                           })()}
                         </span>
@@ -2719,7 +2783,8 @@ const ClaimList = () => {
                           <span className="text-white ml-2 font-medium">
                             {(() => {
                               const decimals = getTokenDecimals(claim);
-                              const formatted = formatAmount(claim.reward, decimals);
+                              const tokenAddress = getTransferTokenAddress(claim);
+                              const formatted = formatAmount(claim.reward, decimals, tokenAddress);
                               return `${formatted} ${getTransferTokenSymbol(claim)}`;
                             })()}
                           </span>
