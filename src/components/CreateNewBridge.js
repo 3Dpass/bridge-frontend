@@ -23,7 +23,8 @@ const DEFAULT_RATIO = '110'; // 1.1%
 const DEFAULT_LARGE_THRESHOLD = '10000'; // 10k tokens
 const DEFAULT_CHALLENGING_PERIODS = [14*3600, 3*24*3600, 7*24*3600, 30*24*3600]; // [14h, 3d, 7d, 30d]
 const DEFAULT_LARGE_CHALLENGING_PERIODS = [1*7*24*3600, 30*24*3600, 60*24*3600]; // [1week, 30days, 60days]
-const GAS_LIMIT = 5000000;
+const GAS_LIMIT = 5000000; // Fallback gas limit for wrapper bridges
+const GAS_BUFFER_MULTIPLIER = 1.2; // 20% buffer for gas estimation
 
 const CreateNewBridge = ({ networkKey, onClose, onBridgeCreated }) => {
   const { signer, account } = useWeb3();
@@ -58,8 +59,62 @@ const CreateNewBridge = ({ networkKey, onClose, onBridgeCreated }) => {
 
   // Get network name from network key
   const getNetworkName = (networkKey) => {
+    console.log('🔍 getNetworkName called with:', networkKey);
     const network = getNetworkWithSettings(networkKey);
-    return network?.name || networkKey;
+    console.log('🔍 getNetworkWithSettings result:', network);
+    const result = network?.name || networkKey;
+    console.log('🔍 getNetworkName returning:', result);
+    return result;
+  };
+
+  // Estimate gas for regular Import/Export bridges
+  const estimateGasForRegularBridge = async (factoryContract, bridgeType, params) => {
+    try {
+      console.log('🔍 Estimating gas for', bridgeType, 'bridge...');
+      
+      let gasEstimate;
+      if (bridgeType === 'export') {
+        gasEstimate = await factoryContract.estimateGas.createExport(
+          params.foreign_network,
+          params.foreign_asset,
+          params.tokenAddress,
+          params.counterstake_coef100,
+          params.ratio100,
+          params.large_threshold,
+          params.challenging_periods,
+          params.large_challenging_periods
+        );
+      } else if (bridgeType === 'import') {
+        gasEstimate = await factoryContract.estimateGas.createImport(
+          params.home_network,
+          params.home_asset,
+          params.name,
+          params.symbol,
+          params.stakeTokenAddr,
+          params.oracleAddr,
+          params.counterstake_coef100,
+          params.ratio100,
+          params.large_threshold,
+          params.challenging_periods,
+          params.large_challenging_periods
+        );
+      }
+      
+      // Add 20% buffer to the estimated gas
+      const gasWithBuffer = gasEstimate.mul(Math.floor(GAS_BUFFER_MULTIPLIER * 100)).div(100);
+      
+      console.log('🔍 Gas estimation result:', {
+        estimated: gasEstimate.toString(),
+        withBuffer: gasWithBuffer.toString(),
+        bufferPercent: (GAS_BUFFER_MULTIPLIER - 1) * 100
+      });
+      
+      return gasWithBuffer;
+    } catch (error) {
+      console.warn('⚠️ Gas estimation failed, using fallback:', error.message);
+      // Return fallback gas limit if estimation fails
+      return ethers.BigNumber.from(GAS_LIMIT);
+    }
   };
 
   // Get available oracles for this network
@@ -67,12 +122,17 @@ const CreateNewBridge = ({ networkKey, onClose, onBridgeCreated }) => {
     const networkWithSettings = getNetworkWithSettings(networkKey);
     const oracles = networkWithSettings?.oracles || {};
     
-    return Object.entries(oracles).map(([oracleKey, oracleConfig]) => ({
+    const oracleList = Object.entries(oracles).map(([oracleKey, oracleConfig]) => ({
       key: oracleKey,
       address: oracleConfig.address,
       name: oracleConfig.name,
       description: oracleConfig.description
     }));
+    
+    console.log('🔍 Available oracles for', networkKey, ':', oracleList);
+    console.log('🔍 Raw oracles config:', oracles);
+    
+    return oracleList;
   }, [networkKey]);
 
   // Get available networks (excluding current network)
@@ -208,12 +268,18 @@ const CreateNewBridge = ({ networkKey, onClose, onBridgeCreated }) => {
 
   // Auto-set home network based on current network and bridge type
   useEffect(() => {
+    console.log('🔍 Network auto-selection effect triggered:', { networkKey, bridgeType });
     if (bridgeType === 'export' || bridgeType === 'export_wrapper') {
       // For export bridges: home network is current network
+      console.log('🔍 Setting homeNetwork to current network:', networkKey);
       setHomeNetwork(networkKey);
     } else if (bridgeType === 'import' || bridgeType === 'import_wrapper') {
       // For import bridges: foreign network is current network
+      console.log('🔍 Setting foreignNetwork to current network:', networkKey);
       setForeignNetwork(networkKey);
+      // Clear home network so user can select it
+      console.log('🔍 Clearing homeNetwork for user selection');
+      setHomeNetwork('');
     }
   }, [networkKey, bridgeType]);
 
@@ -234,10 +300,20 @@ const CreateNewBridge = ({ networkKey, onClose, onBridgeCreated }) => {
   // Auto-set oracle if only one available
   useEffect(() => {
     const oracles = getAvailableOracles();
+    console.log('🔍 Auto-selecting oracle. Available oracles:', oracles);
     if (oracles.length === 1) {
+      console.log('🔍 Auto-selecting oracle address:', oracles[0].address);
       setOracleAddress(oracles[0].address);
+      console.log('🔍 Oracle address state set to:', oracles[0].address);
     }
   }, [getAvailableOracles]);
+
+  // Debug oracle address changes
+  useEffect(() => {
+    console.log('🔍 Oracle address state changed to:', oracleAddress);
+  }, [oracleAddress]);
+
+
 
   // Create bridge contract
   const handleCreateBridge = async () => {
@@ -267,13 +343,17 @@ const CreateNewBridge = ({ networkKey, onClose, onBridgeCreated }) => {
       finalForeignAsset = foreignAsset; // User selects foreign asset
     } else if (bridgeType === 'import') {
       // Import bridges: home = user selected, foreign = current network
-      finalHomeNetwork = getNetworkName(homeNetwork);
+      console.log('🔍 Import bridge - homeNetwork state:', homeNetwork);
+      console.log('🔍 Import bridge - networkKey:', networkKey);
+      finalHomeNetwork = homeNetwork ? getNetworkName(homeNetwork) : '';
       finalForeignNetwork = getNetworkName(networkKey);
       finalHomeAsset = homeAsset; // User selects home asset
       finalForeignAsset = stakeToken; // Foreign asset is the stake token
     } else if (bridgeType === 'import_wrapper') {
       // Import wrapper bridges: home = user selected, foreign = current network
-      finalHomeNetwork = getNetworkName(homeNetwork);
+      console.log('🔍 Import wrapper bridge - homeNetwork state:', homeNetwork);
+      console.log('🔍 Import wrapper bridge - networkKey:', networkKey);
+      finalHomeNetwork = homeNetwork ? getNetworkName(homeNetwork) : '';
       finalForeignNetwork = getNetworkName(networkKey);
       finalHomeAsset = homeAsset; // User selects home asset
       finalForeignAsset = foreignAsset; // User selects foreign asset (non-native precompile)
@@ -335,11 +415,13 @@ const CreateNewBridge = ({ networkKey, onClose, onBridgeCreated }) => {
           ratio100: parseInt(ratio),
           large_threshold: ethers.utils.parseEther(largeThreshold),
           challenging_periods: challengingPeriods,
-          large_challenging_periods: largeChallengingPeriods,
-          gasLimit: GAS_LIMIT
+          large_challenging_periods: largeChallengingPeriods
         };
         
         console.log('Creating Export Bridge with parameters:', exportParams);
+        
+        // Estimate gas for export bridge
+        const estimatedGas = await estimateGasForRegularBridge(factoryContract, 'export', exportParams);
         
         tx = await factoryContract.createExport(
           finalForeignNetwork, // foreign_network
@@ -350,7 +432,7 @@ const CreateNewBridge = ({ networkKey, onClose, onBridgeCreated }) => {
           ethers.utils.parseEther(largeThreshold), // large_threshold
           challengingPeriods, // challenging_periods
           largeChallengingPeriods, // large_challenging_periods
-          { gasLimit: GAS_LIMIT }
+          { gasLimit: estimatedGas }
         );
       } else if (bridgeType === 'import') {
         // Create import bridge
@@ -366,11 +448,14 @@ const CreateNewBridge = ({ networkKey, onClose, onBridgeCreated }) => {
           ratio100: parseInt(ratio),
           large_threshold: ethers.utils.parseEther(largeThreshold),
           challenging_periods: challengingPeriods,
-          large_challenging_periods: largeChallengingPeriods,
-          gasLimit: GAS_LIMIT
+          large_challenging_periods: largeChallengingPeriods
         };
         
         console.log('Creating Import Bridge with parameters:', importParams);
+        console.log('🔍 Oracle address being used in contract call:', oracleAddress);
+        
+        // Estimate gas for import bridge
+        const estimatedGas = await estimateGasForRegularBridge(factoryContract, 'import', importParams);
         
         tx = await factoryContract.createImport(
           finalHomeNetwork, // home_network
@@ -384,7 +469,7 @@ const CreateNewBridge = ({ networkKey, onClose, onBridgeCreated }) => {
           ethers.utils.parseEther(largeThreshold), // large_threshold
           challengingPeriods, // challenging_periods
           largeChallengingPeriods, // large_challenging_periods
-          { gasLimit: GAS_LIMIT }
+          { gasLimit: estimatedGas }
         );
       } else if (bridgeType === 'import_wrapper') {
         // Create import wrapper bridge
@@ -404,6 +489,7 @@ const CreateNewBridge = ({ networkKey, onClose, onBridgeCreated }) => {
         };
         
         console.log('Creating Import Wrapper Bridge with parameters:', importWrapperParams);
+        console.log('🔍 Oracle address being used in contract call:', oracleAddress);
         
         tx = await factoryContract.createImportWrapper(
           finalHomeNetwork, // home_network
@@ -420,12 +506,11 @@ const CreateNewBridge = ({ networkKey, onClose, onBridgeCreated }) => {
         );
       } else if (bridgeType === 'export_wrapper') {
         // Create export wrapper bridge
-        // For export wrapper: foreign_network, foreign_asset, precompileAddress, stakeTokenAddr (NO oracle)
+        // For export wrapper: foreign_network, foreign_asset, tokenAddr (precompile address), counterstake params
         const exportWrapperParams = {
           foreign_network: finalForeignNetwork,
           foreign_asset: finalForeignAsset,
-          precompileAddress: finalHomeAsset,
-          stakeTokenAddr: finalHomeAsset,
+          tokenAddr: finalHomeAsset, // precompile address for wrapper
           counterstake_coef100: parseInt(counterstakeCoef),
           ratio100: parseInt(ratio),
           large_threshold: ethers.utils.parseEther(largeThreshold),
@@ -436,11 +521,10 @@ const CreateNewBridge = ({ networkKey, onClose, onBridgeCreated }) => {
         
         console.log('Creating Export Wrapper Bridge with parameters:', exportWrapperParams);
         
-        tx = await factoryContract.createExportWrapper(
+        tx = await factoryContract.createExport(
           finalForeignNetwork, // foreign_network
           finalForeignAsset, // foreign_asset
-          finalHomeAsset, // precompileAddress
-          finalHomeAsset, // stakeTokenAddr
+          finalHomeAsset, // tokenAddr (precompile address for wrapper)
           parseInt(counterstakeCoef), // counterstake_coef100
           parseInt(ratio), // ratio100
           ethers.utils.parseEther(largeThreshold), // large_threshold
@@ -468,7 +552,7 @@ const CreateNewBridge = ({ networkKey, onClose, onBridgeCreated }) => {
         'export': 'NewExport',
         'import': 'NewImport',
         'import_wrapper': 'NewImportWrapper',
-        'export_wrapper': 'NewExportWrapper'
+        'export_wrapper': 'NewExport' // Export wrapper uses same event as regular export
       };
       
       const eventName = eventMap[bridgeType];
@@ -681,7 +765,10 @@ const CreateNewBridge = ({ networkKey, onClose, onBridgeCreated }) => {
                       </label>
                       <select
                         value={homeNetwork}
-                        onChange={(e) => setHomeNetwork(e.target.value)}
+                        onChange={(e) => {
+                          console.log('🔍 Home network changed to:', e.target.value);
+                          setHomeNetwork(e.target.value);
+                        }}
                         className="w-full input-field"
                       >
                         <option value="">Select home network...</option>
@@ -769,11 +856,16 @@ const CreateNewBridge = ({ networkKey, onClose, onBridgeCreated }) => {
                       className="w-full input-field"
                     >
                       <option value="">Select oracle...</option>
-                      {availableOracles.map((oracle) => (
-                        <option key={oracle.key} value={oracle.address}>
-                          {oracle.name} ({oracle.address.slice(0, 8)}...)
-                        </option>
-                      ))}
+                      {availableOracles.map((oracle) => {
+                        console.log('🔍 Rendering oracle option (import_wrapper):', oracle);
+                        console.log('🔍 Current oracleAddress state (import_wrapper):', oracleAddress);
+                        console.log('🔍 Is this oracle selected (import_wrapper)?', oracleAddress === oracle.address);
+                        return (
+                          <option key={oracle.key} value={oracle.address}>
+                            {oracle.name} ({oracle.address.slice(0, 8)}...)
+                          </option>
+                        );
+                      })}
                     </select>
                     {oracleAddress && (
                       <p className="text-secondary-400 text-xs mt-1">
@@ -860,7 +952,10 @@ const CreateNewBridge = ({ networkKey, onClose, onBridgeCreated }) => {
                           </label>
                           <select
                             value={homeNetwork}
-                            onChange={(e) => setHomeNetwork(e.target.value)}
+                            onChange={(e) => {
+                              console.log('🔍 Home network changed to (import):', e.target.value);
+                              setHomeNetwork(e.target.value);
+                            }}
                             className="w-full input-field"
                           >
                             <option value="">Select home network...</option>
@@ -962,11 +1057,16 @@ const CreateNewBridge = ({ networkKey, onClose, onBridgeCreated }) => {
                         className="w-full input-field"
                       >
                         <option value="">Select oracle...</option>
-                        {availableOracles.map((oracle) => (
+                      {availableOracles.map((oracle) => {
+                        console.log('🔍 Rendering oracle option:', oracle);
+                        console.log('🔍 Current oracleAddress state:', oracleAddress);
+                        console.log('🔍 Is this oracle selected?', oracleAddress === oracle.address);
+                        return (
                           <option key={oracle.key} value={oracle.address}>
                             {oracle.name} ({oracle.address.slice(0, 8)}...)
                           </option>
-                        ))}
+                        );
+                      })}
                       </select>
                       {oracleAddress && (
                         <p className="text-secondary-400 text-xs mt-1">

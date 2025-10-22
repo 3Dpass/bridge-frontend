@@ -59,11 +59,20 @@ export const NETWORKS = {
         isNative: false,
         standard: 'ERC20',
       },
-
+      P3D: {
+        address: '0x4f3a4e37701402C61146071309e45A15843025E1',
+        symbol: 'P3D',
+        decimals: 18,
+        name: 'Bridged 3dpass P3D on Ethereum blockchain',
+        isPrecompile: false,
+        isNative: false,
+        standard: 'ERC20',
+        decimalsDisplayMultiplier: 1000000,
+      },
     },
     // Bridge instances deployed on Ethereum
     bridges: {
-      // Export bridges (External -> 3DPass)
+      // Export bridges (Ethereum <-> External)
       USDT_WUSDT_EXPORT: {
         address: '0x3a96AC42A28D5610Aca2A79AE782988110108eDe',
         type: 'export',
@@ -78,6 +87,22 @@ export const NETWORKS = {
         description: 'Ethereum USDT → 3DPass wUSDT Bridge',
         isIssuerBurner: false
       },
+      // Import bridges (External <-> Ethereum)
+      P3D_IMPORT: {
+        address: '0x4f3a4e37701402C61146071309e45A15843025E1',
+        type: 'import',
+        homeNetwork: 'Ethereum',
+        homeTokenSymbol: 'P3D',
+        homeTokenAddress: '0x4f3a4e37701402C61146071309e45A15843025E1',
+        foreignNetwork: '3dpass',
+        foreignTokenSymbol: 'P3D',
+        foreignTokenAddress: P3D_PRECOMPILE_ADDRESS,
+        stakeTokenSymbol: 'ETH',
+        stakeTokenAddress: ADDRESS_ZERO,
+        oracleAddress: '0xdAC17F958D2ee523a2206206994597C13D831ec7',
+        description: 'P3D Import Bridge (3DPass → Ethereum)',
+        isIssuerBurner: true
+        }
     },
     // Assistant contracts deployed on Ethereum
     assistants: {
@@ -203,20 +228,35 @@ export const NETWORKS = {
     bridges: {
     // Import Wrapper bridges (External -> 3DPass)
     USDT_IMPORT: {
-      address: '0x00D5f00250434e76711e8127A37c6f84dBbDAA4C',
-      type: 'import_wrapper',
-      homeNetwork: 'Ethereum',
-      homeTokenSymbol: 'USDT',
-      homeTokenAddress: '0xdAC17F958D2ee523a2206206994597C13D831ec7',
-      foreignNetwork: '3dpass',
-      foreignTokenSymbol: 'wUSDT',
-      foreignTokenAddress: '0xfBFBfbFA000000000000000000000000000000de',
-      stakeTokenSymbol: 'P3D',
-      stakeTokenAddress: P3D_PRECOMPILE_ADDRESS,
-      oracleAddress: '0x237527b4F7bb0030Bd5B7B863839Aa121cefd5fB',
-      description: 'USDT Import Wrapper Bridge (Ethereum → 3DPass)',
-      isIssuerBurner: true
-      }
+        address: '0x00D5f00250434e76711e8127A37c6f84dBbDAA4C',
+        type: 'import_wrapper',
+        homeNetwork: 'Ethereum',
+        homeTokenSymbol: 'USDT',
+        homeTokenAddress: '0xdAC17F958D2ee523a2206206994597C13D831ec7',
+        foreignNetwork: '3dpass',
+        foreignTokenSymbol: 'wUSDT',
+        foreignTokenAddress: '0xfBFBfbFA000000000000000000000000000000de',
+        stakeTokenSymbol: 'P3D',
+        stakeTokenAddress: P3D_PRECOMPILE_ADDRESS,
+        oracleAddress: '0x237527b4F7bb0030Bd5B7B863839Aa121cefd5fB',
+        description: 'USDT Import Wrapper Bridge (Ethereum → 3DPass)',
+        isIssuerBurner: true
+      },
+      // Export bridges (3dpass <-> External)
+      P3D_EXPORT: {
+        address: '0x50fcE1D58b41c3600C74de03238Eee71aFDfBf1F',
+        type: 'export',
+        homeNetwork: '3dpass',
+        homeTokenSymbol: 'P3D',
+        homeTokenAddress: P3D_PRECOMPILE_ADDRESS,
+        foreignNetwork: 'Ethereum',
+        foreignTokenSymbol: 'P3D',
+        foreignTokenAddress: '0x4f3a4e37701402C61146071309e45A15843025E1',
+        stakeTokenSymbol: 'P3D',
+        stakeTokenAddress: P3D_PRECOMPILE_ADDRESS,
+        description: '3DPass P3D → Ethereum P3D Bridge',
+        isIssuerBurner: false
+      },
     },
     // Assistant contracts deployed on 3DPass
     assistants: {

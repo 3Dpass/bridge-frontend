@@ -56,18 +56,35 @@ const getTokenDecimals = (networkId, tokenAddress) => {
   return token?.decimals || 18; // Default fallback
 };
 
-const getStakeTokenDecimals = (networkId) => {
+const getStakeTokenDecimals = (networkId, stakeTokenAddress = null) => {
   const networkConfig = getNetworkConfig(networkId);
   if (!networkConfig) return 18; // Default fallback
   
+  // If stakeTokenAddress is provided, try to find the token in the network configuration
+  if (stakeTokenAddress) {
+    // Check if it's a native token (zero address)
+    if (stakeTokenAddress === ethers.constants.AddressZero) {
+      return networkConfig.nativeCurrency?.decimals || 18;
+    }
+    
+    // Look for the token in the network's tokens configuration
+    const token = Object.values(networkConfig.tokens || {}).find(
+      t => t.address?.toLowerCase() === stakeTokenAddress.toLowerCase()
+    );
+    if (token) {
+      return token.decimals;
+    }
+  }
+  
+  // Fallback to network-specific defaults
   // For 3DPass, P3D has 18 decimals
   if (networkId === NETWORKS.THREEDPASS.id) {
     return 18;
   }
   
-  // For Ethereum, USDT has 6 decimals
+  // For Ethereum, default to ETH decimals (18) instead of hardcoded USDT decimals (6)
   if (networkId === NETWORKS.ETHEREUM.id) {
-    return 6;
+    return networkConfig.nativeCurrency?.decimals || 18;
   }
   
   return 18; // Default fallback
@@ -87,11 +104,23 @@ const getStakeTokenDisplayMultiplier = (networkId) => {
 };
 
 // Helper function to format stake token amount for display
-const formatStakeTokenForDisplay = (amount, networkId) => {
-  const multiplier = getStakeTokenDisplayMultiplier(networkId);
+const formatStakeTokenForDisplay = (amount, networkId, stakeTokenAddress = null) => {
+  // Only apply display multiplier for 3DPass native tokens (P3D)
+  // For other networks or ERC20 tokens, don't apply any multiplier
+  if (networkId === NETWORKS.THREEDPASS.id && stakeTokenAddress === NETWORKS.THREEDPASS.tokens.P3D.address) {
+    const multiplier = getStakeTokenDisplayMultiplier(networkId);
+    const numericAmount = parseFloat(amount);
+    if (isNaN(numericAmount)) return amount;
+    return (numericAmount * multiplier).toString();
+  }
+  
+  // For all other cases (ETH, USDT, etc.), format to avoid scientific notation
   const numericAmount = parseFloat(amount);
   if (isNaN(numericAmount)) return amount;
-  return (numericAmount * multiplier).toString();
+  
+  // Use toFixed with enough precision to avoid scientific notation
+  // For very small numbers, use up to 18 decimal places
+  return numericAmount.toFixed(18).replace(/\.?0+$/, '');
 };
 
 // Helper function to check if this is a third-party claim
@@ -300,9 +329,14 @@ const NewClaim = ({ isOpen, onClose, selectedToken = null, selectedTransfer = nu
             // On 3DPass: use foreignTokenAddress (token on 3DPass side)
             tokenAddress = selectedTransfer.foreignTokenAddress || selectedTransfer.toTokenAddress || '';
           } else if (network?.id === NETWORKS.ETHEREUM.id) {
-            // On Ethereum: for repatriation claims, use homeTokenAddress (token on Ethereum side)
-            // This is the token that will be claimed (USDT on Ethereum)
-            tokenAddress = selectedTransfer.homeTokenAddress || selectedTransfer.fromTokenAddress || '';
+            // On Ethereum: determine based on event type
+            if (selectedTransfer.eventType === 'NewExpatriation') {
+              // For expatriation: use foreignTokenAddress (token on destination network - Ethereum)
+              tokenAddress = selectedTransfer.foreignTokenAddress || selectedTransfer.toTokenAddress || '';
+            } else {
+              // For repatriation: use homeTokenAddress (token on Ethereum side)
+              tokenAddress = selectedTransfer.homeTokenAddress || selectedTransfer.fromTokenAddress || '';
+            }
           } else {
             // Fallback: try both
             tokenAddress = selectedTransfer.foreignTokenAddress || selectedTransfer.homeTokenAddress || selectedTransfer.toTokenAddress || '';
@@ -332,27 +366,19 @@ const NewClaim = ({ isOpen, onClose, selectedToken = null, selectedTransfer = nu
             ...prev,
             tokenAddress: tokenAddress.toLowerCase(),
             // CRITICAL: Preserve exact format to match bot expectations
+            // Transfer amounts from blockchain events are already in wei format
             amount: selectedTransfer.amount ? 
               (typeof selectedTransfer.amount === 'string' ? 
                 (selectedTransfer.amount.startsWith('0x') ? 
-                  ethers.utils.formatUnits(selectedTransfer.amount, tokenDecimals) : 
-                  selectedTransfer.amount) : 
-               ethers.utils.formatUnits(selectedTransfer.amount, tokenDecimals)) : '',
-            reward: (() => {
-              const rewardValue = selectedTransfer.reward ? 
-                (typeof selectedTransfer.reward === 'string' ? 
-                  (selectedTransfer.reward.startsWith('0x') ? 
-                    ethers.utils.formatUnits(selectedTransfer.reward, tokenDecimals) : 
-                    selectedTransfer.reward) : 
-                 ethers.utils.formatUnits(selectedTransfer.reward, tokenDecimals)) : '0';
-              console.log('🔍 Pre-filling reward from transfer (bot-compatible format):', {
-                originalReward: selectedTransfer.reward,
-                formattedReward: rewardValue,
-                tokenDecimals,
-                formatPreserved: true
-              });
-              return rewardValue;
-            })(),
+                  selectedTransfer.amount : // Keep hex format as-is
+                  selectedTransfer.amount) : // Keep wei format as-is
+               selectedTransfer.amount.toString()) : '', // Convert BigNumber to string (wei format)
+            reward: selectedTransfer.reward ? 
+              (typeof selectedTransfer.reward === 'string' ? 
+                (selectedTransfer.reward.startsWith('0x') ? 
+                  selectedTransfer.reward : // Keep hex format as-is
+                  selectedTransfer.reward) : // Keep wei format as-is
+               selectedTransfer.reward.toString()) : '0', // Convert BigNumber to string (wei format)
             txid: selectedTransfer.txid || selectedTransfer.transactionHash || '',
             txts: txtsValue,
             senderAddress: toChecksumAddress(selectedTransfer.fromAddress || selectedTransfer.senderAddress || ''),
@@ -497,11 +523,18 @@ const NewClaim = ({ isOpen, onClose, selectedToken = null, selectedTransfer = nu
               tokenAddresses.add(bridge.foreignTokenAddress.toLowerCase());
               console.log('✅ Added export bridge foreign token (3DPass):', bridge.foreignTokenAddress);
             }
-          } else {
-            // On Ethereum: load homeTokenAddress (token on Ethereum side)
-            if (bridge.homeTokenAddress) {
+          } else if (network?.id === NETWORKS.ETHEREUM.id) {
+            // On Ethereum: only load homeTokenAddress if the bridge's homeNetwork is Ethereum
+            if (bridge.homeNetwork === 'Ethereum' && bridge.homeTokenAddress) {
               tokenAddresses.add(bridge.homeTokenAddress.toLowerCase());
               console.log('✅ Added export bridge home token (Ethereum):', bridge.homeTokenAddress);
+            } else {
+              console.log('⏭️ Skipping export bridge - homeNetwork is not Ethereum:', {
+                bridgeType: bridge.type,
+                homeNetwork: bridge.homeNetwork,
+                foreignNetwork: bridge.foreignNetwork,
+                currentNetwork: network?.name
+              });
             }
           }
         }
@@ -774,26 +807,67 @@ const NewClaim = ({ isOpen, onClose, selectedToken = null, selectedTransfer = nu
     if (!contractSettings || !formData.txts || !provider) return { isValid: true, message: '' };
 
     try {
-      // Get current block timestamp from the provider (after network switch)
+      // Get current block timestamp from the provider (force fresh fetch)
+      console.log('🔍 Fetching fresh current block for timestamp validation...');
       const currentBlock = await provider.getBlock('latest');
       const currentBlockTimestamp = currentBlock.timestamp;
+      
+      console.log('🔍 Fresh block data:', {
+        blockNumber: currentBlock.number,
+        timestamp: currentBlockTimestamp,
+        timestampDate: new Date(currentBlockTimestamp * 1000).toISOString(),
+        blockHash: currentBlock.hash
+      });
+      
       const transferTimestamp = parseInt(formData.txts);
       const minTxAge = contractSettings.min_tx_age?.toNumber ? contractSettings.min_tx_age.toNumber() : parseInt(contractSettings.min_tx_age);
       
+      // Check if the current block timestamp seems stale (more than 30 seconds old)
+      const now = Math.floor(Date.now() / 1000);
+      const blockAge = now - currentBlockTimestamp;
+      console.log('🔍 Block age check:', {
+        currentTime: now,
+        blockTimestamp: currentBlockTimestamp,
+        blockAgeSeconds: blockAge,
+        blockAgeMinutes: Math.floor(blockAge / 60),
+        isStale: blockAge > 30
+      });
+      
+      // If block seems stale, try to get a more recent block
+      let finalCurrentTimestamp = currentBlockTimestamp;
+      if (blockAge > 30) {
+        console.log('⚠️ Block seems stale, trying to get a more recent block...');
+        try {
+          // Try to get a block that's a few blocks ahead
+          const recentBlock = await provider.getBlock(currentBlock.number + 3);
+          if (recentBlock && recentBlock.timestamp > currentBlockTimestamp) {
+            finalCurrentTimestamp = recentBlock.timestamp;
+            console.log('✅ Got more recent block:', {
+              blockNumber: recentBlock.number,
+              timestamp: finalCurrentTimestamp,
+              timestampDate: new Date(finalCurrentTimestamp * 1000).toISOString()
+            });
+          }
+        } catch (error) {
+          console.log('⚠️ Could not get more recent block, using original:', error.message);
+        }
+      }
+      
       const requiredTimestamp = transferTimestamp + minTxAge;
-      const timeRemaining = requiredTimestamp - currentBlockTimestamp;
+      const timeRemaining = requiredTimestamp - finalCurrentTimestamp;
       
       console.log('🔍 Timestamp validation:', {
-        currentBlockTimestamp,
+        originalBlockTimestamp: currentBlockTimestamp,
+        finalCurrentTimestamp,
         currentBlockNumber: currentBlock.number,
         transferTimestamp,
         minTxAge,
         requiredTimestamp,
         timeRemaining,
-        isValid: currentBlockTimestamp >= requiredTimestamp
+        isValid: finalCurrentTimestamp >= requiredTimestamp
       });
 
-      if (currentBlockTimestamp < requiredTimestamp) {
+      if (finalCurrentTimestamp < requiredTimestamp) {
         const minutesRemaining = Math.ceil(timeRemaining / 60);
         const hoursRemaining = Math.floor(minutesRemaining / 60);
         const remainingMinutes = minutesRemaining % 60;
@@ -832,18 +906,26 @@ const NewClaim = ({ isOpen, onClose, selectedToken = null, selectedTransfer = nu
         if (network?.id === NETWORKS.THREEDPASS.id) {
           balance = await get3DPassTokenBalance(provider, stakeTokenAddress, account);
         } else {
-          // For other networks (like Ethereum), use standard ERC20 balance
-          const tokenContract = new ethers.Contract(stakeTokenAddress, [
-            'function balanceOf(address) view returns (uint256)',
-            'function decimals() view returns (uint8)'
-          ], provider);
-          
-          const [balanceWei, decimals] = await Promise.all([
-            tokenContract.balanceOf(account),
-            tokenContract.decimals()
-          ]);
-          
-          balance = ethers.utils.formatUnits(balanceWei, decimals); // Use correct decimals for stake token
+          // Check if this is a native token (zero address) - for native tokens, get ETH balance
+          if (stakeTokenAddress === ethers.constants.AddressZero) {
+            // For native ETH, get the account's ETH balance
+            const balanceWei = await provider.getBalance(account);
+            const stakeTokenDecimals = getStakeTokenDecimals(network?.id, stakeTokenAddress); // Use decimals from settings
+            balance = ethers.utils.formatUnits(balanceWei, stakeTokenDecimals);
+          } else {
+            // For ERC20 tokens, use standard ERC20 balance
+            const tokenContract = new ethers.Contract(stakeTokenAddress, [
+              'function balanceOf(address) view returns (uint256)',
+              'function decimals() view returns (uint8)'
+            ], provider);
+            
+            const [balanceWei, decimals] = await Promise.all([
+              tokenContract.balanceOf(account),
+              tokenContract.decimals()
+            ]);
+            
+            balance = ethers.utils.formatUnits(balanceWei, decimals); // Use correct decimals for stake token
+          }
         }
         
         setStakeTokenBalance(balance);
@@ -900,6 +982,46 @@ const NewClaim = ({ isOpen, onClose, selectedToken = null, selectedTransfer = nu
       if (exportBridge) {
         console.log('✅ Found export bridge for repatriation:', exportBridge);
         setSelectedBridge(exportBridge);
+        return;
+      }
+    }
+
+        // For expatriation claims, look for import bridges on the destination network
+        if (selectedTransfer && selectedTransfer.eventType === 'NewExpatriation') {
+          console.log('🔍 Expatriation detected - looking for import bridge on destination network');
+          
+          // Look for import bridge for this token (for expatriation claims)
+          // The claim should be created on the destination network using an import bridge
+          const importBridge = Object.values(allBridges).find(bridge => {
+            // For non-hybrid networks (like Ethereum), only look for 'import' bridges
+            // Import wrapper bridges cannot be deployed on non-hybrid networks
+            const isImportType = network?.isHybrid ? 
+              (bridge.type === 'import' || bridge.type === 'import_wrapper') : 
+              bridge.type === 'import';
+            
+            const matches = isImportType && 
+              bridge.homeTokenAddress?.toLowerCase() === formData.tokenAddress.toLowerCase() &&
+              bridge.homeNetwork === network?.name;
+            
+            console.log('🔍 Checking import bridge for expatriation:', {
+              bridgeType: bridge.type,
+              bridgeHomeTokenAddress: bridge.homeTokenAddress,
+              bridgeForeignTokenAddress: bridge.foreignTokenAddress,
+              bridgeHomeNetwork: bridge.homeNetwork,
+              bridgeForeignNetwork: bridge.foreignNetwork,
+              formDataTokenAddress: formData.tokenAddress,
+              currentNetwork: network?.name,
+              isHybrid: network?.isHybrid,
+              isImportType,
+              matches
+            });
+            
+            return matches;
+          });
+      
+      if (importBridge) {
+        console.log('✅ Found import bridge for expatriation:', importBridge);
+        setSelectedBridge(importBridge);
         return;
       }
     }
@@ -996,7 +1118,7 @@ const NewClaim = ({ isOpen, onClose, selectedToken = null, selectedTransfer = nu
 
     console.log('❌ No bridge found for token:', formData.tokenAddress, 'on network:', network?.name);
     setSelectedBridge(null);
-  }, [formData.tokenAddress, getBridgeInstancesWithSettings, network?.id, network?.name, selectedTransfer]);
+  }, [formData.tokenAddress, getBridgeInstancesWithSettings, network?.id, network?.name, network?.isHybrid, selectedTransfer]);
 
   // Load required stake with a specific amount
   const loadRequiredStakeWithAmount = useCallback(async (amount) => {
@@ -1005,6 +1127,13 @@ const NewClaim = ({ isOpen, onClose, selectedToken = null, selectedTransfer = nu
     try {
       console.log('🔍 Loading required stake with amount:', amount);
       console.log('🔍 Selected bridge:', selectedBridge);
+      console.log('🔍 Debug - amount details:', {
+        amount: amount,
+        amountType: typeof amount,
+        hasDecimal: amount.includes('.'),
+        isFromTransfer: selectedTransfer !== null,
+        selectedTransfer: selectedTransfer ? 'present' : 'null'
+      });
       
       const bridgeContract = new ethers.Contract(
         selectedBridge.address,
@@ -1014,18 +1143,30 @@ const NewClaim = ({ isOpen, onClose, selectedToken = null, selectedTransfer = nu
 
       // Use the correct decimals for the amount from configuration
       const amountDecimals = getTokenDecimals(network?.id, formData.tokenAddress);
-      const amountWei = ethers.utils.parseUnits(amount, amountDecimals);
-      console.log('🔍 Amount parsing details:', {
-        amount: amount,
-        amountDecimals: amountDecimals,
-        amountWei: amountWei.toString()
+      
+      // Check if the amount is already in wei format
+      // Transfer amounts from blockchain events are already in wei format
+      let amountWei;
+      
+      // Amount from transfer events is always in wei format
+        amountWei = ethers.BigNumber.from(amount);
+      console.log('🔍 Amount is wei format (from transfer event):', {
+          originalAmount: amount,
+          amountWei: amountWei.toString(),
+          humanReadable: ethers.utils.formatUnits(amountWei, amountDecimals)
+        });
+      
+      console.log('🔍 Final amountWei for stake calculation:', {
+        amountWei: amountWei.toString(),
+        humanReadable: ethers.utils.formatUnits(amountWei, amountDecimals),
+        amountDecimals: amountDecimals
       });
       
       const stake = await bridgeContract.getRequiredStake(amountWei);
       console.log('🔍 Raw stake from contract:', stake.toString());
       
       // Get stake token decimals from configuration
-      const stakeTokenDecimals = getStakeTokenDecimals(network?.id);
+      const stakeTokenDecimals = getStakeTokenDecimals(network?.id, selectedBridge.stakeTokenAddress);
       
       console.log('🔍 Using stake token decimals from config:', stakeTokenDecimals);
       
@@ -1062,7 +1203,7 @@ const NewClaim = ({ isOpen, onClose, selectedToken = null, selectedTransfer = nu
       console.error('Error loading required stake:', error);
       setRequiredStake('0');
     }
-  }, [selectedBridge, provider, formData.tokenAddress, network?.id, getBridgeABI]);
+  }, [selectedBridge, provider, formData.tokenAddress, network?.id, getBridgeABI, selectedTransfer]);
 
 
   // Check allowance
@@ -1081,22 +1222,44 @@ const NewClaim = ({ isOpen, onClose, selectedToken = null, selectedTransfer = nu
           account,
           selectedBridge.address
         );
-        stakeTokenDecimals = getStakeTokenDecimals(network?.id);
+        stakeTokenDecimals = getStakeTokenDecimals(network?.id, selectedBridge.stakeTokenAddress);
       } else {
         // For other networks (like Ethereum), use standard ERC20 allowance
-        const tokenContract = new ethers.Contract(selectedBridge.stakeTokenAddress, ERC20_ABI, provider);
-        
-        const [allowanceWei, decimals] = await Promise.all([
-          tokenContract.allowance(account, selectedBridge.address),
-          tokenContract.decimals()
-        ]);
-        
-        currentAllowance = ethers.utils.formatUnits(allowanceWei, decimals);
-        stakeTokenDecimals = decimals;
+        // Check if this is a native token (zero address) - for native tokens, no allowance is needed
+        if (selectedBridge.stakeTokenAddress === ethers.constants.AddressZero) {
+          // For native ETH, no allowance check needed - user just needs sufficient balance
+          currentAllowance = "0"; // No allowance concept for native tokens
+          stakeTokenDecimals = getStakeTokenDecimals(network?.id, selectedBridge.stakeTokenAddress); // Use decimals from settings
+        } else {
+          // For ERC20 tokens, check allowance
+          const tokenContract = new ethers.Contract(selectedBridge.stakeTokenAddress, ERC20_ABI, provider);
+          
+          const [allowanceWei, decimals] = await Promise.all([
+            tokenContract.allowance(account, selectedBridge.address),
+            tokenContract.decimals()
+          ]);
+          
+          currentAllowance = ethers.utils.formatUnits(allowanceWei, decimals);
+          stakeTokenDecimals = decimals;
+        }
       }
 
       // Parse the required stake with correct decimals
       const stakeWei = ethers.utils.parseUnits(stakeAmount, stakeTokenDecimals);
+      
+      // For native tokens (zero address), no allowance concept exists
+      if (selectedBridge.stakeTokenAddress === ethers.constants.AddressZero) {
+        console.log('🔍 Native token (ETH) - no allowance needed:', {
+          stakeAmount,
+          stakeWei: stakeWei.toString(),
+          stakeTokenDecimals
+        });
+        
+        setAllowance('N/A (Native Token)');
+        setNeedsApproval(false);
+        return;
+      }
+      
       const allowanceWei = ethers.utils.parseUnits(currentAllowance, stakeTokenDecimals);
       
       // Check if current allowance is at maximum value and display "Max" instead
@@ -1161,21 +1324,6 @@ const NewClaim = ({ isOpen, onClose, selectedToken = null, selectedTransfer = nu
     }
   }, [checkAllowance]);
 
-  // Periodic allowance check to keep UI in sync
-  useEffect(() => {
-    if (!isOpen || !selectedBridge || !provider || !account) return;
-
-    // Check allowance immediately
-    checkAllowance();
-
-    // Set up periodic check every 10 seconds
-    const interval = setInterval(() => {
-      console.log('🔄 Periodic allowance check...');
-      checkAllowance();
-    }, 10000);
-
-    return () => clearInterval(interval);
-  }, [isOpen, selectedBridge, provider, account, checkAllowance]);
 
   // Load available tokens
   useEffect(() => {
@@ -1821,10 +1969,16 @@ const NewClaim = ({ isOpen, onClose, selectedToken = null, selectedTransfer = nu
       const tokenDecimals = getTokenDecimals(network?.id, formData.tokenAddress);
       console.log('🔍 Token decimals:', tokenDecimals);
       
-      const amountWei = ethers.utils.parseUnits(formData.amount, tokenDecimals);
-      console.log('🔍 Amount parsed:', amountWei.toString());
+      // Amount from transfer events is always in wei format
+      let amountWei;
+        amountWei = ethers.BigNumber.from(formData.amount);
+      console.log('🔍 Amount is wei format (from transfer event):', {
+          originalAmount: formData.amount,
+          amountWei: amountWei.toString(),
+          humanReadable: ethers.utils.formatUnits(amountWei, tokenDecimals)
+        });
       
-      // Validate and parse reward
+      // Validate and parse reward (match amount parsing logic)
       const rewardValue = formData.reward || '0';
       console.log('🔍 Raw reward value:', rewardValue, 'Type:', typeof rewardValue);
       
@@ -1842,8 +1996,13 @@ const NewClaim = ({ isOpen, onClose, selectedToken = null, selectedTransfer = nu
           throw new Error(`Invalid reward value: ${cleanRewardValue} - must be a valid number`);
         }
         
-        rewardWei = ethers.utils.parseUnits(cleanRewardValue, tokenDecimals);
-        console.log('🔍 Reward parsed:', rewardWei.toString());
+        // Reward from transfer events is always in wei format
+          rewardWei = ethers.BigNumber.from(cleanRewardValue);
+        console.log('🔍 Reward is wei format (from transfer event):', {
+            originalReward: cleanRewardValue,
+            rewardWei: rewardWei.toString(),
+            humanReadable: ethers.utils.formatUnits(rewardWei, tokenDecimals)
+          });
         
         if (!rewardWei) {
           throw new Error(`Failed to parse reward value: ${cleanRewardValue}`);
@@ -1884,7 +2043,7 @@ const NewClaim = ({ isOpen, onClose, selectedToken = null, selectedTransfer = nu
       const txtsBigNumber = ethers.BigNumber.from(parseInt(formData.txts));
       console.log('🔍 Timestamp BigNumber:', txtsBigNumber.toString());
       
-      const stakeWei = ethers.utils.parseUnits(requiredStake, getStakeTokenDecimals(network?.id));
+      const stakeWei = ethers.utils.parseUnits(requiredStake, getStakeTokenDecimals(network?.id, selectedBridge.stakeTokenAddress));
       console.log('🔍 Stake Wei:', stakeWei.toString());
 
       const senderChecksummed = toChecksumAddress(formData.senderAddress);
@@ -1957,7 +2116,7 @@ const NewClaim = ({ isOpen, onClose, selectedToken = null, selectedTransfer = nu
           }
         }
         
-        // Validate reward format consistency
+        // Validate reward format consistency (match amount validation logic)
         if (selectedTransfer.reward) {
           const transferRewardFormatted = typeof selectedTransfer.reward === 'string' ? 
             (selectedTransfer.reward.startsWith('0x') ? 
@@ -2133,7 +2292,7 @@ const NewClaim = ({ isOpen, onClose, selectedToken = null, selectedTransfer = nu
         
         console.log('  🏦 Stake:');
         console.log('    - Required stake:', requiredStake);
-        console.log('    - Stake token decimals:', getStakeTokenDecimals(network?.id));
+        console.log('    - Stake token decimals:', getStakeTokenDecimals(network?.id, selectedBridge.stakeTokenAddress));
         console.log('    - Wei value:', stakeWei.toString());
         console.log('    - Stake token address:', selectedBridge?.stakeTokenAddress);
         console.log('    - Stake token symbol:', selectedBridge?.stakeTokenSymbol);
@@ -2266,62 +2425,86 @@ const NewClaim = ({ isOpen, onClose, selectedToken = null, selectedTransfer = nu
       console.log('🔍 Pre-flight checks before claim transaction:');
       
       // Recalculate stake to ensure we have the correct value
-      const amountWeiForStake = ethers.utils.parseUnits(formData.amount, getTokenDecimals(network?.id, formData.tokenAddress));
+      const amountDecimals = getTokenDecimals(network?.id, formData.tokenAddress);
+      
+      // Amount from transfer events is always in wei format
+      let amountWeiForStake;
+        amountWeiForStake = ethers.BigNumber.from(formData.amount);
+      console.log('🔍 Pre-flight amount is wei format (from transfer event):', {
+          originalAmount: formData.amount,
+          amountWeiForStake: amountWeiForStake.toString(),
+          humanReadable: ethers.utils.formatUnits(amountWeiForStake, amountDecimals)
+        });
       const stake = await bridgeContract.getRequiredStake(amountWeiForStake);
       
-      // Get stake token decimals from configuration
-      const stakeTokenDecimals = getStakeTokenDecimals(network?.id);
+      // Use the raw stake value directly to avoid precision issues from double conversion
+      const stakeWeiForCheck = stake;
       
-      // The contract is inconsistent - sometimes returns 18 decimals, sometimes stake token decimals
-      let formattedStake;
-      if (stake.gte(ethers.BigNumber.from(10).pow(15))) {
-        // Contract returned stake in 18 decimals
-        const stakeIn18Decimals = ethers.utils.formatUnits(stake, 18);
-        const stakeInStakeTokenDecimals = ethers.utils.parseUnits(stakeIn18Decimals, stakeTokenDecimals);
-        formattedStake = ethers.utils.formatUnits(stakeInStakeTokenDecimals, stakeTokenDecimals);
+      // Check stake token balance and allowance
+      let balance, allowance, decimals;
+      
+      if (selectedBridge.stakeTokenAddress === ethers.constants.AddressZero) {
+        // Native token (ETH) - no allowance needed, get balance directly
+        console.log('🔍 Native token (ETH) - no allowance needed for pre-flight check');
+        balance = await provider.getBalance(account);
+        allowance = ethers.BigNumber.from(0); // Native tokens don't need allowance
+        decimals = getStakeTokenDecimals(network?.id, selectedBridge.stakeTokenAddress);
+        
+        const balanceFormatted = ethers.utils.formatUnits(balance, decimals);
+        const stakeFormatted = ethers.utils.formatUnits(stakeWeiForCheck, decimals);
+        
+        console.log('🔍 Pre-flight stake calculation (Native ETH):', {
+          rawStake: stake.toString(),
+          stakeWei: stakeWeiForCheck.toString(),
+          stakeFormatted,
+          balance: balance.toString(),
+          balanceFormatted,
+          decimals,
+          hasEnoughBalance: balance.gte(stakeWeiForCheck)
+        });
       } else {
-        // Contract returned stake in stake token decimals
-        formattedStake = ethers.utils.formatUnits(stake, stakeTokenDecimals);
+        // ERC20 token - check balance and allowance
+        const tokenContract = new ethers.Contract(selectedBridge.stakeTokenAddress, [
+          'function balanceOf(address owner) view returns (uint256)',
+          'function allowance(address owner, address spender) view returns (uint256)',
+          'function decimals() view returns (uint8)'
+        ], provider);
+        
+        [balance, allowance, decimals] = await Promise.all([
+          tokenContract.balanceOf(account),
+          tokenContract.allowance(account, selectedBridge.address),
+          tokenContract.decimals()
+        ]);
+        
+        const balanceFormatted = ethers.utils.formatUnits(balance, decimals);
+        const allowanceFormatted = ethers.utils.formatUnits(allowance, decimals);
+        const stakeFormatted = ethers.utils.formatUnits(stakeWeiForCheck, decimals);
+        
+        console.log('🔍 Pre-flight stake calculation (ERC20):', {
+          rawStake: stake.toString(),
+          stakeWei: stakeWeiForCheck.toString(),
+          stakeFormatted,
+          balance: balance.toString(),
+          balanceFormatted,
+          allowance: allowance.toString(),
+          allowanceFormatted,
+          decimals,
+          hasEnoughBalance: balance.gte(stakeWeiForCheck),
+          hasEnoughAllowance: allowance.gte(stakeWeiForCheck)
+        });
       }
       
-      const stakeWeiForCheck = ethers.utils.parseUnits(formattedStake, stakeTokenDecimals);
-      
-      // Check USDT balance
-      const usdtContract = new ethers.Contract(selectedBridge.stakeTokenAddress, [
-        'function balanceOf(address owner) view returns (uint256)',
-        'function allowance(address owner, address spender) view returns (uint256)',
-        'function decimals() view returns (uint8)'
-      ], provider);
-      
-      const [balance, allowance, decimals] = await Promise.all([
-        usdtContract.balanceOf(account),
-        usdtContract.allowance(account, selectedBridge.address),
-        usdtContract.decimals()
-      ]);
-      
-      const balanceFormatted = ethers.utils.formatUnits(balance, decimals);
-      const allowanceFormatted = ethers.utils.formatUnits(allowance, decimals);
-      const stakeFormatted = ethers.utils.formatUnits(stakeWeiForCheck, decimals);
-      
-      console.log('🔍 Pre-flight stake calculation:', {
-        rawStake: stake.toString(),
-        stakeTokenDecimals: stakeTokenDecimals,
-        formattedStake: formattedStake,
-        stakeWeiForCheck: stakeWeiForCheck.toString(),
-        stakeFormatted: stakeFormatted
-      });
-      
-      console.log('🔍 USDT Balance:', balanceFormatted);
-      console.log('🔍 USDT Allowance:', allowanceFormatted);
-      console.log('🔍 Required Stake:', stakeFormatted);
-      console.log('🔍 Balance sufficient:', balance.gte(stakeWeiForCheck));
-      console.log('🔍 Allowance sufficient:', allowance.gte(stakeWeiForCheck));
-      
+      // Final validation checks
       if (balance.lt(stakeWeiForCheck)) {
+        const balanceFormatted = ethers.utils.formatUnits(balance, decimals);
+        const stakeFormatted = ethers.utils.formatUnits(stakeWeiForCheck, decimals);
         throw new Error(`Insufficient balance. Required: ${stakeFormatted}, Available: ${balanceFormatted}`);
       }
       
-      if (allowance.lt(stakeWeiForCheck)) {
+      // Only check allowance for ERC20 tokens (not native tokens)
+      if (selectedBridge.stakeTokenAddress !== ethers.constants.AddressZero && allowance.lt(stakeWeiForCheck)) {
+        const allowanceFormatted = ethers.utils.formatUnits(allowance, decimals);
+        const stakeFormatted = ethers.utils.formatUnits(stakeWeiForCheck, decimals);
         throw new Error(`Insufficient allowance. Required: ${stakeFormatted}, Allowed: ${allowanceFormatted}`);
       }
 
@@ -2379,12 +2562,19 @@ const NewClaim = ({ isOpen, onClose, selectedToken = null, selectedTransfer = nu
       console.log('🔍 Final parameters for claim call:');
       console.log('  - txid:', processedTxid, '(string)');
       console.log('  - txts:', txtsValue, '(uint32)');
-      console.log('  - amount:', amountBigNumber.toString(), '(uint256)');
-      console.log('  - reward:', rewardBigNumber.toString(), '(int256)');
-      console.log('  - stake:', stakeWeiForCheck.toString(), '(uint256)');
+      console.log('  - amount:', amountBigNumber.toString(), '(uint256 wei)');
+      console.log('  - reward:', rewardBigNumber.toString(), '(int256 wei)');
+      console.log('  - stake:', stakeWeiForCheck.toString(), '(uint256 wei)');
       console.log('  - sender_address:', senderChecksummed, '(string)');
       console.log('  - recipient_address:', recipientChecksummed, '(address)');
       console.log('  - data:', processedData, '(string)');
+      
+      // Additional detailed logging for reward in wei
+      console.log('🔍 Reward details in wei format:');
+      console.log('  - Original reward input:', formData.reward);
+      console.log('  - Reward in wei (BigNumber):', rewardBigNumber.toString());
+      console.log('  - Reward human-readable:', ethers.utils.formatUnits(rewardBigNumber, tokenDecimals));
+      console.log('  - Token decimals used:', tokenDecimals);
       
       // Debug: Check if any values are undefined or invalid
       console.log('🔍 Parameter validation:');
@@ -2429,6 +2619,32 @@ const NewClaim = ({ isOpen, onClose, selectedToken = null, selectedTransfer = nu
       // Try the transaction with network-specific gas parameters
       console.log('🔍 Attempting claim transaction with gas parameters:', gasParams);
 
+      // For native token stakes (ETH), include the stake amount as transaction value
+      const transactionParams = {
+        ...gasParams
+      };
+
+      // If stake token is native (ETH), include the stake amount as value
+      if (selectedBridge.stakeTokenAddress === ethers.constants.AddressZero) {
+        transactionParams.value = stakeWeiForCheck;
+        console.log('🔍 Native token stake - including value in transaction:', stakeWeiForCheck.toString());
+      }
+
+      console.log('🔍 Final transaction parameters:', transactionParams);
+      
+      // Log the complete transaction call with all parameters
+      console.log('🔍 Complete transaction call parameters:');
+      console.log('  - Function: claim');
+      console.log('  - txid:', processedTxid);
+      console.log('  - txts:', txtsValue);
+      console.log('  - amount (wei):', amountBigNumber.toString());
+      console.log('  - reward (wei):', rewardBigNumber.toString());
+      console.log('  - stake (wei):', stakeWeiForCheck.toString());
+      console.log('  - sender:', senderChecksummed);
+      console.log('  - recipient:', recipientChecksummed);
+      console.log('  - data:', processedData);
+      console.log('  - transaction options:', transactionParams);
+
       const claimTx = await bridgeContract.claim(
         processedTxid,
         txtsValue, // Use validated uint32 value
@@ -2438,7 +2654,7 @@ const NewClaim = ({ isOpen, onClose, selectedToken = null, selectedTransfer = nu
         senderChecksummed,
         recipientChecksummed,
         processedData,
-        gasParams
+        transactionParams
       );
       
       console.log('✅ Claim transaction submitted successfully:', claimTx.hash);
@@ -2476,13 +2692,49 @@ const NewClaim = ({ isOpen, onClose, selectedToken = null, selectedTransfer = nu
       let errorMessage = 'Claim failed';
       const providerMessage = error.data?.message || error.message;
       
-      if (error.code === 4001 || providerMessage?.includes('User denied transaction') || providerMessage?.includes('user rejected transaction')) {
+      // Handle transaction repricing (this is actually a success case)
+      if (error.code === 'TRANSACTION_REPLACED') {
+        console.log('✅ Transaction was repriced successfully');
+        console.log('🔍 Replacement transaction details:', {
+          newHash: error.replacement?.hash,
+          reason: error.reason,
+          cancelled: error.cancelled,
+          receipt: error.receipt
+        });
+        
+        // Check if the replacement transaction was successful
+        if (error.receipt && error.receipt.status === 1) {
+          console.log('✅ Replacement transaction confirmed successfully');
+          toast.success('Claim submitted successfully! Transaction was repriced for better gas fees.');
+          
+          // Reset form and close dialog
+          setFormData({
+            tokenAddress: '',
+            amount: '',
+            reward: '',
+            txid: '',
+            txts: '',
+            senderAddress: '',
+            recipientAddress: '',
+            data: '0x'
+          });
+          
+          if (onClose) {
+            onClose();
+          }
+          return; // Exit early since this is actually a success
+        } else {
+          errorMessage = 'Transaction was repriced but failed. Please try again.';
+        }
+      } else if (error.code === 4001 || providerMessage?.includes('User denied transaction') || providerMessage?.includes('user rejected transaction')) {
         errorMessage = 'Transaction cancelled by user';
       } else if (providerMessage?.toLowerCase().includes('insufficient funds') || providerMessage?.toLowerCase().includes('insufficient balance')) {
-        errorMessage = 'Insufficient ETH for gas fees. Please add ETH to your wallet.';
+        errorMessage = 'Insufficient funds for gas fees.';
       } else if (error.code === -32603) {
         // Generic provider error; surface original message if any
         errorMessage = providerMessage ? `Provider error (-32603): ${providerMessage}` : 'Provider internal error (-32603). Please try again or reconnect your wallet.';
+      } else if (providerMessage?.includes('this transfer has already been claimed') || providerMessage?.includes('already been claimed')) {
+        errorMessage = 'Transfer has already been claimed';
       } else if (providerMessage?.toLowerCase().includes('gas')) {
         errorMessage = 'Transaction failed due to gas issues. Please try again.';
       } else if (providerMessage?.includes('execution reverted') || providerMessage?.includes('revert')) {
@@ -2622,11 +2874,11 @@ const NewClaim = ({ isOpen, onClose, selectedToken = null, selectedTransfer = nu
                                   ? 'text-red-400' 
                                   : 'text-white'
                               }`}>
-                                {isLoadingStakeBalance ? 'Loading...' : formatStakeTokenForDisplay(stakeTokenBalance, network?.id)}
+                                {isLoadingStakeBalance ? 'Loading...' : formatStakeTokenForDisplay(stakeTokenBalance, network?.id, selectedBridge?.stakeTokenAddress)}
                                 {!isLoadingStakeBalance && parseFloat(stakeTokenBalance) < parseFloat(requiredStake) && (
-                                  <span className="text-xs text-red-400 ml-1">
-                                    (Insufficient)
-                                  </span>
+                                    <span className="text-xs text-red-400 ml-1">
+                                      (Insufficient)
+                                    </span>
                                 )}
                               </p>
                             </div>
@@ -2657,9 +2909,9 @@ const NewClaim = ({ isOpen, onClose, selectedToken = null, selectedTransfer = nu
                       <p className="text-secondary-400">Direction</p>
                       <p className="font-medium text-white">
                         {selectedBridge.type === 'export' ? 
-                          (selectedBridge.foreignNetwork || '3DPass') : 
-                          (selectedBridge.homeNetwork || 'External')
-                        } → {network?.name || 'Current Network'}
+                          `${network?.name || 'Current Network'} → ${selectedBridge.foreignNetwork || 'External'}` :
+                          `${selectedBridge.homeNetwork || 'External'} → ${network?.name || 'Current Network'}`
+                        }
                       </p>
                     </div>
                     <div>
@@ -2681,10 +2933,29 @@ const NewClaim = ({ isOpen, onClose, selectedToken = null, selectedTransfer = nu
                     <div>
                       <p className="text-secondary-400">Required Stake</p>
                       <p className="font-medium text-white">
-                        {formatStakeTokenForDisplay(requiredStake, network?.id)} {selectedBridge?.stakeTokenSymbol || 'stake'}
+                        {formatStakeTokenForDisplay(requiredStake, network?.id, selectedBridge?.stakeTokenAddress)} {selectedBridge?.stakeTokenSymbol || 'stake'}
                         {formData.amount && (
                           <span className="text-xs text-secondary-400 ml-1">
-                            (for {formData.amount} {tokenMetadata?.symbol})
+                            (for {(() => {
+                              // Format the amount properly - check if it's in wei format
+                              const amountDecimals = getTokenDecimals(network?.id, formData.tokenAddress);
+                              let humanReadableAmount;
+                              
+      // Amount from transfer events is always in wei format
+      const amountWei = ethers.BigNumber.from(formData.amount);
+      humanReadableAmount = ethers.utils.formatUnits(amountWei, amountDecimals);
+                              
+                              // Apply display multiplier for P3D tokens (check if it's a P3D token)
+                              if (tokenMetadata?.symbol === 'P3D') {
+                                const multiplier = getStakeTokenDisplayMultiplier(NETWORKS.THREEDPASS.id);
+                                const numericAmount = parseFloat(humanReadableAmount);
+                                if (!isNaN(numericAmount)) {
+                                  return (numericAmount * multiplier).toString();
+                                }
+                              }
+                              
+                              return humanReadableAmount;
+                            })()} {tokenMetadata?.symbol})
                           </span>
                         )}
                       </p>
@@ -2738,42 +3009,132 @@ const NewClaim = ({ isOpen, onClose, selectedToken = null, selectedTransfer = nu
                         </div>
                         <div className="flex justify-between">
                           <span className="text-secondary-400">Reward:</span>
-                          <span className="font-medium text-white">{formData.reward} {tokenMetadata?.symbol}</span>
+                          <span className="font-medium text-white">{formData.reward}</span>
                         </div>
                         <div className="flex justify-between">
                           <span className="text-secondary-400">Tokens to Transfer:</span>
                           <span className="font-medium text-white">
-                            {formData.amount && formData.reward ? 
-                              (parseFloat(formData.amount) - parseFloat(formData.reward)).toFixed(6) : 
-                              '0'
-                            } {tokenMetadata?.symbol}
+                            {(() => {
+                              if (!formData.amount || !formData.reward) return '0';
+                              
+                              const tokenDecimals = getTokenDecimals(network?.id, formData.tokenAddress);
+                              
+                              // Handle amount (should be in wei format)
+                              let amountWei;
+                              if (parseFloat(formData.amount) > 1000000000000) {
+                                amountWei = ethers.BigNumber.from(formData.amount);
+                              } else {
+                                amountWei = ethers.utils.parseUnits(formData.amount, tokenDecimals);
+                              }
+                              
+                              // Handle reward (use as-is from event)
+                              let rewardWei;
+                              if (parseFloat(formData.reward) > 1000000000000) {
+                                // Reward is in wei format
+                                rewardWei = ethers.BigNumber.from(formData.reward);
+                              } else {
+                                // Reward is in human-readable format
+                                rewardWei = ethers.utils.parseUnits(formData.reward, tokenDecimals);
+                              }
+                              
+                              const transferWei = amountWei.sub(rewardWei);
+                              return ethers.utils.formatUnits(transferWei, tokenDecimals);
+                            })()} {tokenMetadata?.symbol}
                           </span>
                         </div>
                         <div className="flex justify-between">
                           <span className="text-secondary-400">Your {tokenMetadata?.symbol} Balance:</span>
                           <span className={`font-medium ${
-                            formData.amount && formData.reward && 
-                            (parseFloat(formData.amount) - parseFloat(formData.reward)) > parseFloat(tokenBalance) 
+                            (() => {
+                              if (!formData.amount || !formData.reward) return false;
+                              
+                              const tokenDecimals = getTokenDecimals(network?.id, formData.tokenAddress);
+                              
+                              // Handle amount (should be in wei format)
+                              let amountWei;
+                              if (parseFloat(formData.amount) > 1000000000000) {
+                                amountWei = ethers.BigNumber.from(formData.amount);
+                              } else {
+                                amountWei = ethers.utils.parseUnits(formData.amount, tokenDecimals);
+                              }
+                              
+                              // Handle reward (use as-is from event)
+                              let rewardWei;
+                              if (parseFloat(formData.reward) > 1000000000000) {
+                                rewardWei = ethers.BigNumber.from(formData.reward);
+                              } else {
+                                rewardWei = ethers.utils.parseUnits(formData.reward, tokenDecimals);
+                              }
+                              
+                              const transferWei = amountWei.sub(rewardWei);
+                              const balanceWei = ethers.utils.parseUnits(tokenBalance, tokenDecimals);
+                              
+                              return transferWei.gt(balanceWei);
+                            })()
                               ? 'text-red-400' 
                               : 'text-white'
                           }`}>
                             {tokenBalance} {tokenMetadata?.symbol}
-                            {formData.amount && formData.reward && 
-                             (parseFloat(formData.amount) - parseFloat(formData.reward)) > parseFloat(tokenBalance) && (
-                              <span className="text-xs text-red-400 ml-1">
-                                (Insufficient)
-                              </span>
-                            )}
+                            {(() => {
+                              if (!formData.amount || !formData.reward) return null;
+                              
+                              const tokenDecimals = getTokenDecimals(network?.id, formData.tokenAddress);
+                              
+                              // Handle amount (should be in wei format)
+                              let amountWei;
+                              if (parseFloat(formData.amount) > 1000000000000) {
+                                amountWei = ethers.BigNumber.from(formData.amount);
+                              } else {
+                                amountWei = ethers.utils.parseUnits(formData.amount, tokenDecimals);
+                              }
+                              
+                              // Handle reward (use as-is from event)
+                              let rewardWei;
+                              if (parseFloat(formData.reward) > 1000000000000) {
+                                rewardWei = ethers.BigNumber.from(formData.reward);
+                              } else {
+                                rewardWei = ethers.utils.parseUnits(formData.reward, tokenDecimals);
+                              }
+                              
+                              const transferWei = amountWei.sub(rewardWei);
+                              const balanceWei = ethers.utils.parseUnits(tokenBalance, tokenDecimals);
+                              
+                              return transferWei.gt(balanceWei) ? (
+                                <span className="text-xs text-red-400 ml-1">
+                                  (Insufficient)
+                                </span>
+                              ) : null;
+                            })()}
                           </span>
                         </div>
                       </div>
                     </div>
                     
                     <p className="text-xs text-secondary-400">
-                      <strong>Note:</strong> The bridge will charge your balance with {formData.amount && formData.reward ? 
-                        (parseFloat(formData.amount) - parseFloat(formData.reward)).toFixed(6) : 
-                        '0'
-                      } {tokenMetadata?.symbol} excluding the reward and transfer it to the recipient. 
+                      <strong>Note:</strong> The bridge will charge your balance with {(() => {
+                        if (!formData.amount || !formData.reward) return '0';
+                        
+                        const tokenDecimals = getTokenDecimals(network?.id, formData.tokenAddress);
+                        
+                        // Handle amount (should be in wei format)
+                        let amountWei;
+                        if (parseFloat(formData.amount) > 1000000000000) {
+                          amountWei = ethers.BigNumber.from(formData.amount);
+                        } else {
+                          amountWei = ethers.utils.parseUnits(formData.amount, tokenDecimals);
+                        }
+                        
+                        // Handle reward (use as-is from event)
+                        let rewardWei;
+                        if (parseFloat(formData.reward) > 1000000000000) {
+                          rewardWei = ethers.BigNumber.from(formData.reward);
+                        } else {
+                          rewardWei = ethers.utils.parseUnits(formData.reward, tokenDecimals);
+                        }
+                        
+                        const transferWei = amountWei.sub(rewardWei);
+                        return ethers.utils.formatUnits(transferWei, tokenDecimals);
+                      })()} {tokenMetadata?.symbol} excluding the reward and transfer it to the recipient. 
                       After the challenge period expires, you will be able to withdraw both the stake 
                       and the transferred amount back to your balance, as long as you win the counterstake.
                     </p>
@@ -3029,7 +3390,7 @@ const NewClaim = ({ isOpen, onClose, selectedToken = null, selectedTransfer = nu
               </div>
 
               {/* Approval Section */}
-              {needsApproval && selectedBridge && (
+              {needsApproval && selectedBridge && selectedBridge.stakeTokenAddress !== ethers.constants.AddressZero && (
                 <div className="card">
                   <div className="flex items-center gap-3 mb-4">
                     <AlertCircle className="w-5 h-5 text-warning-500" />
@@ -3042,10 +3403,10 @@ const NewClaim = ({ isOpen, onClose, selectedToken = null, selectedTransfer = nu
                   
                   <div className="bg-warning-900/20 border border-warning-700 rounded-lg p-3 mb-4">
                     <p className="text-sm text-warning-200">
-                      <strong>Required:</strong> {formatStakeTokenForDisplay(requiredStake, network?.id)} {selectedBridge?.stakeTokenSymbol || 'stake'} for staking
+                      <strong>Required:</strong> {formatStakeTokenForDisplay(requiredStake, network?.id, selectedBridge?.stakeTokenAddress)} {selectedBridge?.stakeTokenSymbol || 'stake'} for staking
                     </p>
                     <p className="text-sm text-warning-200">
-                      <strong>Current allowance:</strong> {allowance === 'Max' ? 'Max' : formatStakeTokenForDisplay(allowance, network?.id)} {selectedBridge?.stakeTokenSymbol || 'stake'}
+                      <strong>Current allowance:</strong> {allowance === 'Max' ? 'Max' : formatStakeTokenForDisplay(allowance, network?.id, selectedBridge?.stakeTokenAddress)} {selectedBridge?.stakeTokenSymbol || 'stake'}
                     </p>
                   </div>
                   
@@ -3105,7 +3466,7 @@ const NewClaim = ({ isOpen, onClose, selectedToken = null, selectedTransfer = nu
               )}
 
               {/* Approved Section */}
-              {!needsApproval && selectedBridge && (
+              {!needsApproval && selectedBridge && selectedBridge.stakeTokenAddress !== ethers.constants.AddressZero && (
                 <div className="card">
                   <div className="flex items-center gap-3 mb-4">
                     <CheckCircle className="w-5 h-5 text-success-500" />
@@ -3121,12 +3482,12 @@ const NewClaim = ({ isOpen, onClose, selectedToken = null, selectedTransfer = nu
                       <div className="flex justify-between">
                         <span className="text-success-300 text-sm">Current allowance:</span>
                         <span className="text-success-400 font-medium text-sm">
-                          {allowance === 'Max' ? 'Max' : formatStakeTokenForDisplay(allowance, network?.id)} {selectedBridge?.stakeTokenSymbol || 'stake'}
+                          {allowance === 'Max' ? 'Max' : formatStakeTokenForDisplay(allowance, network?.id, selectedBridge?.stakeTokenAddress)} {selectedBridge?.stakeTokenSymbol || 'stake'}
                         </span>
                       </div>
                       <div className="flex justify-between">
                         <span className="text-success-300 text-sm">Required for staking:</span>
-                        <span className="text-success-400 font-medium text-sm">{formatStakeTokenForDisplay(requiredStake, network?.id)} {selectedBridge?.stakeTokenSymbol || 'stake'}</span>
+                        <span className="text-success-400 font-medium text-sm">{formatStakeTokenForDisplay(requiredStake, network?.id, selectedBridge?.stakeTokenAddress)} {selectedBridge?.stakeTokenSymbol || 'stake'}</span>
                       </div>
                       {allowance === 'Max' && (
                         <div className="text-xs text-success-300 mt-2 p-2 bg-success-800/30 rounded border border-success-700">

@@ -8,7 +8,14 @@ import {
 import { autoDetectToken } from './token-detector';
 import { NETWORKS, ADDRESS_ZERO } from '../config/networks';
 import { getProvider } from './provider-manager';
+import { getNetworkWithSettings } from './settings';
 import { hasBridgesRegistry, getBridgeInfoFromRegistry } from './update-bridge-info';
+
+// Helper function to get network name from network key
+const getNetworkName = (networkKey) => {
+  const network = getNetworkWithSettings(networkKey);
+  return network?.name || networkKey;
+};
 
 /**
  * Bridge type detection based on constructor parameters
@@ -723,7 +730,7 @@ export const autoDetectBridge = async (provider, bridgeAddress, networkSymbol, s
         bridgeConfig = {
           address: bridgeAddress,
           type: bridgeType,
-          homeNetwork: NETWORKS[networkSymbol]?.name || networkSymbol,
+          homeNetwork: getNetworkName(networkSymbol),
           homeTokenSymbol: bridgeData.stakeTokenSymbol || 'Unknown',
           homeTokenAddress: bridgeData.stakeTokenAddress,
           foreignNetwork: bridgeData.foreignNetwork,
@@ -734,7 +741,7 @@ export const autoDetectBridge = async (provider, bridgeAddress, networkSymbol, s
           oracleAddress: bridgeData.oracleAddress,
           description: generateBridgeDescription(
             bridgeType,
-            NETWORKS[networkSymbol]?.name || networkSymbol,
+            getNetworkName(networkSymbol),
             bridgeData.stakeTokenSymbol || 'Unknown',
             bridgeData.foreignNetwork,
             bridgeData.foreignTokenSymbol || 'Unknown'
@@ -751,7 +758,7 @@ export const autoDetectBridge = async (provider, bridgeAddress, networkSymbol, s
           homeNetwork: bridgeData.homeNetwork,
           homeTokenSymbol: bridgeData.homeTokenSymbol || 'Unknown',
           homeTokenAddress: bridgeData.homeAsset,
-          foreignNetwork: NETWORKS[networkSymbol]?.name || networkSymbol,
+          foreignNetwork: getNetworkName(networkSymbol),
           foreignTokenSymbol: bridgeData.bridgeTokenSymbol || 'Unknown',
           foreignTokenAddress: bridgeAddress, // Bridge address itself
           stakeTokenSymbol: bridgeData.stakeTokenSymbol || 'Unknown',
@@ -762,7 +769,7 @@ export const autoDetectBridge = async (provider, bridgeAddress, networkSymbol, s
             bridgeType,
             bridgeData.homeNetwork,
             bridgeData.homeTokenSymbol || 'Unknown',
-            NETWORKS[networkSymbol]?.name || networkSymbol,
+            getNetworkName(networkSymbol),
             bridgeData.bridgeTokenSymbol || 'Unknown'
           )
         };
@@ -777,7 +784,7 @@ export const autoDetectBridge = async (provider, bridgeAddress, networkSymbol, s
           homeNetwork: bridgeData.homeNetwork,
           homeTokenSymbol: bridgeData.homeTokenSymbol || 'Unknown',
           homeTokenAddress: bridgeData.homeAsset,
-          foreignNetwork: NETWORKS[networkSymbol]?.name || networkSymbol,
+          foreignNetwork: getNetworkName(networkSymbol),
           foreignTokenSymbol: bridgeData.foreignTokenSymbol || 'Unknown',
           foreignTokenAddress: bridgeData.precompileAddress,
           stakeTokenSymbol: bridgeData.stakeTokenSymbol || 'Unknown',
@@ -788,7 +795,7 @@ export const autoDetectBridge = async (provider, bridgeAddress, networkSymbol, s
             bridgeType,
             bridgeData.homeNetwork,
             bridgeData.homeTokenSymbol || 'Unknown',
-            NETWORKS[networkSymbol]?.name || networkSymbol,
+            getNetworkName(networkSymbol),
             bridgeData.foreignTokenSymbol || 'Unknown'
           )
         };

@@ -25,9 +25,56 @@ const compareBalances = (amount, balance, tolerance = 0.000001) => {
   return numAmount <= numBalance + tolerance;
 };
 
+// Convert from actual amount (from contract) to display amount (with multiplier)
+const convertActualToDisplay = (actualAmount, decimals, tokenAddress, getTokenDecimalsDisplayMultiplier) => {
+  try {
+    if (!actualAmount || parseFloat(actualAmount) === 0) return '0';
+    
+    const num = parseFloat(actualAmount);
+    
+    // Check if this is a P3D token and apply the multiplier
+    if (tokenAddress) {
+      const decimalsDisplayMultiplier = getTokenDecimalsDisplayMultiplier(tokenAddress);
+      if (decimalsDisplayMultiplier) {
+        // Apply the multiplier: 0.000001 * 1000000 = 1.0
+        const displayNumber = num * decimalsDisplayMultiplier;
+        return displayNumber.toFixed(6).replace(/\.?0+$/, '') || '0';
+      }
+    }
+    
+    return actualAmount;
+  } catch (error) {
+    return '0';
+  }
+};
+
+// Convert from display amount (with multiplier) to actual amount (for contract)
+const convertDisplayToActual = (displayAmount, decimals, tokenAddress, getTokenDecimalsDisplayMultiplier) => {
+  try {
+    if (!displayAmount || parseFloat(displayAmount) === 0) return '0';
+    
+    const num = parseFloat(displayAmount);
+    
+    // Check if this is a P3D token and remove the multiplier
+    if (tokenAddress) {
+      const decimalsDisplayMultiplier = getTokenDecimalsDisplayMultiplier(tokenAddress);
+      if (decimalsDisplayMultiplier) {
+        // Remove the multiplier: 1.0 / 1000000 = 0.000001
+        const actualNumber = num / decimalsDisplayMultiplier;
+        // Format to the correct number of decimal places to avoid precision issues
+        return actualNumber.toFixed(decimals);
+      }
+    }
+    
+    return displayAmount;
+  } catch (error) {
+    return '0';
+  }
+};
+
 const BridgeForm = () => {
   const { account, provider, signer, network, isConnected } = useWeb3();
-  const { getNetworkWithSettings, getBridgeInstancesWithSettings } = useSettings();
+  const { getNetworkWithSettings, getBridgeInstancesWithSettings, getTokenDecimalsDisplayMultiplier } = useSettings();
   
   const [formData, setFormData] = useState({
     sourceNetwork: '',
@@ -433,7 +480,12 @@ const BridgeForm = () => {
           token.isPrecompile
         );
         console.log(`💰 Balance for ${token.symbol}:`, balance);
-        newBalances[token.symbol] = balance;
+        
+        // Apply display multiplier for P3D tokens
+        const displayBalance = convertActualToDisplay(balance, token.decimals, token.address, getTokenDecimalsDisplayMultiplier);
+        console.log(`💰 Display balance for ${token.symbol}:`, displayBalance);
+        
+        newBalances[token.symbol] = displayBalance;
       } catch (error) {
         console.error(`Error loading balance for ${token.symbol}:`, error);
         newBalances[token.symbol] = '0';
@@ -442,7 +494,7 @@ const BridgeForm = () => {
     
     console.log('📊 Final balances object:', newBalances);
     setBalances(newBalances);
-  }, [account, provider, formData.sourceNetwork, getAvailableSourceTokens]);
+  }, [account, provider, formData.sourceNetwork, getAvailableSourceTokens, getTokenDecimalsDisplayMultiplier]);
 
   // Detect bridge operation when destination token is selected
   const detectBridgeOperation = useCallback(() => {
@@ -900,13 +952,26 @@ const BridgeForm = () => {
       // Create bridge contract using the specific bridge instance
       const contract = createBridgeContract(signer, bridgeInstance.address, formData.sourceNetwork, direction);
       
+      // Convert display amount back to actual amount for P3D tokens
+      const actualAmount = convertDisplayToActual(formData.amount, sourceToken.decimals, sourceToken.address, getTokenDecimalsDisplayMultiplier);
+      const actualReward = convertDisplayToActual(formData.reward, sourceToken.decimals, sourceToken.address, getTokenDecimalsDisplayMultiplier);
+      
+      console.log('🔄 Amount conversion for transfer:', {
+        displayAmount: formData.amount,
+        actualAmount,
+        displayReward: formData.reward,
+        actualReward,
+        tokenAddress: sourceToken.address,
+        tokenSymbol: sourceToken.symbol
+      });
+      
       // Execute transfer
       const receipt = await transferToForeignChain(
         contract,
         formData.destinationAddress,
         '', // data
-        formData.amount,
-        formData.reward,
+        actualAmount,
+        actualReward,
         sourceToken.decimals,
         sourceToken.isPrecompile
       );
@@ -1387,7 +1452,11 @@ const BridgeForm = () => {
             
             <Expatriation
               bridgeInstance={selectedBridgeInstance}
-              formData={formData}
+              formData={{
+                ...formData,
+                amount: convertDisplayToActual(formData.amount, sourceTokens.find(t => t.symbol === formData.sourceToken)?.decimals || 18, sourceTokens.find(t => t.symbol === formData.sourceToken)?.address, getTokenDecimalsDisplayMultiplier),
+                reward: convertDisplayToActual(formData.reward, sourceTokens.find(t => t.symbol === formData.sourceToken)?.decimals || 18, sourceTokens.find(t => t.symbol === formData.sourceToken)?.address, getTokenDecimalsDisplayMultiplier)
+              }}
               sourceToken={sourceTokens.find(t => t.symbol === formData.sourceToken)}
               signer={signer}
               onSuccess={handleExpatriationSuccess}
@@ -1414,7 +1483,11 @@ const BridgeForm = () => {
             
             <Repatriation
               bridgeInstance={selectedBridgeInstance}
-              formData={formData}
+              formData={{
+                ...formData,
+                amount: convertDisplayToActual(formData.amount, sourceTokens.find(t => t.symbol === formData.sourceToken)?.decimals || 18, sourceTokens.find(t => t.symbol === formData.sourceToken)?.address, getTokenDecimalsDisplayMultiplier),
+                reward: convertDisplayToActual(formData.reward, sourceTokens.find(t => t.symbol === formData.sourceToken)?.decimals || 18, sourceTokens.find(t => t.symbol === formData.sourceToken)?.address, getTokenDecimalsDisplayMultiplier)
+              }}
               sourceToken={sourceTokens.find(t => t.symbol === formData.sourceToken)}
               signer={signer}
               onSuccess={handleRepatriationSuccess}

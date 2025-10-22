@@ -756,6 +756,32 @@ export const SettingsProvider = ({ children }) => {
     return token ? token.decimalsDisplayMultiplier : null;
   }, [get3DPassTokenByAddress]);
 
+  // Get token by address across all networks (for P3D tokens that exist on multiple networks)
+  const getTokenByAddress = useCallback((tokenAddress) => {
+    if (!tokenAddress) return null;
+    
+    const address = tokenAddress.toLowerCase();
+    
+    // Search through all networks
+    for (const [, network] of Object.entries(settings)) {
+      if (network && network.tokens) {
+        for (const [, token] of Object.entries(network.tokens)) {
+          if (token.address && token.address.toLowerCase() === address) {
+            return token;
+          }
+        }
+      }
+    }
+    
+    return null;
+  }, [settings]);
+
+  // Get token decimals display multiplier across all networks
+  const getTokenDecimalsDisplayMultiplier = useCallback((tokenAddress) => {
+    const token = getTokenByAddress(tokenAddress);
+    return token ? token.decimalsDisplayMultiplier : null;
+  }, [getTokenByAddress]);
+
   // Get all 3DPass tokens
   const getAll3DPassTokens = useCallback(() => {
     const network = getNetworkWithSettings('THREEDPASS');
@@ -973,6 +999,8 @@ export const SettingsProvider = ({ children }) => {
     get3DPassTokenAssetId,
     get3DPassTokenDecimals,
     get3DPassTokenDecimalsDisplayMultiplier,
+    getTokenByAddress,
+    getTokenDecimalsDisplayMultiplier,
     getAll3DPassTokens,
     getAll3DPassTokenAddresses,
     getAll3DPassTokenSymbols,

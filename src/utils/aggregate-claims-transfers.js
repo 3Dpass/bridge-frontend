@@ -375,10 +375,33 @@ export const aggregateClaimsAndTransfers = (claims, transfers) => {
         const dataValidationResult = validateDataField(claim.data, transfer.data);
         const dataValid = dataValidationResult.match;
         
-        // Check if this is a valid flow (Export transfer should match Import claim, etc.)
+        // Check if this is a valid flow
+        // CORRECT FLOW LOGIC (4 cases):
+        // 1. Import (NewRepatriation) 3DPass → Export (Claim) Ethereum
+        // 2. Export (NewExpatriation) Ethereum → Import (Claim) 3DPass  
+        // 3. Import (NewRepatriation) Ethereum → Export (Claim) 3DPass
+        // 4. Export (NewExpatriation) 3DPass → Import (Claim) Ethereum
         const isValidFlow = (
-          (transfer.eventType === 'NewExpatriation' && claim.bridgeType === 'import_wrapper') ||
-          (transfer.eventType === 'NewRepatriation' && claim.bridgeType === 'export')
+          // Case 1: NewRepatriation from 3DPass Import bridge → Export claim on Ethereum
+          (transfer.eventType === 'NewRepatriation' && 
+           (transfer.fromNetwork === '3DPass' || transfer.fromNetwork === '3dpass') && 
+           claim.bridgeType === 'export' && 
+           (claim.homeNetwork === 'Ethereum' || claim.homeNetwork === 'ethereum')) ||
+          // Case 2: NewExpatriation from Ethereum Export bridge → Import claim on 3DPass
+          (transfer.eventType === 'NewExpatriation' && 
+           (transfer.fromNetwork === 'Ethereum' || transfer.fromNetwork === 'ethereum') && 
+           (claim.bridgeType === 'import' || claim.bridgeType === 'import_wrapper') && 
+           (claim.homeNetwork === '3DPass' || claim.homeNetwork === '3dpass')) ||
+          // Case 3: NewRepatriation from Ethereum Import bridge → Export claim on 3DPass
+          (transfer.eventType === 'NewRepatriation' && 
+           (transfer.fromNetwork === 'Ethereum' || transfer.fromNetwork === 'ethereum') && 
+           claim.bridgeType === 'export' && 
+           (claim.homeNetwork === '3DPass' || claim.homeNetwork === '3dpass')) ||
+          // Case 4: NewExpatriation from 3DPass Export bridge → Import claim on Ethereum
+          (transfer.eventType === 'NewExpatriation' && 
+           (transfer.fromNetwork === '3DPass' || transfer.fromNetwork === '3dpass') && 
+           (claim.bridgeType === 'import' || claim.bridgeType === 'import_wrapper') && 
+           (claim.homeNetwork === 'Ethereum' || claim.homeNetwork === 'ethereum'))
         );
         
         if (amountMatch && senderMatch && recipientMatch && rewardValid && dataValid && isValidFlow) {
@@ -427,9 +450,32 @@ export const aggregateClaimsAndTransfers = (claims, transfers) => {
       const dataValid = dataValidationResult.match;
       
       // Check if this is a valid flow
+      // CORRECT FLOW LOGIC (4 cases):
+      // 1. Import (NewRepatriation) 3DPass → Export (Claim) Ethereum
+      // 2. Export (NewExpatriation) Ethereum → Import (Claim) 3DPass  
+      // 3. Import (NewRepatriation) Ethereum → Export (Claim) 3DPass
+      // 4. Export (NewExpatriation) 3DPass → Import (Claim) Ethereum
       const isValidFlow = (
-        (matchingTransfer.eventType === 'NewExpatriation' && claim.bridgeType === 'import_wrapper') ||
-        (matchingTransfer.eventType === 'NewRepatriation' && claim.bridgeType === 'export')
+        // Case 1: NewRepatriation from 3DPass Import bridge → Export claim on Ethereum
+        (matchingTransfer.eventType === 'NewRepatriation' && 
+         (matchingTransfer.fromNetwork === '3DPass' || matchingTransfer.fromNetwork === '3dpass') && 
+         claim.bridgeType === 'export' && 
+         (claim.homeNetwork === 'Ethereum' || claim.homeNetwork === 'ethereum')) ||
+        // Case 2: NewExpatriation from Ethereum Export bridge → Import claim on 3DPass
+        (matchingTransfer.eventType === 'NewExpatriation' && 
+         (matchingTransfer.fromNetwork === 'Ethereum' || matchingTransfer.fromNetwork === 'ethereum') && 
+         (claim.bridgeType === 'import' || claim.bridgeType === 'import_wrapper') && 
+         (claim.homeNetwork === '3DPass' || claim.homeNetwork === '3dpass')) ||
+        // Case 3: NewRepatriation from Ethereum Import bridge → Export claim on 3DPass
+        (matchingTransfer.eventType === 'NewRepatriation' && 
+         (matchingTransfer.fromNetwork === 'Ethereum' || matchingTransfer.fromNetwork === 'ethereum') && 
+         claim.bridgeType === 'export' && 
+         (claim.homeNetwork === '3DPass' || claim.homeNetwork === '3dpass')) ||
+        // Case 4: NewExpatriation from 3DPass Export bridge → Import claim on Ethereum
+        (matchingTransfer.eventType === 'NewExpatriation' && 
+         (matchingTransfer.fromNetwork === '3DPass' || matchingTransfer.fromNetwork === '3dpass') && 
+         (claim.bridgeType === 'import' || claim.bridgeType === 'import_wrapper') && 
+         (claim.homeNetwork === 'Ethereum' || claim.homeNetwork === 'ethereum'))
       );
 
       // Check timestamp validation - claim.txts must match transfer.timestamp
@@ -725,34 +771,63 @@ export const validateFlowLogic = (claim, transfer) => {
     actualToNetwork: transfer.toNetwork
   };
 
+  // Check all 4 valid flow cases
   if (claim.bridgeType === 'export') {
-    // Export claim should match NewRepatriation event
+    // Export claims can match NewRepatriation events from either network
     result.flowType = 'Export Claim → NewRepatriation Event';
     result.expectedEventType = 'NewRepatriation';
-    result.expectedFromNetwork = claim.foreignNetwork;
-    result.expectedToNetwork = claim.homeNetwork;
     
-    if (transfer.eventType === 'NewRepatriation' &&
-        transfer.fromNetwork === claim.foreignNetwork &&
-        transfer.toNetwork === claim.homeNetwork) {
+    // Case 1: Export claim on Ethereum → NewRepatriation from 3DPass Import bridge
+    if ((claim.homeNetwork === 'Ethereum' || claim.homeNetwork === 'ethereum') && 
+        transfer.eventType === 'NewRepatriation' &&
+        (transfer.fromNetwork === '3DPass' || transfer.fromNetwork === '3dpass') &&
+        (transfer.toNetwork === 'Ethereum' || transfer.toNetwork === 'ethereum')) {
       result.isValid = true;
-      result.reason = 'Correct flow: Export claim matches NewRepatriation event';
+      result.expectedFromNetwork = '3DPass';
+      result.expectedToNetwork = 'Ethereum';
+      result.reason = 'Correct flow: Export claim on Ethereum matches NewRepatriation from 3DPass';
+    }
+    // Case 3: Export claim on 3DPass → NewRepatriation from Ethereum Import bridge
+    else if ((claim.homeNetwork === '3DPass' || claim.homeNetwork === '3dpass') && 
+             transfer.eventType === 'NewRepatriation' &&
+             (transfer.fromNetwork === 'Ethereum' || transfer.fromNetwork === 'ethereum') &&
+             (transfer.toNetwork === '3DPass' || transfer.toNetwork === '3dpass')) {
+      result.isValid = true;
+      result.expectedFromNetwork = 'Ethereum';
+      result.expectedToNetwork = '3DPass';
+      result.reason = 'Correct flow: Export claim on 3DPass matches NewRepatriation from Ethereum';
     } else {
+      result.expectedFromNetwork = claim.foreignNetwork;
+      result.expectedToNetwork = claim.homeNetwork;
       result.reason = 'Incorrect flow: Export claim should match NewRepatriation event';
     }
   } else if (claim.bridgeType === 'import' || claim.bridgeType === 'import_wrapper') {
-    // Import claim should match NewExpatriation event
+    // Import claims can match NewExpatriation events from either network
     result.flowType = 'Import Claim → NewExpatriation Event';
     result.expectedEventType = 'NewExpatriation';
-    result.expectedFromNetwork = claim.homeNetwork;
-    result.expectedToNetwork = claim.foreignNetwork;
     
-    if (transfer.eventType === 'NewExpatriation' &&
-        transfer.fromNetwork === claim.homeNetwork &&
-        transfer.toNetwork === claim.foreignNetwork) {
+    // Case 2: Import claim on 3DPass → NewExpatriation from Ethereum Export bridge
+    if ((claim.homeNetwork === '3DPass' || claim.homeNetwork === '3dpass') && 
+        transfer.eventType === 'NewExpatriation' &&
+        (transfer.fromNetwork === 'Ethereum' || transfer.fromNetwork === 'ethereum') &&
+        (transfer.toNetwork === '3DPass' || transfer.toNetwork === '3dpass')) {
       result.isValid = true;
-      result.reason = 'Correct flow: Import claim matches NewExpatriation event';
+      result.expectedFromNetwork = 'Ethereum';
+      result.expectedToNetwork = '3DPass';
+      result.reason = 'Correct flow: Import claim on 3DPass matches NewExpatriation from Ethereum';
+    }
+    // Case 4: Import claim on Ethereum → NewExpatriation from 3DPass Export bridge
+    else if ((claim.homeNetwork === 'Ethereum' || claim.homeNetwork === 'ethereum') && 
+             transfer.eventType === 'NewExpatriation' &&
+             (transfer.fromNetwork === '3DPass' || transfer.fromNetwork === '3dpass') &&
+             (transfer.toNetwork === 'Ethereum' || transfer.toNetwork === 'ethereum')) {
+      result.isValid = true;
+      result.expectedFromNetwork = '3DPass';
+      result.expectedToNetwork = 'Ethereum';
+      result.reason = 'Correct flow: Import claim on Ethereum matches NewExpatriation from 3DPass';
     } else {
+      result.expectedFromNetwork = claim.foreignNetwork;
+      result.expectedToNetwork = claim.homeNetwork;
       result.reason = 'Incorrect flow: Import claim should match NewExpatriation event';
     }
   } else {

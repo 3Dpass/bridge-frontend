@@ -169,8 +169,17 @@ export const fetchLastTransfers = async ({
       });
       
       console.log(`🔍 Found ${networkBridgeInstances.length} bridges for ${networkKey}:`, 
-        networkBridgeInstances.map(b => ({ address: b.address, type: b.type }))
+        networkBridgeInstances.map(b => ({ 
+          address: b.address, 
+          type: b.type, 
+          homeNetwork: b.homeNetwork, 
+          foreignNetwork: b.foreignNetwork 
+        }))
       );
+      
+      // Debug: Check if P3D_EXPORT bridge is included
+      const p3dExportBridge = networkBridgeInstances.find(b => b.address === '0x50fcE1D58b41c3600C74de03238Eee71aFDfBf1F');
+      console.log(`🔍 P3D_EXPORT bridge included:`, p3dExportBridge ? 'YES' : 'NO', p3dExportBridge);
 
       // Skip if no bridges found for this network
       if (networkBridgeInstances.length === 0) {
@@ -304,6 +313,25 @@ export const fetchLastTransfers = async ({
               
               console.log(`🔍 Found ${newEvents.length} new + ${cachedEvents?.length || 0} cached = ${expatriationEvents.length} total NewExpatriation events from ${bridgeInstance.address}`);
               
+              // Debug: Check if this is the P3D_EXPORT bridge and log specific details
+              if (bridgeInstance.address === '0x50fcE1D58b41c3600C74de03238Eee71aFDfBf1F') {
+                console.log(`🔍 P3D_EXPORT bridge event details:`, {
+                  bridgeAddress: bridgeInstance.address,
+                  bridgeType: bridgeInstance.type,
+                  homeNetwork: bridgeInstance.homeNetwork,
+                  foreignNetwork: bridgeInstance.foreignNetwork,
+                  newEventsCount: newEvents.length,
+                  cachedEventsCount: cachedEvents?.length || 0,
+                  totalEventsCount: expatriationEvents.length,
+                  firstEvent: newEvents.length > 0 ? {
+                    transactionHash: newEvents[0].transactionHash,
+                    blockNumber: newEvents[0].blockNumber,
+                    senderAddress: newEvents[0].args?.[0],
+                    amount: newEvents[0].args?.[1]?.toString()
+                  } : null
+                });
+              }
+              
               // Debug: Log first few events to see their structure
               if (expatriationEvents.length > 0) {
                 console.log(`🔍 First NewExpatriation event structure:`, {
@@ -425,7 +453,6 @@ export const fetchLastTransfers = async ({
               rawAmountHex: event.args[1]?.hex,
               rawAmountIsBigNumber: event.args[1]?._isBigNumber,
               rawAmountIsZero: event.args[1]?.isZero?.(),
-              rawAmountToNumber: event.args[1]?.toNumber?.(),
               rawAmountEq: event.args[1]?.eq?.(0)
             });
 
@@ -493,7 +520,7 @@ export const fetchLastTransfers = async ({
                 rawAmountHex: event.args[1]?.toHexString?.(),
                 rawAmountIsBigNumber: event.args[1]?._isBigNumber,
                 rawAmountValue: event.args[1]?.value,
-                rawAmountToNumber: event.args[1]?.toNumber?.(),
+                rawAmountToString: event.args[1]?.toString?.(),
                 rawAmountIsZero: event.args[1]?.isZero?.(),
                 rawAmountEq: event.args[1]?.eq?.(0)
             });
@@ -608,7 +635,7 @@ export const fetchLastTransfers = async ({
                 rawAmountHex: event.args[1]?.toHexString?.(),
                 rawAmountIsBigNumber: event.args[1]?._isBigNumber,
                 rawAmountValue: event.args[1]?.value,
-                rawAmountToNumber: event.args[1]?.toNumber?.(),
+                rawAmountToString: event.args[1]?.toString?.(),
                 rawAmountIsZero: event.args[1]?.isZero?.(),
                 rawAmountEq: event.args[1]?.eq?.(0)
             });

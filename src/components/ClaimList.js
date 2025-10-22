@@ -549,14 +549,6 @@ const ClaimList = () => {
   // All useCallback hooks must be at the top level
   const formatAmount = useCallback((amount, decimals = 18, tokenAddress = null) => {
     try {
-      console.log(`🔍 formatAmount input:`, {
-        amount,
-        type: typeof amount,
-        hasToNumber: typeof amount?.toNumber === 'function',
-        isBigNumber: amount?._isBigNumber,
-        decimals,
-        tokenAddress
-      });
       
       const ethers = require('ethers');
       let amountString;
@@ -564,48 +556,34 @@ const ClaimList = () => {
       // Handle BigNumber objects (including deserialized ones from cache)
       if (typeof amount?.toNumber === 'function') {
         amountString = amount.toString();
-        console.log(`🔍 formatAmount: converted BigNumber to string: ${amountString}`);
       } else if (typeof amount === 'string') {
         amountString = amount;
-        console.log(`🔍 formatAmount: using string amount: ${amountString}`);
       } else if (typeof amount === 'number') {
         amountString = amount.toString();
-        console.log(`🔍 formatAmount: converted number to string: ${amountString}`);
       } else if (typeof amount === 'object' && amount !== null) {
         // Handle deserialized BigNumber objects from cache
         // They might have properties like _hex, _isBigNumber, or be plain objects with hex values
         if (amount._hex) {
           amountString = amount._hex;
-          console.log(`🔍 formatAmount: using _hex from deserialized BigNumber: ${amountString}`);
         } else if (amount.hex) {
           amountString = amount.hex;
-          console.log(`🔍 formatAmount: using hex from deserialized BigNumber: ${amountString}`);
         } else if (amount.toString && typeof amount.toString === 'function') {
           amountString = amount.toString();
-          console.log(`🔍 formatAmount: using toString from deserialized object: ${amountString}`);
         } else {
-          console.log(`🔍 formatAmount: unknown object type, returning 0.000000`);
           return '0.000000';
         }
       } else if (!amount) {
-        console.log(`🔍 formatAmount: null/undefined amount, returning 0.000000`);
         return '0.000000';
       } else {
-        console.log(`🔍 formatAmount: unknown amount type, returning 0.000000`);
         return '0.000000';
       }
       
       // Check if the amount string is actually zero
       if (amountString === '0' || amountString === '0x0') {
-        console.log(`🔍 formatAmount: amount is zero, returning 0.000000`);
         return '0.000000';
       }
       
-      // Debug: Log the amount string before formatting
-      console.log(`🔍 formatAmount: amountString before formatUnits:`, amountString);
-      
       const rawValue = parseFloat(ethers.utils.formatUnits(amountString, decimals));
-        console.log(`🔍 formatAmount: rawValue after formatUnits: ${rawValue}`);
       
       // Check if this is a P3D token and apply decimalsDisplayMultiplier
       if (tokenAddress) {
@@ -613,11 +591,6 @@ const ClaimList = () => {
         if (decimalsDisplayMultiplier) {
           // Apply the multiplier: 0.000001 * 1000000 = 1.0
           const multipliedNumber = rawValue * decimalsDisplayMultiplier;
-          console.log(`🔍 P3D multiplier applied:`, {
-            originalNumber: rawValue,
-            multiplier: decimalsDisplayMultiplier,
-            result: multipliedNumber
-          });
           return multipliedNumber.toFixed(6).replace(/\.?0+$/, '') || '0';
         }
       }
@@ -652,7 +625,6 @@ const ClaimList = () => {
         formatted = formatted.replace(/\.?0+$/, '');
       }
       
-      console.log(`🔍 formatAmount: formatted result: ${formatted}`);
       return formatted;
     } catch (error) {
       console.error('Error formatting amount:', amount, error);
@@ -671,38 +643,24 @@ const ClaimList = () => {
     const isPending = claim.status === 'pending';
     const isCompletedClaim = claim.status === 'completed';
     
-    console.log('🔍 getTransferTokenSymbol debug:', {
-      claimStatus: claim.status,
-      eventType: claim.eventType,
-      claimNum: claim.claimNum,
-      isPending,
-      isCompletedClaim,
-      homeTokenSymbol: claim.homeTokenSymbol,
-      foreignTokenSymbol: claim.foreignTokenSymbol,
-      bridgeType: claim.bridgeType
-    });
     
     if (isPending) {
       // For pending transfers, show the original asset (home token)
       const result = claim.homeTokenSymbol || 'Unknown';
-      console.log('🔍 Using home token (pending):', result);
       return result;  // Show original token (USDT)
     } else if (isCompletedClaim) {
       // For completed claims, show the wrapped asset (foreign token)
       const result = claim.foreignTokenSymbol || 'Unknown';
-      console.log('🔍 Using foreign token (completed):', result);
       return result;  // Show wrapped token (wUSDT)
     } else {
       // Fallback: if we can't determine the type, use the bridge type
       if (claim.bridgeType === 'export') {
         // For export bridges, show the home token (original asset)
         const result = claim.homeTokenSymbol || 'Unknown';
-        console.log('🔍 Using home token (export fallback):', result);
         return result;
       } else {
         // For import bridges, show the foreign token (wrapped asset)
         const result = claim.foreignTokenSymbol || 'Unknown';
-        console.log('🔍 Using foreign token (import fallback):', result);
         return result;
       }
     }
@@ -729,18 +687,6 @@ const ClaimList = () => {
                            claim.foreignNetwork;
     }
     
-    // Debug logging with better error handling
-    console.log(`🔍 Looking for ${tokenSymbol} decimals in ${targetNetworkSymbol || 'undefined'} network (bridgeType: ${claim.bridgeType})`, {
-      tokenSymbol,
-      targetNetworkSymbol,
-      bridgeType: claim.bridgeType,
-      currentNetwork: network?.symbol,
-      bridgeInstance: claim.bridgeInstance,
-      foreignNetwork: claim.foreignNetwork,
-      homeNetwork: claim.homeNetwork,
-      bridgeInstanceForeignNetwork: claim.bridgeInstance?.foreignNetwork,
-      bridgeInstanceHomeNetwork: claim.bridgeInstance?.homeNetwork
-    });
     
     // Try to get decimals from the target network first (only if targetNetworkSymbol is defined)
     if (targetNetworkSymbol) {
@@ -748,18 +694,11 @@ const ClaimList = () => {
       if (networkConfig && networkConfig.tokens) {
         const token = networkConfig.tokens[tokenSymbol];
         if (token && token.decimals) {
-          console.log(`🔍 Found decimals for ${tokenSymbol} in ${targetNetworkSymbol} config:`, token.decimals);
           return token.decimals;
         }
       }
     }
     
-    // If not found in target network or targetNetworkSymbol is undefined, search all networks
-    if (targetNetworkSymbol) {
-      console.log(`🔍 ${tokenSymbol} not found in ${targetNetworkSymbol}, searching all networks...`);
-    } else {
-      console.log(`🔍 Target network is undefined for ${tokenSymbol}, searching all networks...`);
-    }
     
     // Try to get decimals from other networks as fallback
     for (const networkKey of Object.keys(NETWORKS)) {
@@ -767,7 +706,6 @@ const ClaimList = () => {
       if (network.tokens && network.tokens[tokenSymbol]) {
         const token = network.tokens[tokenSymbol];
         if (token && token.decimals) {
-          console.log(`🔍 Found decimals for ${tokenSymbol} in ${networkKey} config:`, token.decimals);
           return token.decimals;
         }
       }
@@ -781,7 +719,6 @@ const ClaimList = () => {
       defaultDecimals = 18;
     }
     
-    console.log(`🔍 No decimals found for ${tokenSymbol} in any network config, using default: ${defaultDecimals}`);
     return defaultDecimals;
   }, [network?.symbol, getTransferTokenSymbol, getNetworkWithSettings]);
 
@@ -835,7 +772,6 @@ const ClaimList = () => {
     if (networkConfig && networkConfig.tokens) {
       const token = networkConfig.tokens[stakeTokenSymbol];
       if (token && token.decimals) {
-        console.log(`🔍 Found stake decimals for ${stakeTokenSymbol} in ${network?.symbol} config:`, token.decimals);
         return token.decimals;
       }
     }
@@ -846,14 +782,12 @@ const ClaimList = () => {
       if (network.tokens && network.tokens[stakeTokenSymbol]) {
         const token = network.tokens[stakeTokenSymbol];
         if (token && token.decimals) {
-          console.log(`🔍 Found stake decimals for ${stakeTokenSymbol} in ${networkKey} config:`, token.decimals);
           return token.decimals;
         }
       }
     }
     
     // If not found in any network config, use a reasonable default
-    console.log(`🔍 No decimals found for ${stakeTokenSymbol} in any network config, using default: 18`);
     return 18;
   }, [network?.symbol, getNetworkWithSettings, getStakeTokenSymbol]);
 
@@ -867,7 +801,6 @@ const ClaimList = () => {
       // Get the network configuration for this claim
       const networkConfig = getNetworkWithSettings(claim.networkKey);
       if (!networkConfig?.rpcUrl) {
-        console.log('🔍 No RPC URL for network:', claim.networkKey);
         return false;
       }
 
@@ -886,14 +819,6 @@ const ClaimList = () => {
       // Check if user has any stake on the current outcome
       const hasStake = userStake && userStake.gt(0);
       
-      console.log('🔍 Stake check result:', {
-        claimNum: claim.actualClaimNum || claim.claimNum,
-        currentOutcome,
-        userAddress,
-        userStake: userStake?.toString(),
-        hasStake
-      });
-      
       return hasStake;
     } catch (error) {
       console.error('🔍 Error checking user stakes:', error);
@@ -907,7 +832,6 @@ const ClaimList = () => {
       return;
     }
 
-    console.log('🔍 Loading stake information for', claims.length, 'claims');
     
     const stakePromises = claims.map(async (claim) => {
       if (!claim.bridgeAddress || (!claim.actualClaimNum && !claim.claimNum)) {
@@ -925,7 +849,6 @@ const ClaimList = () => {
         const hasStakes = await checkUserHasStakesOnCurrentOutcome(claim, account);
         return { claimKey, hasStakes };
       } catch (error) {
-        console.error('🔍 Error loading stake for claim:', claim.actualClaimNum || claim.claimNum, error);
         return { claimKey, hasStakes: false };
       }
     });
@@ -1870,20 +1793,7 @@ const ClaimList = () => {
   // Wallet connection is only needed for actions like withdraw/challenge
 
   const getClaimStatus = (claim) => {
-    // Debug: Log status calculation details
-    console.log('🔍 getClaimStatus debug:', {
-      claimNum: claim.claimNum || claim.actualClaimNum,
-      currentBlock: !!currentBlock,
-      currentBlockTimestamp: currentBlock?.timestamp,
-      finished: claim.finished,
-      withdrawn: claim.withdrawn,
-      currentOutcome: claim.currentOutcome,
-      expiryTs: claim.expiryTs?.toString(),
-      expiryTsType: typeof claim.expiryTs
-    });
-    
     if (!currentBlock) {
-      console.log('⚠️ No currentBlock available, using fallback status logic');
       // Fallback logic when currentBlock is not available
       if (claim.finished) {
         if (claim.currentOutcome === 0 && !claim.withdrawn) {
@@ -1903,13 +1813,6 @@ const ClaimList = () => {
     const expiryTime = claim.expiryTs ? 
       (typeof claim.expiryTs.toNumber === 'function' ? claim.expiryTs.toNumber() : claim.expiryTs) : 
       0;
-    
-    console.log('🔍 Status calculation:', {
-      now,
-      expiryTime,
-      isExpired: now > expiryTime,
-      finished: claim.finished
-    });
     
     if (claim.finished) {
       // For NO outcomes: show "withdrawn" if finished=true and withdrawn=false
@@ -1995,19 +1898,8 @@ const ClaimList = () => {
 
 
   const getTimeRemaining = (expiryTs) => {
-    console.log('🔍 getTimeRemaining called with:', {
-      expiryTs,
-      expiryTsType: typeof expiryTs,
-      currentBlock: !!currentBlock,
-      currentBlockTimestamp: currentBlock?.timestamp
-    });
-    
     // Use currentBlock timestamp if available, otherwise fallback to current time
     const now = currentBlock?.timestamp || Math.floor(Date.now() / 1000);
-    
-    if (!currentBlock) {
-      console.log('🔍 getTimeRemaining: No currentBlock available, using current timestamp as fallback');
-    }
     
     // Handle BigNumber deserialization (same pattern as formatAmount)
     let expiryTime = 0;
@@ -2030,20 +1922,11 @@ const ClaimList = () => {
         } else if (expiryTs.toString && typeof expiryTs.toString === 'function') {
           expiryTime = parseInt(expiryTs.toString(), 10);
         } else {
-          console.warn('🔍 Unknown expiryTs object type:', expiryTs);
           expiryTime = 0;
         }
       }
     }
     
-    // Debug: Log the expiry time calculation
-    console.log('🔍 getTimeRemaining debug:', {
-      expiryTs,
-      expiryTsType: typeof expiryTs,
-      expiryTime,
-      now,
-      timeRemaining: expiryTime - now
-    });
     
     const timeRemaining = expiryTime - now;
     
@@ -2321,55 +2204,9 @@ const ClaimList = () => {
             return timestampB - timestampA;
           });
 
-          console.log(`🔍 Display data breakdown:`, {
-            filter: filter,
-            hasAggregatedData: !!aggregatedData,
-            totalDisplayItems: displayData.length,
-            completedTransfers: aggregatedData?.completedTransfers?.length || 0,
-            suspiciousClaims: aggregatedData?.suspiciousClaims?.length || 0,
-            pendingTransfers: aggregatedData?.pendingTransfers?.length || 0,
-            fallbackClaims: claims.length
-          });
 
-          // Check for withdrawn claims in display data
-          const withdrawnInDisplay = displayData.filter(item => item.withdrawn === true);
-          console.log(`💰 WITHDRAWN CLAIMS IN DISPLAY (${withdrawnInDisplay.length}):`, withdrawnInDisplay.map(item => ({
-            claimNum: item.claimNum || item.actualClaimNum,
-            withdrawn: item.withdrawn,
-            finished: item.finished,
-            currentOutcome: item.currentOutcome,
-            amount: item.amount?.toString(),
-            recipientAddress: item.recipientAddress,
-            networkName: item.networkName,
-            bridgeType: item.bridgeType
-          })));
 
-          // Debug: Show what's in each category
-          if (aggregatedData) {
-            console.log(`🔍 Completed transfers in display:`, aggregatedData.completedTransfers.map(ct => ({
-              claimNum: ct.claimNum || ct.actualClaimNum,
-              eventType: ct.transfer?.eventType,
-              amount: ct.amount?.toString(),
-              status: ct.status
-            })));
-            
-            console.log(`🔍 Pending transfers in display:`, aggregatedData.pendingTransfers.map(pt => ({
-              eventType: pt.eventType,
-              amount: pt.amount?.toString(),
-              status: pt.status,
-              transactionHash: pt.transactionHash
-            })));
-          }
 
-          console.log(`🔍 Sorted ${displayData.length} items by most recent first:`, 
-            displayData.slice(0, 5).map(item => ({
-              type: item.eventType ? 'transfer' : 'claim',
-              eventType: item.eventType,
-              blockNumber: item.blockNumber,
-              timestamp: item.timestamp || item.blockTimestamp,
-              claimNum: item.claimNum || item.actualClaimNum
-            }))
-          );
 
           return displayData.map((item, index) => {
             // Handle both claims and transfers
@@ -2411,70 +2248,10 @@ const ClaimList = () => {
               status: 'completed'
             };
             
-          // Debug: Log the claim data to see what we're working with
-            console.log(`🔍 Item ${index + 1} data:`, {
-              itemType: isTransfer ? 'transfer' : 'claim',
-            claimNum: claim.claimNum,
-            actualClaimNum: claim.actualClaimNum,
-            amount: claim.amount,
-            amountType: typeof claim.amount,
-            amountString: claim.amount?.toString(),
-            reward: claim.reward,
-            rewardType: typeof claim.reward,
-            rewardString: claim.reward?.toString(),
-            yesStake: claim.yesStake,
-            yesStakeType: typeof claim.yesStake,
-            yesStakeString: claim.yesStake?.toString(),
-            noStake: claim.noStake,
-            noStakeType: typeof claim.noStake,
-            noStakeString: claim.noStake?.toString(),
-            currentOutcome: claim.currentOutcome,
-            finished: claim.finished,
-            withdrawn: claim.withdrawn,
-            bridgeType: claim.bridgeType,
-            homeTokenSymbol: claim.homeTokenSymbol,
-            foreignTokenSymbol: claim.foreignTokenSymbol,
-            homeTokenAddress: claim.homeTokenAddress,
-            foreignTokenAddress: claim.foreignTokenAddress,
-            homeNetwork: claim.homeNetwork,
-            foreignNetwork: claim.foreignNetwork,
-            transferTokenSymbol: getTransferTokenSymbol(claim),
-            claimTransactionHash: claim.claimTransactionHash,
-            hasClaimTransactionHash: !!claim.claimTransactionHash,
-              isSuspicious,
-              isPending,
-              rawItem: item
-          });
           
           const status = getClaimStatus(claim);
           
-          // Debug withdrawn claims rendering
-          if (claim.withdrawn === true) {
-            console.log(`💰 RENDERING WITHDRAWN CLAIM:`, {
-              claimNum: claim.claimNum || claim.actualClaimNum,
-              withdrawn: claim.withdrawn,
-              finished: claim.finished,
-              status: status,
-              currentOutcome: claim.currentOutcome,
-              amount: claim.amount?.toString(),
-              recipientAddress: claim.recipientAddress,
-              networkName: claim.networkName,
-              bridgeType: claim.bridgeType,
-              hasTransfer: !!claim.transfer
-            });
-          }
           
-          // Debug NO outcome claims to check status logic
-          if (claim.currentOutcome === 0 && claim.finished) {
-            console.log(`🔍 NO OUTCOME CLAIM STATUS DEBUG:`, {
-              claimNum: claim.claimNum || claim.actualClaimNum,
-              withdrawn: claim.withdrawn,
-              finished: claim.finished,
-              currentOutcome: claim.currentOutcome,
-              status: status,
-              shouldBeWithdrawn: claim.currentOutcome === 0 && !claim.withdrawn
-            });
-          }
           
           return (
             <motion.div
@@ -2668,17 +2445,6 @@ const ClaimList = () => {
                                 }
                               })()}
                             </div>
-                            {(() => {
-                              console.log('🔍 UI: Checking if reward should be displayed:', {
-                                reward: claim.reward,
-                                rewardType: typeof claim.reward,
-                                rewardString: claim.reward?.toString(),
-                                isTruthy: !!claim.reward,
-                                isNotZero: claim.reward !== '0' && claim.reward !== '0x0',
-                                claimNum: claim.claimNum || claim.actualClaimNum
-                              });
-                              return null;
-                            })()}
                             {claim.reward && claim.reward !== '0' && claim.reward !== '0x0' && (
                               <div>
                                 <span className="text-secondary-400">Reward:</span>
@@ -3161,17 +2927,6 @@ const ClaimList = () => {
                                   const stakeAmount = claim.yesStake;
                                   const stakeDecimals = getStakeTokenDecimals(claim);
                                   const stakeAddress = getStakeTokenAddress(claim);
-                                  const stakeSymbol = getStakeTokenSymbol(claim);
-                                  
-                                  console.log('🔍 YES stake debug:', {
-                                    stakeAmount: stakeAmount?.toString(),
-                                    stakeAmountType: typeof stakeAmount,
-                                    stakeDecimals,
-                                    stakeAddress,
-                                    stakeSymbol,
-                                    isZero: stakeAmount === 0 || stakeAmount === '0' || stakeAmount === '0x0',
-                                    formatted: stakeAmount ? formatAmount(stakeAmount, stakeDecimals, stakeAddress) : '0'
-                                  });
                                   
                                   return stakeAmount ? formatAmount(stakeAmount, stakeDecimals, stakeAddress) : '0';
                                 })()} {getStakeTokenSymbol(claim)}
@@ -3204,17 +2959,6 @@ const ClaimList = () => {
                                   const stakeAmount = claim.noStake;
                                   const stakeDecimals = getStakeTokenDecimals(claim);
                                   const stakeAddress = getStakeTokenAddress(claim);
-                                  const stakeSymbol = getStakeTokenSymbol(claim);
-                                  
-                                  console.log('🔍 NO stake debug:', {
-                                    stakeAmount: stakeAmount?.toString(),
-                                    stakeAmountType: typeof stakeAmount,
-                                    stakeDecimals,
-                                    stakeAddress,
-                                    stakeSymbol,
-                                    isZero: stakeAmount === 0 || stakeAmount === '0' || stakeAmount === '0x0',
-                                    formatted: stakeAmount ? formatAmount(stakeAmount, stakeDecimals, stakeAddress) : '0'
-                                  });
                                   
                                   return stakeAmount ? formatAmount(stakeAmount, stakeDecimals, stakeAddress) : '0';
                                 })()} {getStakeTokenSymbol(claim)}
