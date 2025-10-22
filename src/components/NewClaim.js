@@ -996,8 +996,8 @@ const NewClaim = ({ isOpen, onClose, selectedToken = null, selectedTransfer = nu
               bridge.type === 'import';
             
             const matches = isImportType && 
-              bridge.homeTokenAddress?.toLowerCase() === formData.tokenAddress.toLowerCase() &&
-              bridge.homeNetwork === network?.name;
+              bridge.foreignTokenAddress?.toLowerCase() === formData.tokenAddress.toLowerCase() &&
+              bridge.foreignNetwork === network?.name;
             
             console.log('🔍 Checking import bridge for expatriation:', {
               bridgeType: bridge.type,
