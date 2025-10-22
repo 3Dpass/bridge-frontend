@@ -2,6 +2,7 @@ import React, { useState, useEffect, useCallback } from 'react';
 import { ethers } from 'ethers';
 import { useWeb3 } from '../contexts/Web3Context';
 import { useSettings } from '../contexts/SettingsContext';
+import { ADDRESS_ZERO } from '../config/networks';
 import { 
   createCounterstakeContract
 } from '../utils/bridge-contracts';
@@ -28,7 +29,7 @@ const Challenge = ({ claim, onChallengeSuccess, onClose }) => {
   const [stakeAmount, setStakeAmount] = useState('');
   const [selectedOutcome, setSelectedOutcome] = useState(null); // 0 for NO, 1 for YES
   const [requiredStake, setRequiredStake] = useState(null);
-  const [userP3DBalance, setUserP3DBalance] = useState(null);
+  const [userStakeTokenBalance, setUserStakeTokenBalance] = useState(null);
   const [currentAllowance, setCurrentAllowance] = useState(null);
   const [isRevoking, setIsRevoking] = useState(false);
 
@@ -118,6 +119,12 @@ const Challenge = ({ claim, onChallengeSuccess, onClose }) => {
   }, [claim.bridgeAddress, getAllNetworksWithSettings]);
 
   const stakeInfo = getRequiredNetworkAndStakeToken();
+  
+  // Check if stake token is native (zero address) - no approval needed
+  const isNativeStakeToken = useCallback(() => {
+    if (!stakeInfo?.stakeTokenAddress) return false;
+    return stakeInfo.stakeTokenAddress.toLowerCase() === ADDRESS_ZERO.toLowerCase();
+  }, [stakeInfo?.stakeTokenAddress]);
   
   // Convert from display amount (with multiplier) to actual amount (for contract)
   const convertDisplayToActual = useCallback((displayAmount, decimals, tokenAddress) => {
@@ -266,32 +273,56 @@ const Challenge = ({ claim, onChallengeSuccess, onClose }) => {
       if (!provider || !account || !stakeInfo) return;
 
       const stakeTokenAddress = stakeInfo.stakeTokenAddress;
-      const stakeTokenAbi = [
-        "function balanceOf(address owner) view returns (uint256)",
-        "function transfer(address to, uint256 amount) returns (bool)",
-        "function transferFrom(address from, address to, uint256 amount) returns (bool)",
-        "function approve(address spender, uint256 amount) returns (bool)"
-      ];
-      
-      const stakeTokenContract = new ethers.Contract(stakeTokenAddress, stakeTokenAbi, provider);
-      const balance = await stakeTokenContract.balanceOf(account);
-      
-      // Use decimals from bridge settings
       const stakeDecimals = stakeInfo.stakeTokenDecimals || 18;
+      let balance;
+
+      // Handle native tokens (zero address) differently
+      if (isNativeStakeToken()) {
+        console.log('🔍 Getting native token balance for account:', account);
+        balance = await provider.getBalance(account);
+        console.log('🔍 Native token balance (Wei):', balance.toString());
+      } else {
+        // Handle ERC20 tokens
+        const stakeTokenAbi = [
+          "function balanceOf(address owner) view returns (uint256)",
+          "function transfer(address to, uint256 amount) returns (bool)",
+          "function transferFrom(address from, address to, uint256 amount) returns (bool)",
+          "function approve(address spender, uint256 amount) returns (bool)"
+        ];
+        
+        const stakeTokenContract = new ethers.Contract(stakeTokenAddress, stakeTokenAbi, provider);
+        balance = await stakeTokenContract.balanceOf(account);
+        console.log('🔍 ERC20 token balance (Wei):', balance.toString());
+      }
+      
+      // Format balance using decimals from bridge settings
       const balanceFormatted = ethers.utils.formatUnits(balance, stakeDecimals);
       
       // Apply multiplier for display if it's a P3D token
       const balanceDisplay = convertActualToDisplay(balanceFormatted, stakeDecimals, stakeTokenAddress);
-      setUserP3DBalance(balanceDisplay);
+      console.log('🔍 Final balance display:', {
+        balanceFormatted,
+        balanceDisplay,
+        isNativeToken: isNativeStakeToken(),
+        stakeTokenSymbol: stakeInfo.stakeTokenSymbol
+      });
+      setUserStakeTokenBalance(balanceDisplay);
     } catch (error) {
       console.error('Error getting stake token balance:', error);
       toast.error('Failed to get stake token balance');
     }
-  }, [provider, account, stakeInfo, convertActualToDisplay]);
+  }, [provider, account, stakeInfo, convertActualToDisplay, isNativeStakeToken]);
 
   const getCurrentAllowance = useCallback(async () => {
     try {
       if (!provider || !account || !claim.bridgeAddress || !stakeInfo) return;
+
+      // Skip allowance check for native tokens (zero address)
+      if (isNativeStakeToken()) {
+        console.log('🔍 Native stake token detected, skipping allowance check');
+        setCurrentAllowance('N/A'); // Not applicable for native tokens
+        return;
+      }
 
       const stakeTokenAddress = stakeInfo.stakeTokenAddress;
       const stakeTokenAbi = [
@@ -335,7 +366,7 @@ const Challenge = ({ claim, onChallengeSuccess, onClose }) => {
       toast.error('Failed to get current allowance');
       setCurrentAllowance('0');
     }
-  }, [provider, account, claim.bridgeAddress, stakeInfo, convertActualToDisplay]);
+  }, [provider, account, claim.bridgeAddress, stakeInfo, convertActualToDisplay, isNativeStakeToken]);
 
   useEffect(() => {
     if (claim && provider && account) {
@@ -373,7 +404,7 @@ const Challenge = ({ claim, onChallengeSuccess, onClose }) => {
       return;
     }
 
-    if (userP3DBalance && parseFloat(stakeAmount) > parseFloat(userP3DBalance)) {
+    if (userStakeTokenBalance && parseFloat(stakeAmount) > parseFloat(userStakeTokenBalance)) {
       toast.error(`Insufficient ${stakeInfo?.stakeTokenSymbol || 'stake token'} balance`);
       return;
     }
@@ -432,51 +463,74 @@ const Challenge = ({ claim, onChallengeSuccess, onClose }) => {
         displayAmount: stakeAmount,
         actualAmount: actualStakeAmount,
         stakeAmountWei: stakeAmountWei.toString(),
-        stakeDecimals
+        stakeDecimals,
+        isNativeToken: isNativeStakeToken(),
+        stakeTokenAddress: stakeTokenAddress
       });
       
-      // First, approve the bridge to spend stake tokens
-      const stakeTokenAbi = [
-        "function approve(address spender, uint256 amount) returns (bool)",
-        "function allowance(address owner, address spender) view returns (uint256)"
-      ];
-      
-      const stakeTokenContract = new ethers.Contract(stakeTokenAddress, stakeTokenAbi, signer);
-      
-      // Check current allowance first
-      console.log(`Checking ${stakeInfo.stakeTokenSymbol} allowance...`);
-      const currentAllowance = await stakeTokenContract.allowance(account, claim.bridgeAddress);
-      console.log('Current allowance:', currentAllowance.toString());
-      console.log('Required amount:', stakeAmountWei.toString());
-      
-      // Only approve if current allowance is insufficient and not at maximum
-      if (!currentAllowance.eq(getMaxAllowance()) && currentAllowance.lt(stakeAmountWei)) {
-        console.log(`Insufficient allowance, approving ${stakeInfo.stakeTokenSymbol} for bridge...`);
-        try {
-          const approveTx = await stakeTokenContract.approve(claim.bridgeAddress, stakeAmountWei);
-      await approveTx.wait();
-          console.log(`${stakeInfo.stakeTokenSymbol} approval successful`);
-        } catch (approveError) {
-          console.error(`Error approving ${stakeInfo.stakeTokenSymbol}:`, approveError);
-          
-          if (approveError.code === 'ACTION_REJECTED' || approveError.message?.includes('user rejected')) {
-            throw new Error(`${stakeInfo.stakeTokenSymbol} approval was cancelled by user`);
-          } else if (approveError.code === 'INSUFFICIENT_FUNDS') {
-            throw new Error(`Insufficient funds for ${stakeInfo.stakeTokenSymbol} approval`);
-          } else {
-            throw new Error(`${stakeInfo.stakeTokenSymbol} approval failed: ${approveError.message}`);
+      // Skip approval for native tokens (zero address)
+      if (!isNativeStakeToken()) {
+        // First, approve the bridge to spend stake tokens
+        const stakeTokenAbi = [
+          "function approve(address spender, uint256 amount) returns (bool)",
+          "function allowance(address owner, address spender) view returns (uint256)"
+        ];
+        
+        const stakeTokenContract = new ethers.Contract(stakeTokenAddress, stakeTokenAbi, signer);
+        
+        // Check current allowance first
+        console.log(`Checking ${stakeInfo.stakeTokenSymbol} allowance...`);
+        const currentAllowance = await stakeTokenContract.allowance(account, claim.bridgeAddress);
+        console.log('Current allowance:', currentAllowance.toString());
+        console.log('Required amount:', stakeAmountWei.toString());
+        
+        // Only approve if current allowance is insufficient and not at maximum
+        if (!currentAllowance.eq(getMaxAllowance()) && currentAllowance.lt(stakeAmountWei)) {
+          console.log(`Insufficient allowance, approving ${stakeInfo.stakeTokenSymbol} for bridge...`);
+          try {
+            const approveTx = await stakeTokenContract.approve(claim.bridgeAddress, stakeAmountWei);
+        await approveTx.wait();
+            console.log(`${stakeInfo.stakeTokenSymbol} approval successful`);
+          } catch (approveError) {
+            console.error(`Error approving ${stakeInfo.stakeTokenSymbol}:`, approveError);
+            
+            if (approveError.code === 'ACTION_REJECTED' || approveError.message?.includes('user rejected')) {
+              throw new Error(`${stakeInfo.stakeTokenSymbol} approval was cancelled by user`);
+            } else if (approveError.code === 'INSUFFICIENT_FUNDS') {
+              throw new Error(`Insufficient funds for ${stakeInfo.stakeTokenSymbol} approval`);
+            } else {
+              throw new Error(`${stakeInfo.stakeTokenSymbol} approval failed: ${approveError.message}`);
+            }
           }
+        } else {
+          console.log('Sufficient allowance already exists, skipping approval');
         }
       } else {
-        console.log('Sufficient allowance already exists, skipping approval');
+        console.log('Native stake token detected, skipping approval step');
       }
 
       // Now call the challenge function using explicit function signature for overloaded function
       console.log(`Challenging claim ${actualClaimNum} with outcome ${selectedOutcome} and stake ${stakeAmount} ${stakeInfo.stakeTokenSymbol}`);
-      try {
-      const challengeTx = await contract.functions['challenge(uint256,uint8,uint256)'](actualClaimNum, selectedOutcome, stakeAmountWei, {
+      
+      // Prepare transaction options
+      const txOptions = {
         gasLimit: 500000
-      });
+      };
+      
+      // Add value for native tokens (zero address)
+      if (isNativeStakeToken()) {
+        txOptions.value = stakeAmountWei;
+        console.log('🔍 Native token detected, adding value to transaction:', {
+          value: stakeAmountWei.toString(),
+          valueInEth: ethers.utils.formatEther(stakeAmountWei)
+        });
+      } else {
+        txOptions.value = 0; // Explicitly set value to 0 for ERC20 tokens
+        console.log('🔍 ERC20 token detected, setting value to 0');
+      }
+      
+      try {
+      const challengeTx = await contract.functions['challenge(uint256,uint8,uint256)'](actualClaimNum, selectedOutcome, stakeAmountWei, txOptions);
       
       const receipt = await challengeTx.wait();
       console.log('Challenge successful:', receipt);
@@ -548,6 +602,13 @@ const Challenge = ({ claim, onChallengeSuccess, onClose }) => {
       
       if (!stakeInfo) {
         throw new Error('Unable to determine stake token information');
+      }
+
+      // Skip revocation for native tokens (zero address)
+      if (isNativeStakeToken()) {
+        console.log('🔍 Native stake token detected, skipping allowance revocation');
+        toast.info('Native tokens do not require allowance management');
+        return;
       }
 
       const signer = provider.getSigner();
@@ -762,13 +823,13 @@ const Challenge = ({ claim, onChallengeSuccess, onClose }) => {
               <div className="flex justify-between">
                 <span className="text-secondary-400">YES Stakes:</span>
                 <span className="text-white">
-                  {formatAmount(claim.yesStake || claim.yes_stake, get3DPassTokenDecimals('0x0000000000000000000000000000000000000802') || 18, '0x0000000000000000000000000000000000000802')} P3D
+                  {formatAmount(claim.yesStake || claim.yes_stake, stakeInfo?.stakeTokenDecimals || 18, stakeInfo?.stakeTokenAddress)} {stakeInfo?.stakeTokenSymbol || 'Token'}
                 </span>
               </div>
               <div className="flex justify-between">
                 <span className="text-secondary-400">NO Stakes:</span>
                 <span className="text-white">
-                  {formatAmount(claim.noStake || claim.no_stake, get3DPassTokenDecimals('0x0000000000000000000000000000000000000802') || 18, '0x0000000000000000000000000000000000000802')} P3D
+                  {formatAmount(claim.noStake || claim.no_stake, stakeInfo?.stakeTokenDecimals || 18, stakeInfo?.stakeTokenAddress)} {stakeInfo?.stakeTokenSymbol || 'Token'}
                 </span>
               </div>
             </div>
@@ -836,12 +897,12 @@ const Challenge = ({ claim, onChallengeSuccess, onClose }) => {
                 Required minimum: {requiredStake} {stakeInfo?.stakeTokenSymbol || 'Token'}
               </div>
             )}
-            {userP3DBalance && (
+            {userStakeTokenBalance && (
               <div className="mt-1 text-sm text-secondary-400">
-                Your balance: {userP3DBalance} {stakeInfo?.stakeTokenSymbol || 'Token'}
+                Your balance: {userStakeTokenBalance} {stakeInfo?.stakeTokenSymbol || 'Token'}
               </div>
             )}
-            {currentAllowance !== null && stakeAmount && (
+            {currentAllowance !== null && stakeAmount && !isNativeStakeToken() && (
               <div className="mt-1 text-sm">
                 <span className="text-secondary-400">Current allowance: </span>
                 <span className={currentAllowance === 'Max' || parseFloat(currentAllowance) >= parseFloat(stakeAmount) ? 'text-success-400' : 'text-warning-400'}>
@@ -857,8 +918,8 @@ const Challenge = ({ claim, onChallengeSuccess, onClose }) => {
             )}
           </div>
 
-          {/* Revoke Allowance Button - Show if there's any existing allowance */}
-          {currentAllowance !== null && currentAllowance !== '0' && (
+          {/* Revoke Allowance Button - Show if there's any existing allowance and not native token */}
+          {currentAllowance !== null && currentAllowance !== '0' && !isNativeStakeToken() && (
             <div className="mb-6">
               <button
                 onClick={handleRevokeAllowance}
