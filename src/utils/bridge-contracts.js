@@ -5,8 +5,10 @@ import {
   COUNTERSTAKE_ABI
 } from '../contracts/abi';
 import { getBridgeInstanceByAddress, NETWORKS } from '../config/networks';
+import { safeBigNumberToInt } from './safe-reward-handler';
 
 // 3DPass Bridge Contract Utilities
+
 
 /**
  * Get the appropriate ABI for a network
@@ -425,17 +427,18 @@ export const getBlockTimestamp = async (provider, blockNumber) => {
  * @param {ethers.Contract} assistantContract - Assistant contract instance
  * @param {Object} transfer - Transfer object
  * @param {string} claimerAddress - Claimer address
+ * @param {string} tokenSymbol - Token symbol for error messages (default: 'tokens')
  * @returns {Promise<ethers.ContractReceipt>} Transaction receipt
  */
-export const claimTransfer = async (assistantContract, transfer, claimerAddress) => {
+export const claimTransfer = async (assistantContract, transfer, claimerAddress, tokenSymbol = 'tokens', decimals = 18) => {
   try {
     const { destinationAddress, data, amount, reward } = transfer;
     const amountWei = ethers.utils.parseEther(amount);
     const rewardWei = ethers.utils.parseEther(reward);
     
     // CRITICAL: Reward should be passed as int, not BigNumber for assistant claim function
-    // The ABI expects "int reward", not "uint reward" - convert to integer
-    const rewardInt = parseInt(rewardWei.toString());
+    // The ABI expects "int reward", not "uint reward" - convert to integer safely using centralized utility
+    const rewardInt = safeBigNumberToInt(rewardWei, tokenSymbol, decimals);
     
     let tx;
     

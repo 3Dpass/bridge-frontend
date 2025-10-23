@@ -762,13 +762,40 @@ export const SettingsProvider = ({ children }) => {
     
     const address = tokenAddress.toLowerCase();
     
-    // Search through all networks
+    // First, search through custom settings
     for (const [, network] of Object.entries(settings)) {
       if (network && network.tokens) {
         for (const [, token] of Object.entries(network.tokens)) {
           if (token.address && token.address.toLowerCase() === address) {
             return token;
           }
+        }
+      }
+    }
+    
+    // If not found in custom settings, search through default network configurations
+    for (const [, network] of Object.entries(NETWORKS)) {
+      if (network && network.tokens) {
+        for (const [, token] of Object.entries(network.tokens)) {
+          if (token.address && token.address.toLowerCase() === address) {
+            return token;
+          }
+        }
+      }
+      
+      // Also check nativeCurrency for tokens like P3D on 3DPass
+      if (network.nativeCurrency && network.nativeCurrency.symbol) {
+        const nativeToken = {
+          address: network.nativeCurrency.symbol === 'P3D' ? P3D_PRECOMPILE_ADDRESS : '0x0000000000000000000000000000000000000000',
+          symbol: network.nativeCurrency.symbol,
+          name: network.nativeCurrency.name,
+          decimals: network.nativeCurrency.decimals,
+          isNative: true,
+          ...network.nativeCurrency // Include any additional properties like decimalsDisplayMultiplier
+        };
+        
+        if (nativeToken.address && nativeToken.address.toLowerCase() === address) {
+          return nativeToken;
         }
       }
     }

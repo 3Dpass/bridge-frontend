@@ -3,6 +3,7 @@ import { ethers } from 'ethers';
 import { AlertCircle, CheckCircle, ArrowRight, Loader, RefreshCw } from 'lucide-react';
 import { motion } from 'framer-motion';
 import toast from 'react-hot-toast';
+import { parseAndValidateReward } from '../utils/safe-reward-handler';
 
 // Safely convert to EIP-55 checksum if it's an EVM address
 const toChecksumAddress = (address) => {
@@ -17,6 +18,7 @@ const toChecksumAddress = (address) => {
 const getMaxAllowance = () => {
   return ethers.constants.MaxUint256;
 };
+
 
 const Expatriation = ({ 
   bridgeInstance, 
@@ -567,14 +569,42 @@ const Expatriation = ({
       // Use actual decimals instead of configured ones
       const amount = ethers.utils.parseUnits(formData.amount, actualDecimals);
       const rewardInput = (formData.reward && String(formData.reward).length > 0) ? formData.reward : '0';
-      // Reward should be passed as int, not BigNumber for transferToForeignChain
-      const reward = parseInt(ethers.utils.parseUnits(rewardInput, actualDecimals).toString());
+      
+      // CRITICAL: Expatriation requires int reward, not BigNumber
+      // Use centralized utility for safe reward handling with auto-capping
+      const rewardData = parseAndValidateReward(rewardInput, actualDecimals, sourceToken.symbol, true);
+      const reward = rewardData.reward;
+      
+      // Show warning if reward was capped
+      if (rewardData.wasCapped) {
+        toast.warning(
+          <div>
+            <h3 className="text-warning-400 font-medium">Reward Amount Capped</h3>
+            <p className="text-warning-300 text-sm mt-1">
+              Your reward of {rewardData.originalValue} {sourceToken.symbol} exceeds the safe limit.
+            </p>
+            <p className="text-warning-300 text-sm mt-1">
+              Using maximum safe value: {rewardData.maxSafeValue} {sourceToken.symbol}
+            </p>
+          </div>,
+          {
+            duration: 8000,
+            style: {
+              background: '#92400e',
+              border: '1px solid #f59e0b',
+              color: '#fff',
+              padding: '16px',
+              borderRadius: '8px',
+            },
+          }
+        );
+      }
       const data = '0x'; // Empty data for ERC20 transfers (matching test script)
       
       console.log('💰 Parsed amounts:', {
         amount: ethers.utils.formatUnits(amount, actualDecimals),
         reward: reward,
-        rewardFormatted: ethers.utils.formatUnits(ethers.BigNumber.from(reward), actualDecimals)
+        rewardFormatted: rewardData.displayValue
       });
 
       // Validate parameters
@@ -586,6 +616,7 @@ const Expatriation = ({
         amountType: typeof amount,
         rewardType: typeof reward
       });
+
 
       // Validate bridge contract configuration
       try {
@@ -662,6 +693,33 @@ const Expatriation = ({
         console.warn('⚠️ Could not check allowance before transfer:', e);
       }
       const foreignAddressChecksummed = toChecksumAddress(formData.destinationAddress);
+      
+      // Log final transaction parameters that will be sent to the smart contract
+      console.log('🚀 FINAL TRANSACTION PARAMETERS (Expatriation):', {
+        functionName: 'transferToForeignChain',
+        parameters: {
+          foreign_address: foreignAddressChecksummed,
+          data: data,
+          amount: {
+            value: amount.toString(),
+            type: 'BigNumber',
+            humanReadable: ethers.utils.formatUnits(amount, actualDecimals) + ' ' + sourceToken.symbol
+          },
+          reward: {
+            value: reward,
+            type: 'number (JavaScript int)',
+            humanReadable: rewardData.displayValue + ' ' + sourceToken.symbol,
+            contractExpects: 'int (can be negative)',
+            maxSafeValue: rewardData.maxSafeValue + ' ' + sourceToken.symbol,
+            wasCapped: rewardData.wasCapped,
+            originalValue: rewardData.originalValue + ' ' + sourceToken.symbol
+          }
+        },
+        gasLimit: 9000000,
+        contractAddress: bridgeInstance.address,
+        contractFunction: 'transferToForeignChain(string, string, uint, int)'
+      });
+      
       const transferTx = await exportContract.transferToForeignChain(
         foreignAddressChecksummed,
         data,

@@ -23,6 +23,9 @@ importers:
       '@truffle/hdwallet-provider':
         specifier: ^2.1.15
         version: 2.1.15(@babel/core@7.28.0)(bufferutil@4.0.9)(utf-8-validate@5.0.10)
+      bignumber.js:
+        specifier: ^9.3.1
+        version: 9.3.1
       clsx:
         specifier: ^1.2.1
         version: 1.2.1

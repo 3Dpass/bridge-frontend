@@ -4,6 +4,7 @@ import { useSettings } from '../contexts/SettingsContext';
 import { NETWORKS } from '../config/networks';
 import { getTokenBalance, isValidAddress, isValidAmount } from '../utils/web3';
 import { transferToForeignChain, createBridgeContract } from '../utils/bridge-contracts';
+import { getMaxSafeReward } from '../utils/safe-reward-handler';
 import { ArrowDown, ArrowRightLeft, Eye, EyeOff } from 'lucide-react';
 import { motion } from 'framer-motion';
 import Expatriation from './Expatriation';
@@ -653,12 +654,84 @@ const BridgeForm = () => {
     
     setFormData(prev => ({ ...prev, [field]: value }));
     
-    // Auto-calculate reward when amount changes
+    // Auto-calculate default reward when amount changes
     if (field === 'amount' && value && !isNaN(parseFloat(value))) {
       const amount = parseFloat(value);
-      const calculatedReward = (amount * 0.03).toFixed(6); // 3% reward
+      let calculatedReward = (amount * 0.02).toFixed(6); // 2% reward by default
+      
+      // Check if the calculated reward exceeds safe limits and cap it if needed
+      if (formData.sourceToken) {
+        const sourceTokens = getAvailableSourceTokens(formData.sourceNetwork);
+        const sourceToken = sourceTokens.find(t => t.symbol === formData.sourceToken);
+        
+        if (sourceToken) {
+          // Convert calculated reward to actual reward using DecimalsDisplayMultiplier
+          const actualReward = convertDisplayToActual(calculatedReward, sourceToken.decimals, sourceToken.address, getTokenDecimalsDisplayMultiplier);
+          const actualRewardNum = parseFloat(actualReward);
+          
+          // Get max safe reward in actual units
+          const maxSafeRewardActual = parseFloat(getMaxSafeReward(sourceToken.symbol, sourceToken.decimals));
+          
+          if (actualRewardNum > maxSafeRewardActual) {
+            // Cap the calculated reward to the maximum safe value
+            const maxSafeRewardDisplay = convertActualToDisplay(maxSafeRewardActual.toString(), sourceToken.decimals, sourceToken.address, getTokenDecimalsDisplayMultiplier);
+            calculatedReward = maxSafeRewardDisplay;
+            
+            console.log('💰 Auto-calculated reward capped:', {
+              originalCalculated: (amount * 0.02).toFixed(6),
+              cappedReward: calculatedReward,
+              tokenSymbol: sourceToken.symbol,
+              maxSafeRewardActual
+            });
+          }
+        }
+      }
+      
       console.log('💰 Auto-calculating reward:', { amount, calculatedReward });
       setFormData(prev => ({ ...prev, reward: calculatedReward }));
+    }
+    
+    // Validate and cap reward when it changes
+    if (field === 'reward' && value && !isNaN(parseFloat(value))) {
+      const rewardAmount = parseFloat(value);
+      
+      // Get source token info for validation
+      if (formData.sourceToken) {
+        const sourceTokens = getAvailableSourceTokens(formData.sourceNetwork);
+        const sourceToken = sourceTokens.find(t => t.symbol === formData.sourceToken);
+        
+        if (sourceToken) {
+          // Convert display reward to actual reward using DecimalsDisplayMultiplier
+          const actualReward = convertDisplayToActual(value, sourceToken.decimals, sourceToken.address, getTokenDecimalsDisplayMultiplier);
+          const actualRewardNum = parseFloat(actualReward);
+          
+          // Get max safe reward in actual units (not display units)
+          const maxSafeRewardActual = parseFloat(getMaxSafeReward(sourceToken.symbol, sourceToken.decimals));
+          
+          // Get the display multiplier for this token
+          const displayMultiplier = getTokenDecimalsDisplayMultiplier(sourceToken.address);
+          
+          console.log('🔍 Reward validation:', {
+            displayReward: rewardAmount,
+            actualReward: actualRewardNum,
+            maxSafeRewardActual,
+            tokenSymbol: sourceToken.symbol,
+            tokenAddress: sourceToken.address,
+            decimals: sourceToken.decimals,
+            displayMultiplier: displayMultiplier || 'none'
+          });
+          
+          if (actualRewardNum > maxSafeRewardActual) {
+            // Convert max safe reward back to display units and cap the input
+            const maxSafeRewardDisplay = convertActualToDisplay(maxSafeRewardActual.toString(), sourceToken.decimals, sourceToken.address, getTokenDecimalsDisplayMultiplier);
+            
+            // Update the form data with the capped value
+            setFormData(prev => ({ ...prev, [field]: maxSafeRewardDisplay }));
+            
+            return; // Exit early since we've capped the value
+          }
+        }
+      }
     }
     
     // Clear related fields when network changes
@@ -1275,11 +1348,81 @@ const BridgeForm = () => {
               onChange={(e) => handleInputChange('reward', e.target.value)}
               placeholder="0.0"
               step="0.000001"
-              className="input-field w-full"
+              className={`input-field w-full ${
+                formData.reward && formData.sourceToken ? 
+                  (() => {
+                    const sourceTokens = getAvailableSourceTokens(formData.sourceNetwork);
+                    const sourceToken = sourceTokens.find(t => t.symbol === formData.sourceToken);
+                    if (sourceToken) {
+                      // Convert display reward to actual reward for comparison
+                      const actualReward = convertDisplayToActual(formData.reward, sourceToken.decimals, sourceToken.address, getTokenDecimalsDisplayMultiplier);
+                      const actualRewardNum = parseFloat(actualReward);
+                      const maxSafeRewardActual = parseFloat(getMaxSafeReward(sourceToken.symbol, sourceToken.decimals));
+                      const displayMultiplier = getTokenDecimalsDisplayMultiplier(sourceToken.address);
+                      
+                      // Convert max safe reward back to display units for comparison
+                      const maxSafeRewardDisplay = convertActualToDisplay(maxSafeRewardActual.toString(), sourceToken.decimals, sourceToken.address, getTokenDecimalsDisplayMultiplier);
+                      const isCapped = parseFloat(formData.reward) === parseFloat(maxSafeRewardDisplay);
+                      
+                      console.log('🔍 Border validation:', {
+                        displayReward: formData.reward,
+                        actualReward: actualRewardNum,
+                        maxSafeRewardActual,
+                        maxSafeRewardDisplay,
+                        displayMultiplier: displayMultiplier || 'none',
+                        isCapped
+                      });
+                      
+                      // Only show green border when the value has been capped
+                      return isCapped ? 'border-success-500' : '';
+                    }
+                    return '';
+                  })() : ''
+              }`}
             />
-            <p className="text-secondary-400 text-sm mt-1">
-              This will incentivize nodes to speed up the transfer
-            </p>
+            <div className="mt-1 space-y-1">
+              <p className="text-secondary-400 text-sm">
+                This will incentivize nodes to speed up the transfer
+              </p>
+              {formData.sourceToken && (() => {
+                const sourceTokens = getAvailableSourceTokens(formData.sourceNetwork);
+                const sourceToken = sourceTokens.find(t => t.symbol === formData.sourceToken);
+                if (sourceToken) {
+                  // Convert display reward to actual reward for comparison
+                  const actualReward = convertDisplayToActual(formData.reward, sourceToken.decimals, sourceToken.address, getTokenDecimalsDisplayMultiplier);
+                  const actualRewardNum = parseFloat(actualReward);
+                  const maxSafeRewardActual = parseFloat(getMaxSafeReward(sourceToken.symbol, sourceToken.decimals));
+                  const displayMultiplier = getTokenDecimalsDisplayMultiplier(sourceToken.address);
+                  
+                  // Convert max safe reward back to display units for comparison
+                  const maxSafeRewardDisplay = convertActualToDisplay(maxSafeRewardActual.toString(), sourceToken.decimals, sourceToken.address, getTokenDecimalsDisplayMultiplier);
+                  const isCapped = parseFloat(formData.reward) === parseFloat(maxSafeRewardDisplay);
+                  
+                  console.log('🔍 Status display:', {
+                    displayReward: formData.reward,
+                    actualReward: actualRewardNum,
+                    maxSafeRewardActual,
+                    maxSafeRewardDisplay,
+                    displayMultiplier: displayMultiplier || 'none',
+                    isCapped
+                  });
+                  
+                  return (
+                    <div className="flex items-center justify-between">
+                      {isCapped && (
+                        <p className="text-xs text-success-400">
+                          ✓ Within safe limits
+                        </p>
+                      )}
+                      <p className="text-xs text-secondary-500">
+                        Max reward: {maxSafeRewardDisplay} {sourceToken.symbol}
+                      </p>
+                    </div>
+                  );
+                }
+                return null;
+              })()}
+            </div>
             </div>
           </div>
 

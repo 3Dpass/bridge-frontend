@@ -4,6 +4,7 @@ import { AlertCircle, CheckCircle, ArrowRight, Loader } from 'lucide-react';
 import { motion } from 'framer-motion';
 import { IMPORT_WRAPPER_ABI } from '../contracts/abi';
 import toast from 'react-hot-toast';
+import { parseAndValidateReward } from '../utils/safe-reward-handler';
 
 // Safely convert to EIP-55 checksum if it's an EVM address
 const toChecksumAddress = (address) => {
@@ -135,12 +136,71 @@ const Repatriation = ({
       const destinationAddressChecksummed = toChecksumAddress(formData.destinationAddress);
       const amountWei = ethers.utils.parseUnits(formData.amount, sourceToken.decimals);
       const rewardInput = (formData.reward && String(formData.reward).length > 0) ? formData.reward : '0';
-      const rewardWei = ethers.utils.parseUnits(rewardInput, sourceToken.decimals);
+      
+      // CRITICAL: Repatriation requires uint reward, but we still cap it for claim compatibility
+      // Use centralized utility for safe reward handling with auto-capping
+      const rewardData = parseAndValidateReward(rewardInput, sourceToken.decimals, sourceToken.symbol, false);
+      const rewardWei = rewardData.reward;
+      
+      // Show warning if reward was capped
+      if (rewardData.wasCapped) {
+        toast.warning(
+          <div>
+            <h3 className="text-warning-400 font-medium">Reward Amount Capped</h3>
+            <p className="text-warning-300 text-sm mt-1">
+              Your reward of {rewardData.originalValue} {sourceToken.symbol} exceeds the safe limit.
+            </p>
+            <p className="text-warning-300 text-sm mt-1">
+              Using maximum safe value: {rewardData.maxSafeValue} {sourceToken.symbol}
+            </p>
+            <p className="text-warning-300 text-xs mt-2">
+              This ensures the reward can be claimed later without overflow errors.
+            </p>
+          </div>,
+          {
+            duration: 8000,
+            style: {
+              background: '#92400e',
+              border: '1px solid #f59e0b',
+              color: '#fff',
+              padding: '16px',
+              borderRadius: '8px',
+            },
+          }
+        );
+      }
+      
       const data = "0x"; // Empty data for repatriation
       
       console.log('💰 Parsed amounts:', {
         amountWei: ethers.utils.formatUnits(amountWei, sourceToken.decimals),
-        rewardWei: ethers.utils.formatUnits(rewardWei, sourceToken.decimals)
+        rewardWei: rewardData.displayValue
+      });
+
+      // Log final transaction parameters that will be sent to the smart contract
+      console.log('🚀 FINAL TRANSACTION PARAMETERS (Repatriation):', {
+        functionName: 'transferToHomeChain',
+        parameters: {
+          home_address: destinationAddressChecksummed,
+          data: data,
+          amount: {
+            value: amountWei.toString(),
+            type: 'BigNumber',
+            humanReadable: ethers.utils.formatUnits(amountWei, sourceToken.decimals) + ' ' + sourceToken.symbol
+          },
+          reward: {
+            value: rewardWei.toString(),
+            type: 'BigNumber',
+            humanReadable: rewardData.displayValue + ' ' + sourceToken.symbol,
+            contractExpects: 'uint (must be positive)',
+            maxSafeValue: rewardData.maxSafeValue + ' ' + sourceToken.symbol,
+            wasCapped: rewardData.wasCapped,
+            originalValue: rewardData.originalValue + ' ' + sourceToken.symbol
+          }
+        },
+        gasLimit: 500000,
+        contractAddress: bridgeInstance.address,
+        contractFunction: 'transferToHomeChain(string, string, uint, uint)'
       });
 
       // Use fixed gas limit like the working test script

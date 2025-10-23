@@ -78,10 +78,10 @@ export const NETWORKS = {
         type: 'export',
         homeNetwork: 'Ethereum',
         homeTokenSymbol: 'USDT',
-        homeTokenAddress: '0xdAC17F958D2ee523a2206206994597C13D831ec7',
+        homeTokenAddress: '0xdAC17F958D2ee523a2206206994597C13D831ec7', // Matches homeTokenAddress on 3dpass USDT_ImportWrapper bridge
         foreignNetwork: '3dpass',
         foreignTokenSymbol: 'wUSDT',
-        foreignTokenAddress: '0xfBFBfbFA000000000000000000000000000000de',
+        foreignTokenAddress: '0xfBFBfbFA000000000000000000000000000000de', // Matches foreignTokenAddress on 3dpass USDT_ImportWrapper bridge
         stakeTokenSymbol: 'USDT',
         stakeTokenAddress: '0xdAC17F958D2ee523a2206206994597C13D831ec7',
         description: 'Ethereum USDT → 3DPass wUSDT Bridge',
@@ -93,10 +93,10 @@ export const NETWORKS = {
         type: 'import',
         homeNetwork: '3dpass',
         homeTokenSymbol: 'P3D',
-        homeTokenAddress: P3D_PRECOMPILE_ADDRESS,
+        homeTokenAddress: P3D_PRECOMPILE_ADDRESS, // Matches homeTokenAddress on 3dpass P3D_Export bridge
         foreignNetwork: 'Ethereum',
         foreignTokenSymbol: 'P3D',
-        foreignTokenAddress: '0x4f3a4e37701402C61146071309e45A15843025E1',
+        foreignTokenAddress: '0x4f3a4e37701402C61146071309e45A15843025E1', // Matches foreignTokenAddress on 3dpass P3D_Export bridge
         stakeTokenSymbol: 'ETH',
         stakeTokenAddress: ADDRESS_ZERO,
         oracleAddress: '0xdAC17F958D2ee523a2206206994597C13D831ec7',
@@ -232,10 +232,10 @@ export const NETWORKS = {
         type: 'import_wrapper',
         homeNetwork: 'Ethereum',
         homeTokenSymbol: 'USDT',
-        homeTokenAddress: '0xdAC17F958D2ee523a2206206994597C13D831ec7',
+        homeTokenAddress: '0xdAC17F958D2ee523a2206206994597C13D831ec7', // Matches homeTokenAddress on Ethereum USDT_Export bridge
         foreignNetwork: '3dpass',
         foreignTokenSymbol: 'wUSDT',
-        foreignTokenAddress: '0xfBFBfbFA000000000000000000000000000000de',
+        foreignTokenAddress: '0xfBFBfbFA000000000000000000000000000000de', // Matches foreignTokenAddress on Ethereum USDT_Export bridge
         stakeTokenSymbol: 'P3D',
         stakeTokenAddress: P3D_PRECOMPILE_ADDRESS,
         oracleAddress: '0x237527b4F7bb0030Bd5B7B863839Aa121cefd5fB',
@@ -248,10 +248,10 @@ export const NETWORKS = {
         type: 'export',
         homeNetwork: '3dpass',
         homeTokenSymbol: 'P3D',
-        homeTokenAddress: P3D_PRECOMPILE_ADDRESS,
+        homeTokenAddress: P3D_PRECOMPILE_ADDRESS, // Matches homeTokenAddress on Ethereum P3D_Import bridge
         foreignNetwork: 'Ethereum',
         foreignTokenSymbol: 'P3D',
-        foreignTokenAddress: '0x4f3a4e37701402C61146071309e45A15843025E1',
+        foreignTokenAddress: '0x4f3a4e37701402C61146071309e45A15843025E1', // Matches foreignTokenAddress on Ethereum P3D_Import bridge
         stakeTokenSymbol: 'P3D',
         stakeTokenAddress: P3D_PRECOMPILE_ADDRESS,
         description: '3DPass P3D → Ethereum P3D Bridge',
