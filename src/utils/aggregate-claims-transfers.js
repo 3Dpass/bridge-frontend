@@ -44,25 +44,53 @@ export const aggregateClaimsAndTransfers = (claims, transfers) => {
   const amountsMatchBigNumber = (amount1, amount2) => {
     if (!amount1 || !amount2) return { match: false, reason: 'missing_amount' };
     try {
+      // Helper function to normalize amounts (similar to formatAmount in ClaimList.js)
+      const normalizeAmount = (amount) => {
+        // Handle BigNumber objects (including deserialized ones from cache)
+        if (typeof amount?.toNumber === 'function') {
+          return amount.toString();
+        } else if (typeof amount === 'string') {
+          return amount;
+        } else if (typeof amount === 'number') {
+          return amount.toString();
+        } else if (typeof amount === 'object' && amount !== null) {
+          // Handle deserialized BigNumber objects from cache
+          // They might have properties like _hex, _isBigNumber, or be plain objects with hex values
+          if (amount._hex) {
+            return amount._hex;
+          } else if (amount.hex) {
+            return amount.hex;
+          } else if (amount.toString && typeof amount.toString === 'function') {
+            return amount.toString();
+          } else {
+            return '0';
+          }
+        } else if (!amount) {
+          return '0';
+        } else {
+          return '0';
+        }
+      };
+      
+      // Normalize both amounts
+      const normalized1 = normalizeAmount(amount1);
+      const normalized2 = normalizeAmount(amount2);
+      
       // Convert both amounts to BigNumber format (contract format)
-      const bn1 = ethers.BigNumber.from(amount1.toString());
-      const bn2 = ethers.BigNumber.from(amount2.toString());
+      const bn1 = ethers.BigNumber.from(normalized1);
+      const bn2 = ethers.BigNumber.from(normalized2);
       
       // Compare the BigNumber values directly - must be EXACT match
       if (bn1.eq(bn2)) {
         return { match: true, reason: 'exact_match' };
       } else {
         // Check if it's a format issue (same value, different representation)
-        const str1 = amount1.toString();
-        const str2 = amount2.toString();
-        
-        // If string representations are different but BigNumber values are same
-        if (str1 !== str2) {
+        if (normalized1 !== normalized2) {
           return { 
             match: false, 
             reason: 'format_mismatch_but_equal',
-            amount1: str1,
-            amount2: str2
+            amount1: normalized1,
+            amount2: normalized2
           };
         }
         
@@ -134,9 +162,41 @@ export const aggregateClaimsAndTransfers = (claims, transfers) => {
     }
     
     try {
+      // Helper function to normalize amounts (same as in amountsMatchBigNumber)
+      const normalizeAmount = (amount) => {
+        // Handle BigNumber objects (including deserialized ones from cache)
+        if (typeof amount?.toNumber === 'function') {
+          return amount.toString();
+        } else if (typeof amount === 'string') {
+          return amount;
+        } else if (typeof amount === 'number') {
+          return amount.toString();
+        } else if (typeof amount === 'object' && amount !== null) {
+          // Handle deserialized BigNumber objects from cache
+          // They might have properties like _hex, _isBigNumber, or be plain objects with hex values
+          if (amount._hex) {
+            return amount._hex;
+          } else if (amount.hex) {
+            return amount.hex;
+          } else if (amount.toString && typeof amount.toString === 'function') {
+            return amount.toString();
+          } else {
+            return '0';
+          }
+        } else if (!amount) {
+          return '0';
+        } else {
+          return '0';
+        }
+      };
+      
+      // Normalize both rewards
+      const normalizedClaimReward = normalizeAmount(claimReward);
+      const normalizedTransferReward = normalizeAmount(transferReward);
+      
       // Convert both rewards to BigNumber format (contract format)
-      const claimRewardBN = ethers.BigNumber.from(claimReward.toString());
-      const transferRewardBN = ethers.BigNumber.from(transferReward.toString());
+      const claimRewardBN = ethers.BigNumber.from(normalizedClaimReward);
+      const transferRewardBN = ethers.BigNumber.from(normalizedTransferReward);
       
       // Compare the BigNumber values directly - must be EXACT match
       if (claimRewardBN.eq(transferRewardBN)) {

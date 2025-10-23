@@ -7,6 +7,7 @@ import {
   get3DPassTokenAllowance,
   getTokenSymbolFromPrecompile
 } from '../utils/threedpass';
+import { getBlockTimestamp } from '../utils/bridge-contracts';
 import { 
   EXPORT_ABI,
   IMPORT_ABI,
@@ -247,6 +248,44 @@ const parseError = (error) => {
 const NewClaim = ({ isOpen, onClose, selectedToken = null, selectedTransfer = null, onClaimSubmitted = null }) => {
   const { account, provider, network, signer } = useWeb3();
   const { getBridgeInstancesWithSettings, getNetworkWithSettings } = useSettings();
+  
+  // Add claim event to storage (claims storage, not transfers)
+  const addClaimEventToStorage = useCallback(async (eventData) => {
+    try {
+      console.log('💾 Adding new claim event to browser storage:', eventData);
+      
+      // Use the claims storage key as ClaimList.js
+      const STORAGE_KEY = 'bridge_claims_cache';
+      
+      // Get existing claims from storage
+      const existingClaims = JSON.parse(localStorage.getItem(STORAGE_KEY) || '[]');
+      
+      // Check if this claim already exists (by transaction hash)
+      const existingIndex = existingClaims.findIndex(c => c.transactionHash === eventData.transactionHash);
+      
+      if (existingIndex >= 0) {
+        // Update existing claim
+        existingClaims[existingIndex] = { ...existingClaims[existingIndex], ...eventData };
+        console.log('🔄 Updated existing claim in storage');
+      } else {
+        // Add new claim at the beginning (most recent first)
+        existingClaims.unshift(eventData);
+        console.log('➕ Added new claim to storage');
+      }
+      
+      // Save back to storage
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(existingClaims));
+      
+      // Update timestamp to indicate fresh data
+      localStorage.setItem('bridge_claims_cache_timestamp', Date.now().toString());
+      
+      console.log('✅ Claim event successfully added to browser storage');
+      return true;
+    } catch (error) {
+      console.error('❌ Failed to add claim event to storage:', error);
+      return false;
+    }
+  }, []);
   
   // Form state
   const [formData, setFormData] = useState({
@@ -2661,6 +2700,208 @@ const NewClaim = ({ isOpen, onClose, selectedToken = null, selectedTransfer = nu
       const receipt = await claimTx.wait();
       console.log('🔍 Claim transaction confirmed:', receipt);
       toast.success(`Claim confirmed! Transaction: ${receipt.transactionHash}`);
+      
+      // Extract NewClaim event from transaction receipt and fetch complete event data
+      try {
+        console.log('🔍 Extracting NewClaim event from transaction receipt...');
+        
+        // Find the NewClaim event in the transaction receipt
+        const newClaimEvent = receipt.logs.find(log => {
+          try {
+            // Parse the log to check if it's a NewClaim event
+            const parsedLog = bridgeContract.interface.parseLog(log);
+            return parsedLog && parsedLog.name === 'NewClaim';
+          } catch (e) {
+            return false;
+          }
+        });
+        
+        if (!newClaimEvent) {
+          console.warn('⚠️ No NewClaim event found in transaction receipt');
+          throw new Error('No NewClaim event found in transaction receipt');
+        }
+        
+        // Parse the NewClaim event to get the claim_num
+        const parsedEvent = bridgeContract.interface.parseLog(newClaimEvent);
+        const claimNum = parsedEvent.args.claim_num.toNumber();
+        
+        console.log('🔍 Found NewClaim event with claim_num:', claimNum);
+        console.log('🔍 NewClaim event data:', {
+          claim_num: claimNum,
+          author_address: parsedEvent.args.author_address,
+          sender_address: parsedEvent.args.sender_address,
+          recipient_address: parsedEvent.args.recipient_address,
+          txid: parsedEvent.args.txid,
+          txts: parsedEvent.args.txts.toString(),
+          amount: parsedEvent.args.amount.toString(),
+          reward: parsedEvent.args.reward.toString(),
+          stake: parsedEvent.args.stake.toString(),
+          data: parsedEvent.args.data,
+          expiry_ts: parsedEvent.args.expiry_ts.toString()
+        });
+        
+        // CRITICAL: Fetch complete claim details from contract (like normal flow does)
+        console.log('🔍 Fetching complete claim details from contract...');
+        let claimDetails = null;
+        try {
+          // Use the same method as the normal flow - direct contract call
+          const encodedData = bridgeContract.interface.encodeFunctionData('getClaim(uint256)', [claimNum]);
+          const result = await signer.provider.call({
+            to: bridgeContract.address,
+            data: encodedData
+          });
+          
+          // Decode the result
+          const decodedResult = bridgeContract.interface.decodeFunctionResult('getClaim(uint256)', result);
+          if (decodedResult && decodedResult.length > 0) {
+            claimDetails = decodedResult[0];
+            console.log('🔍 Successfully fetched claim details from contract:', claimDetails);
+          }
+        } catch (claimDetailsError) {
+          console.warn('⚠️ Failed to fetch claim details from contract:', claimDetailsError.message);
+          // Continue with event data only if claim details fetch fails
+        }
+        
+        // Create the complete event data structure matching the normal flow exactly
+        const eventData = {
+          // CRITICAL: Core NewClaim event fields (exactly as emitted by contract)
+          eventType: 'NewClaim',
+          claim_num: claimNum,
+          author_address: parsedEvent.args.author_address,
+          sender_address: parsedEvent.args.sender_address,
+          recipient_address: parsedEvent.args.recipient_address,
+          txid: parsedEvent.args.txid,
+          txts: parsedEvent.args.txts, // Keep as BigNumber (like normal flow)
+          amount: parsedEvent.args.amount, // Keep as BigNumber (like normal flow)
+          reward: parsedEvent.args.reward, // Keep as BigNumber (like normal flow)
+          stake: parsedEvent.args.stake, // Keep as BigNumber (like normal flow)
+          data: parsedEvent.args.data,
+          expiry_ts: parsedEvent.args.expiry_ts, // Keep as BigNumber (like normal flow)
+          
+          // CRITICAL: Transform field names to match expected UI structure (like normal flow)
+          claimNum: claimNum, // Display number for UI
+          actualClaimNum: claimNum, // Actual blockchain claim number
+          senderAddress: parsedEvent.args.sender_address,
+          recipientAddress: parsedEvent.args.recipient_address,
+          expiryTs: parsedEvent.args.expiry_ts, // Keep as BigNumber
+          
+          // Event metadata (from transaction receipt)
+          blockNumber: receipt.blockNumber,
+          transactionHash: receipt.transactionHash,
+          claimTransactionHash: receipt.transactionHash, // Store claim transaction hash for UI display
+          logIndex: newClaimEvent.logIndex,
+          timestamp: await getBlockTimestamp(signer.provider, receipt.blockNumber), // Use block timestamp
+          
+          // CRITICAL: Add claim details from contract (like normal flow does)
+          ...(claimDetails ? {
+            // Claim details from contract (current state) - keep original field names
+            current_outcome: claimDetails.current_outcome,
+            yes_stake: claimDetails.yes_stake,
+            no_stake: claimDetails.no_stake,
+            finished: claimDetails.finished,
+            withdrawn: claimDetails.withdrawn,
+            // Additional claim details (UI compatibility) - transformed field names
+            currentOutcome: claimDetails.current_outcome,
+            yesStake: claimDetails.yes_stake,
+            noStake: claimDetails.no_stake
+          } : {
+            // Default values if claim details fetch failed
+            current_outcome: null,
+            yes_stake: null,
+            no_stake: null,
+            finished: false,
+            withdrawn: false,
+            currentOutcome: null,
+            yesStake: null,
+            noStake: null
+          }),
+          
+          // Bridge information (complete bridge instance data)
+          bridgeInstance: selectedBridge, // Full bridge instance object
+          bridgeAddress: selectedBridge.address,
+          bridgeType: selectedBridge.type,
+          homeNetwork: selectedBridge.homeNetwork,
+          foreignNetwork: selectedBridge.foreignNetwork,
+          homeTokenAddress: selectedBridge.homeTokenAddress,
+          foreignTokenAddress: selectedBridge.foreignTokenAddress,
+          homeTokenSymbol: selectedBridge.homeTokenSymbol,
+          foreignTokenSymbol: selectedBridge.foreignTokenSymbol,
+          stakeTokenAddress: selectedBridge.stakeTokenAddress,
+          stakeTokenSymbol: selectedBridge.stakeTokenSymbol,
+          
+          // Network information
+          networkKey: network?.id?.toString() || network?.name?.toLowerCase(),
+          networkName: network?.name || 'Unknown',
+          networkId: network?.id?.toString() || network?.name?.toLowerCase(),
+          
+          // Transfer direction (claim is always inbound to the current network)
+          direction: 'inbound', // Claim brings tokens to current network
+          fromNetwork: selectedBridge.type === 'export' ? selectedBridge.foreignNetwork : selectedBridge.homeNetwork,
+          toNetwork: network?.name || 'Current Network',
+          fromTokenSymbol: selectedBridge.type === 'export' ? selectedBridge.foreignTokenSymbol : selectedBridge.homeTokenSymbol,
+          toTokenSymbol: selectedBridge.type === 'export' ? selectedBridge.homeTokenSymbol : selectedBridge.foreignTokenSymbol,
+          
+          // Token information (for compatibility with UI)
+          tokenSymbol: tokenMetadata?.symbol || 'Unknown',
+          tokenAddress: formData.tokenAddress,
+          
+          // Claim-specific information (additional fields for UI)
+          claimerAddress: parsedEvent.args.author_address, // Same as author_address from event
+          originalTransferTxid: parsedEvent.args.txid, // The original transfer transaction ID from event
+          originalTransferTimestamp: parsedEvent.args.txts.toString(),
+          
+          // Status and outcome fields
+          status: 'active', // Claims start as active (pending challenge period)
+          
+          // Additional fields for aggregation compatibility
+          bridgeTokenAddress: formData.tokenAddress, // Token being claimed
+          bridgeTokenSymbol: tokenMetadata?.symbol || 'Unknown'
+        };
+        
+        console.log('💾 Adding NewClaim event to storage (from contract event):', eventData);
+        console.log('🔍 Key fields for aggregation:', {
+          claimNum: eventData.claimNum,
+          actualClaimNum: eventData.actualClaimNum,
+          senderAddress: eventData.senderAddress,
+          recipientAddress: eventData.recipientAddress,
+          txid: eventData.txid,
+          amount: eventData.amount?.toString(),
+          reward: eventData.reward?.toString(),
+          transactionHash: eventData.transactionHash,
+          claimTransactionHash: eventData.claimTransactionHash
+        });
+        await addClaimEventToStorage(eventData);
+        
+        // Also update the original transfer status if it exists in storage
+        if (selectedTransfer) {
+          try {
+            const existingTransfers = JSON.parse(localStorage.getItem('bridge_transfers_cache') || '[]');
+            const originalTransferIndex = existingTransfers.findIndex(t => 
+              t.transactionHash === selectedTransfer.transactionHash || 
+              t.txid === selectedTransfer.txid
+            );
+            
+            if (originalTransferIndex >= 0) {
+              // Update the original transfer to show it has been claimed
+              existingTransfers[originalTransferIndex] = {
+                ...existingTransfers[originalTransferIndex],
+                status: 'claimed',
+                claimTransactionHash: receipt.transactionHash,
+                claimBlockNumber: receipt.blockNumber,
+                claimTimestamp: await getBlockTimestamp(signer.provider, receipt.blockNumber),
+                claimerAddress: await signer.getAddress()
+              };
+              
+              localStorage.setItem('bridge_transfers_cache', JSON.stringify(existingTransfers));
+              console.log('✅ Updated original transfer status to claimed');
+            }
+          } catch (updateError) {
+            console.warn('⚠️ Failed to update original transfer status:', updateError);
+          }
+        }
+      } catch (storageError) {
+        console.warn('⚠️ Failed to add claim event to storage:', storageError);
+      }
       
       // Call the callback to refresh the claim list
       if (onClaimSubmitted) {

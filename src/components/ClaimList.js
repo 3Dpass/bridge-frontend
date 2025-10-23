@@ -1222,13 +1222,13 @@ const ClaimList = () => {
         }
         if (cachedAggregated) {
           setAggregatedData(cachedAggregated);
-        } else if (cachedTransfers && cachedTransfers.length > 0) {
-          // If we have transfers but no aggregated data, process them through aggregation
-          console.log('🔍 No cached aggregated data found, processing transfers through aggregation...');
+        } else if ((cachedClaims && cachedClaims.length > 0) || (cachedTransfers && cachedTransfers.length > 0)) {
+          // If we have claims or transfers but no aggregated data, process them through aggregation
+          console.log('🔍 No cached aggregated data found, processing claims and transfers through aggregation...');
           try {
-            const aggregated = aggregateClaimsAndTransfers([], cachedTransfers);
+            const aggregated = aggregateClaimsAndTransfers(cachedClaims || [], cachedTransfers || []);
             setAggregatedData(aggregated);
-            console.log('✅ Successfully processed transfers through aggregation');
+            console.log('✅ Successfully processed claims and transfers through aggregation');
           } catch (error) {
             console.error('❌ Error processing transfers through aggregation:', error);
             // Fallback: create a simple aggregated structure with proper token symbols
