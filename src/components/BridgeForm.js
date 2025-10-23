@@ -73,7 +73,7 @@ const convertDisplayToActual = (displayAmount, decimals, tokenAddress, getTokenD
   }
 };
 
-const BridgeForm = () => {
+const BridgeForm = ({ onNavigateToTransfers }) => {
   const { account, provider, signer, network, isConnected } = useWeb3();
   const { getNetworkWithSettings, getBridgeInstancesWithSettings, getTokenDecimalsDisplayMultiplier } = useSettings();
   
@@ -881,11 +881,17 @@ const BridgeForm = () => {
     // Hide expatriation flow
     setShowExpatriationFlow(false);
     
+    // Navigate to transfers tab with "Mine" filter
+    if (onNavigateToTransfers) {
+      onNavigateToTransfers('my');
+    }
+    
     // Show success message via toast notification
     toast.success(
       <div>
         <h3 className="text-success-400 font-medium">Success</h3>
         <p className="text-success-300 text-sm mt-1">Expatriation initiated successfully!</p>
+        <p className="text-success-300 text-xs mt-1">Redirecting to Transfers tab...</p>
       </div>,
       {
         duration: 6000,
@@ -929,11 +935,17 @@ const BridgeForm = () => {
     // Hide repatriation flow
     setShowRepatriationFlow(false);
     
+    // Navigate to transfers tab with "Mine" filter
+    if (onNavigateToTransfers) {
+      onNavigateToTransfers('my');
+    }
+    
     // Show success message via toast notification
     toast.success(
       <div>
         <h3 className="text-success-400 font-medium">Success</h3>
         <p className="text-success-300 text-sm mt-1">Repatriation initiated successfully!</p>
+        <p className="text-success-300 text-xs mt-1">Redirecting to Transfers tab...</p>
       </div>,
       {
         duration: 6000,

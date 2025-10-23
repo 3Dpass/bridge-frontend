@@ -16,6 +16,13 @@ function App() {
     setActiveTab(section);
   };
 
+  // Handle navigation to transfers tab with specific filter
+  const navigateToTransfers = (filter = 'all') => {
+    setActiveTab('transfers');
+    // Store the filter preference for ClaimList to use
+    localStorage.setItem('claimListFilter', filter);
+  };
+
     return (
     <Web3Provider>
       <SettingsProvider>
@@ -28,7 +35,7 @@ function App() {
           {/* Bridge Form Section */}
           {activeTab === 'bridge' && (
             <section id="bridge" className="mb-16">
-              <BridgeForm />
+              <BridgeForm onNavigateToTransfers={navigateToTransfers} />
             </section>
           )}
 

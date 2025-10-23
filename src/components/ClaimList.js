@@ -76,6 +76,41 @@ const clearCachedData = () => {
   }
 };
 
+// Add new transfer event to browser storage
+const addTransferEventToStorage = (eventData) => {
+  try {
+    console.log('💾 Adding new transfer event to browser storage:', eventData);
+    
+    // Get existing transfers from storage
+    const existingTransfers = getCachedData(STORAGE_KEYS.TRANSFERS) || [];
+    
+    // Check if this transfer already exists (by transaction hash)
+    const existingIndex = existingTransfers.findIndex(t => t.transactionHash === eventData.transactionHash);
+    
+    if (existingIndex >= 0) {
+      // Update existing transfer
+      existingTransfers[existingIndex] = { ...existingTransfers[existingIndex], ...eventData };
+      console.log('🔄 Updated existing transfer in storage');
+    } else {
+      // Add new transfer at the beginning (most recent first)
+      existingTransfers.unshift(eventData);
+      console.log('➕ Added new transfer to storage');
+    }
+    
+    // Save back to storage
+    setCachedData(STORAGE_KEYS.TRANSFERS, existingTransfers);
+    
+    // Update timestamp to indicate fresh data
+    localStorage.setItem(STORAGE_KEYS.TIMESTAMP, Date.now().toString());
+    
+    console.log('✅ Transfer event successfully added to browser storage');
+    return true;
+  } catch (error) {
+    console.error('❌ Failed to add transfer event to storage:', error);
+    return false;
+  }
+};
+
 // Helper functions for match/mismatch indicators
 const getMatchStatus = (claim) => {
   if (!claim.parameterMismatches) {
@@ -218,7 +253,15 @@ const ClaimList = () => {
   const [aggregatedData, setAggregatedData] = useState(null);
   const [loading, setLoading] = useState(false);
   const [isInitialLoad, setIsInitialLoad] = useState(true);
-  const [filter, setFilter] = useState('all'); // 'all', 'my', 'suspicious', 'pending', 'active'
+  const [filter, setFilter] = useState(() => {
+    // Check if there's a stored filter preference from navigation
+    const storedFilter = localStorage.getItem('claimListFilter');
+    if (storedFilter) {
+      localStorage.removeItem('claimListFilter'); // Clear after reading
+      return storedFilter;
+    }
+    return 'all';
+  }); // 'all', 'my', 'suspicious', 'pending', 'active'
   const [retryStatus, setRetryStatus] = useState(null);
   const [currentBlock, setCurrentBlock] = useState(null);
   const [showNewClaim, setShowNewClaim] = useState(false);
@@ -775,6 +818,15 @@ const ClaimList = () => {
   }, [network?.symbol, getNetworkWithSettings, getStakeTokenSymbol]);
 
   const getTransferTokenAddress = useCallback((claim) => {
+    // If we already have a tokenAddress stored, use it (for pending transfers)
+    if (claim.tokenAddress) {
+      console.log('🔍 Using stored tokenAddress:', {
+        tokenAddress: claim.tokenAddress,
+        tokenSymbol: claim.tokenSymbol
+      });
+      return claim.tokenAddress;
+    }
+    
     // Get transfer token symbol first
     const tokenSymbol = getTransferTokenSymbol(claim);
     
@@ -1168,7 +1220,65 @@ const ClaimList = () => {
             }
           }
         }
-        if (cachedAggregated) setAggregatedData(cachedAggregated);
+        if (cachedAggregated) {
+          setAggregatedData(cachedAggregated);
+        } else if (cachedTransfers && cachedTransfers.length > 0) {
+          // If we have transfers but no aggregated data, process them through aggregation
+          console.log('🔍 No cached aggregated data found, processing transfers through aggregation...');
+          try {
+            const aggregated = aggregateClaimsAndTransfers([], cachedTransfers);
+            setAggregatedData(aggregated);
+            console.log('✅ Successfully processed transfers through aggregation');
+          } catch (error) {
+            console.error('❌ Error processing transfers through aggregation:', error);
+            // Fallback: create a simple aggregated structure with proper token symbols
+            const fallbackAggregated = {
+              completedTransfers: [],
+              suspiciousClaims: [],
+              pendingTransfers: cachedTransfers.map(transfer => {
+                // Get bridge instance to extract proper token symbols
+                let homeTokenSymbol = transfer.tokenSymbol; // fallback to stored tokenSymbol
+                let foreignTokenSymbol = transfer.tokenSymbol; // fallback to stored tokenSymbol
+                
+                try {
+                  const bridgeInstances = getBridgeInstancesWithSettings();
+                  const bridgeInstance = bridgeInstances.find(bridge => 
+                    bridge.address.toLowerCase() === transfer.bridgeAddress?.toLowerCase()
+                  );
+                  
+                  if (bridgeInstance) {
+                    homeTokenSymbol = bridgeInstance.homeTokenSymbol || transfer.tokenSymbol;
+                    foreignTokenSymbol = bridgeInstance.foreignTokenSymbol || transfer.tokenSymbol;
+                  }
+                } catch (error) {
+                  console.warn('⚠️ Could not get bridge instance for token symbols:', error);
+                }
+                
+                return {
+                  ...transfer,
+                  status: 'pending',
+                  isFraudulent: false,
+                  reason: 'no_matching_claim',
+                  claim: null,
+                  // Add bridge-specific token symbols for proper display
+                  homeTokenSymbol,
+                  foreignTokenSymbol,
+                  bridgeTokenSymbol: transfer.tokenSymbol // Keep original tokenSymbol as bridgeTokenSymbol
+                };
+              }),
+              fraudDetected: false,
+              stats: {
+                totalClaims: 0,
+                totalTransfers: cachedTransfers.length,
+                completedTransfers: 0,
+                suspiciousClaims: 0,
+                pendingTransfers: cachedTransfers.length
+              }
+            };
+            setAggregatedData(fallbackAggregated);
+            console.log('✅ Created fallback aggregated data structure');
+          }
+        }
         if (cachedSettings) setContractSettings(cachedSettings);
         
         // Update cache status
@@ -1195,7 +1305,7 @@ const ClaimList = () => {
       setCacheStatus(prev => ({ ...prev, hasCachedData: false, isShowingCached: false }));
       return false;
     }
-  }, [currentBlock, getNetworkWithSettings]);
+  }, [currentBlock, getNetworkWithSettings, getBridgeInstancesWithSettings]);
 
   // updateIndividualClaims function removed - no longer needed since we don't do background updates
 
@@ -3225,4 +3335,5 @@ const ClaimList = () => {
 };
 
 export default ClaimList;
+export { addTransferEventToStorage };
 
