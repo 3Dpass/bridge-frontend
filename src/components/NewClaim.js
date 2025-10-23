@@ -2756,6 +2756,14 @@ const NewClaim = ({ isOpen, onClose, selectedToken = null, selectedTransfer = nu
           if (decodedResult && decodedResult.length > 0) {
             claimDetails = decodedResult[0];
             console.log('🔍 Successfully fetched claim details from contract:', claimDetails);
+            console.log('🔍 Claim details fields:', {
+              claimant_address: claimDetails.claimant_address,
+              recipient_address: claimDetails.recipient_address,
+              current_outcome: claimDetails.current_outcome,
+              finished: claimDetails.finished,
+              withdrawn: claimDetails.withdrawn,
+              period_number: claimDetails.period_number
+            });
           }
         } catch (claimDetailsError) {
           console.warn('⚠️ Failed to fetch claim details from contract:', claimDetailsError.message);
@@ -2800,6 +2808,8 @@ const NewClaim = ({ isOpen, onClose, selectedToken = null, selectedTransfer = nu
             no_stake: claimDetails.no_stake,
             finished: claimDetails.finished,
             withdrawn: claimDetails.withdrawn,
+            claimant_address: claimDetails.claimant_address, // CRITICAL: For Assisted/Self-claimed badges
+            period_number: claimDetails.period_number, // CRITICAL: For Period display
             // Additional claim details (UI compatibility) - transformed field names
             currentOutcome: claimDetails.current_outcome,
             yesStake: claimDetails.yes_stake,
@@ -2811,6 +2821,8 @@ const NewClaim = ({ isOpen, onClose, selectedToken = null, selectedTransfer = nu
             no_stake: null,
             finished: false,
             withdrawn: false,
+            claimant_address: null, // CRITICAL: For Assisted/Self-claimed badges
+            period_number: 0, // CRITICAL: For Period display (default to 0 for new claims)
             currentOutcome: null,
             yesStake: null,
             noStake: null

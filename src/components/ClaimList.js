@@ -2377,11 +2377,11 @@ const ClaimList = () => {
 
           return displayData.map((item, index) => {
             // Handle both claims and transfers
-            const isTransfer = item.eventType; // Check if this is a transfer
+            const isTransfer = item.eventType === 'NewExpatriation' || item.eventType === 'NewRepatriation'; // Check if this is a transfer (not a claim)
             const isSuspicious = item.isFraudulent;
-            // A pending transfer has eventType but no claimNum
-            // A completed claim has claimNum but no eventType
-            const isPending = item.eventType && !item.claimNum;
+            // A pending transfer has eventType 'NewExpatriation' or 'NewRepatriation' but no claimNum
+            // A completed claim has claimNum and eventType 'NewClaim' or no eventType
+            const isPending = isTransfer && !item.claimNum;
             
             
             // For pending transfers, use the transfer data directly
