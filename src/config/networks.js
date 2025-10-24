@@ -21,7 +21,7 @@ export const NETWORKS = {
       decimals: 18,
     },
     contracts: {
-      // Official Counterstake Bridge contract addresses
+      // CORE Counterstake contracts deployed on Ethereum
       counterstakeFactory: '0x077231Cc83303dF37406C604c9d3F12b9DFcFc3A', // ETHEREUM_COUNTERSTAKE_FACTORY v.1.1
       assistantFactory: '0x0B7f26083d6892Ca6b410FEffA2b24A4304Fa739', // ETHEREUM_ASSISTANT_FACTORY v.1.1
     },
@@ -67,14 +67,23 @@ export const NETWORKS = {
         isPrecompile: false,
         isNative: false,
         standard: 'ERC20',
-        decimalsDisplayMultiplier: 1000000,
+        decimalsDisplayMultiplier: 1000000, // Multiplier for displaying decimals in the UI to compensate the differennce between Native P3D (12 decimals) and EVM P3D (18 decimals)
+      },
+      P3DIA: {
+        address: '0x0C5c51Ca6104b8907349513bde13eE3f992bBc08',
+        symbol: 'P3DIA',
+        decimals: 18,
+        name: 'P3D Import Assistant Shares',
+        isPrecompile: false,
+        isNative: false,
+        standard: 'ERC20',
       },
     },
     // Bridge instances deployed on Ethereum
     bridges: {
-      // Export bridges (Ethereum <-> External)
+      // Export bridge contracts (Ethereum <-> 3dpass)
       USDT_WUSDT_EXPORT: {
-        address: '0x3a96AC42A28D5610Aca2A79AE782988110108eDe',
+        address: '0x3a96AC42A28D5610Aca2A79AE782988110108eDe', // Not an ERC20 token itself, but a bridge contract that controls locked supply of USDT on Ethereum
         type: 'export',
         homeNetwork: 'Ethereum',
         homeTokenSymbol: 'USDT',
@@ -83,13 +92,13 @@ export const NETWORKS = {
         foreignTokenSymbol: 'wUSDT',
         foreignTokenAddress: '0xfBFBfbFA000000000000000000000000000000de', // Matches foreignTokenAddress on 3dpass USDT_ImportWrapper bridge
         stakeTokenSymbol: 'USDT',
-        stakeTokenAddress: '0xdAC17F958D2ee523a2206206994597C13D831ec7',
+        stakeTokenAddress: '0xdAC17F958D2ee523a2206206994597C13D831ec7', // Stake is required for Claiming USDT on the way back home from 3dpass to Ethereum
         description: 'Ethereum USDT → 3DPass wUSDT Bridge',
-        isIssuerBurner: false
+        isIssuerBurner: false // This bridge can only lock and unlock USDT on Ethereum
       },
-      // Import bridges (External <-> Ethereum)
+      // Import bridge contracts (3dpass <-> Ethereum)
       P3D_IMPORT: {
-        address: '0x4f3a4e37701402C61146071309e45A15843025E1',
+        address: '0x4f3a4e37701402C61146071309e45A15843025E1', // ERC20 token itself, matches the P3D token address on Ethereum
         type: 'import',
         homeNetwork: '3dpass',
         homeTokenSymbol: 'P3D',
@@ -98,22 +107,32 @@ export const NETWORKS = {
         foreignTokenSymbol: 'P3D',
         foreignTokenAddress: '0x4f3a4e37701402C61146071309e45A15843025E1', // Matches foreignTokenAddress on 3dpass P3D_Export bridge
         stakeTokenSymbol: 'ETH',
-        stakeTokenAddress: ADDRESS_ZERO,
+        stakeTokenAddress: ADDRESS_ZERO, // Stake is required for Claiming P3D on the way from 3dpass to Ethereum
         oracleAddress: '0xdAC17F958D2ee523a2206206994597C13D831ec7',
         description: 'P3D Import Bridge (3DPass → Ethereum)',
-        isIssuerBurner: true
+        isIssuerBurner: true // This bridge is issuer and burner of P3D on Ethereum
         }
     },
     // Assistant contracts deployed on Ethereum
     assistants: {
       // Export Assistants
       USDT_EXPORT_ASSISTANT: {
-        address: '0xA07a7a1514F391E1e636F2d5eB71c53ee80fC6DB',
+        address: '0xA07a7a1514F391E1e636F2d5eB71c53ee80fC6DB', // ERC20 token itself, matches the USDTEA token address on Ethereum
         type: 'export',
-        bridgeAddress: '0x3a96AC42A28D5610Aca2A79AE782988110108eDe',
+        bridgeAddress: '0x3a96AC42A28D5610Aca2A79AE782988110108eDe', // Matches the bridge address on Ethereum USDT_WUSDT_EXPORT
         description: 'USDT Export Assistant',
         shareSymbol: 'USDTEA',
         shareName: 'USDTEA export assistant shares on Ethereum',
+        managerAddress: '0x067Fac51f31Dc80263D55f9980DF1358357DC10d'
+      },
+       // Import Assistants
+      P3D_IMPORT_ASSISTANT: {
+        address: '0x0C5c51Ca6104b8907349513bde13eE3f992bBc08', // ERC20 token itself, matches the P3DIA token address on Ethereum
+        type: 'import',
+        bridgeAddress: '0x4f3a4e37701402C61146071309e45A15843025E1', // Matches the bridge address on Ethereum P3D_IMPORT
+        description: 'P3D Import Assistant',
+        shareSymbol: 'P3DIA',
+        shareName: 'P3D Import Assistant Shares',
         managerAddress: '0x067Fac51f31Dc80263D55f9980DF1358357DC10d'
       }
     }
@@ -133,7 +152,7 @@ export const NETWORKS = {
   //     decimals: 18,
   //   },
   //   contracts: {
-  //     // Official Counterstake Bridge contract addresses
+  //     // CORE Counterstake contracts deployed on BSC
   //     counterstakeFactory: '0xa5893a1A1FF15031d8AB5aC24531D3B3418612EE', // BSC_COUNTERSTAKE_FACTORY
   //     assistantFactory: '0x9F60328982ab3e34020A9D43763db43d03Add7CF', // BSC_ASSISTANT_FACTORY
   //   },
@@ -170,10 +189,10 @@ export const NETWORKS = {
       name: '3dpass',
       symbol: 'P3D',
       decimals: 18,
-      decimalsDisplayMultiplier: 1000000,
+      decimalsDisplayMultiplier: 1000000, // Multiplier for displaying decimals in the UI to compensate the differennce between Native P3D (12 decimals) and EVM P3D (18 decimals)
     },
     contracts: {
-      // Updated contract addresses from bridge-setup-test.log and deploy-counterstake.log
+      // CORE Counterstake contracts deployed on 3dpass
       bridgesRegistry: '0x9092Fe0755299C57dBC8AbB59678fCc004339a3b', // BridgesRegistry from deployment
       counterstakeFactory: '0x1bB031c2Fc2b93d98569e81877E9664Bfb32db43', // CounterstakeFactory from deployment
       assistantFactory: '0x51D7976F592724401e9DAE0dC75B126D889C9C9e', // AssistantFactory from deployment
@@ -201,7 +220,7 @@ export const NETWORKS = {
         symbol: 'wUSDT',
         decimals: 6,
         name: 'Wrapped Tether USDT on 3Dpass blockchain',
-        isPrecompile: true,
+        isPrecompile: true, // Cross-platform Substrate-EVM 3dpass token
         assetId: 222,
         standard: 'ERC20',
       },
@@ -210,7 +229,7 @@ export const NETWORKS = {
         symbol: 'USDTIA',
         decimals: 18,
         name: 'USDT import assistant shares on 3dpass',
-        isPrecompile: false,
+        isPrecompile: false, // Regular ERC20 token
         isNative: false,
         standard: 'ERC20',
       },
@@ -223,12 +242,21 @@ export const NETWORKS = {
         isNative: false,
         standard: 'ERC20',
       },
+      P3DEA: {
+        address: '0xCf710B8715869b7fEd296275bEFCE275d69bDEd9',
+        symbol: 'P3DEA',
+        decimals: 18,
+        name: 'P3D Export Assistant Shares',
+        isPrecompile: false,
+        isNative: false,
+        standard: 'ERC20',
+      }
     },
     // Bridge instances deployed on 3DPass
     bridges: {
-    // Import Wrapper bridges (External -> 3DPass)
+    // Import Wrapper bridges (Ethereum -> 3DPass)
     USDT_IMPORT: {
-        address: '0x00D5f00250434e76711e8127A37c6f84dBbDAA4C',
+        address: '0x00D5f00250434e76711e8127A37c6f84dBbDAA4C', // Not an ERC20 token itself, but a bridge contract that controls supply of wUSDT on 3dpass
         type: 'import_wrapper',
         homeNetwork: 'Ethereum',
         homeTokenSymbol: 'USDT',
@@ -237,14 +265,14 @@ export const NETWORKS = {
         foreignTokenSymbol: 'wUSDT',
         foreignTokenAddress: '0xfBFBfbFA000000000000000000000000000000de', // Matches foreignTokenAddress on Ethereum USDT_Export bridge
         stakeTokenSymbol: 'P3D',
-        stakeTokenAddress: P3D_PRECOMPILE_ADDRESS,
+        stakeTokenAddress: P3D_PRECOMPILE_ADDRESS, // Stake is required for Claiming wUSDT on the way from Ethereum to 3dpass
         oracleAddress: '0x237527b4F7bb0030Bd5B7B863839Aa121cefd5fB',
         description: 'USDT Import Wrapper Bridge (Ethereum → 3DPass)',
-        isIssuerBurner: true
+        isIssuerBurner: true // This bridge is issuer and burner of wUSDT on 3dpass
       },
-      // Export bridges (3dpass <-> External)
+      // Export bridges (3dpass <-> Ethereum)
       P3D_EXPORT: {
-        address: '0x50fcE1D58b41c3600C74de03238Eee71aFDfBf1F',
+        address: '0x50fcE1D58b41c3600C74de03238Eee71aFDfBf1F', // Not an ERC20 token itself, but a bridge contract that controls locked supply of P3D on 3dpass
         type: 'export',
         homeNetwork: '3dpass',
         homeTokenSymbol: 'P3D',
@@ -253,30 +281,39 @@ export const NETWORKS = {
         foreignTokenSymbol: 'P3D',
         foreignTokenAddress: '0x4f3a4e37701402C61146071309e45A15843025E1', // Matches foreignTokenAddress on Ethereum P3D_Import bridge
         stakeTokenSymbol: 'P3D',
-        stakeTokenAddress: P3D_PRECOMPILE_ADDRESS,
+        stakeTokenAddress: P3D_PRECOMPILE_ADDRESS, // Stake is required for Claiming P3D on the way back home from Ethereum to 3dpass
         description: '3DPass P3D → Ethereum P3D Bridge',
-        isIssuerBurner: false
+        isIssuerBurner: false // This bridge can only lock and unlock P3D on 3dpass
       },
     },
     // Assistant contracts deployed on 3DPass
     assistants: {
       // Import Wrapper Assistants
       USDT_IMPORT_ASSISTANT: {
-        address: '0x2Dce9B2dc9983f9b435da02a69C6F0e8A31Bf3E8',
+        address: '0x2Dce9B2dc9983f9b435da02a69C6F0e8A31Bf3E8', // ERC20 token itself, matches the USDTIA token address on 3dpass
         type: 'import_wrapper',
-        bridgeAddress: '0x00D5f00250434e76711e8127A37c6f84dBbDAA4C',
+        bridgeAddress: '0x00D5f00250434e76711e8127A37c6f84dBbDAA4C', // Matches the bridge address on 3dpass USDT_IMPORT
         description: 'USDT Import Wrapper Assistant',
         shareSymbol: 'USDTIA',
         shareName: 'USDT import assistant shares on 3dpass',
         managerAddress: '0x067Fac51f31Dc80263D55f9980DF1358357DC10d'
       },
       WUSDT_IMPORT_ASSISTANT: {
-        address: '0x6F7c9FFa2250E7119B44e3496B6f6b37736035F8',
+        address: '0x6F7c9FFa2250E7119B44e3496B6f6b37736035F8', // ERC20 token itself, matches the WUSDTA token address on 3dpass
         type: 'import_wrapper',
-        bridgeAddress: '0x00D5f00250434e76711e8127A37c6f84dBbDAA4C',
+        bridgeAddress: '0x00D5f00250434e76711e8127A37c6f84dBbDAA4C', // Matches the bridge address on 3dpass USDT_IMPORT
         description: 'WUSDT Import Wrapper Assistant',
         shareSymbol: 'WUSDTA',
         shareName: 'WUSDT import assistant',
+        managerAddress: '0x067Fac51f31Dc80263D55f9980DF1358357DC10d'
+      },
+      P3D_EXPORT_ASSISTANT: {
+        address: '0xCf710B8715869b7fEd296275bEFCE275d69bDEd9', // ERC20 token itself, matches the P3DEA token address on 3dpass
+        type: 'export_wrapper',
+        bridgeAddress: '0x50fcE1D58b41c3600C74de03238Eee71aFDfBf1F', // Matches the bridge address on 3dpass P3D_EXPORT
+        description: 'P3D Import Assistant',
+        shareSymbol: 'P3DEA',
+        shareName: 'P3D Import Assistant Shares',
         managerAddress: '0x067Fac51f31Dc80263D55f9980DF1358357DC10d'
       }
     }
