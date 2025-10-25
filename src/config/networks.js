@@ -4,6 +4,7 @@ export const P3D_PRECOMPILE_ADDRESS = '0x000000000000000000000000000000000000080
 export const ADDRESS_ZERO = '0x0000000000000000000000000000000000000000'; // native token address on most other networks
 
 export const NETWORKS = {
+  // Ethereum network configuration
   ETHEREUM: {
     id: 1,
     name: 'Ethereum',
@@ -26,10 +27,11 @@ export const NETWORKS = {
       assistantFactory: '0x0B7f26083d6892Ca6b410FEffA2b24A4304Fa739', // ETHEREUM_ASSISTANT_FACTORY v.1.1
     },
     oracles: {
-      Oracle_1: {
+      // Oracle contracts deployed on Ethereum
+      ORACLE_1: {
         address: '0xD69cdEF8cD89F1b47d820f4b4d7133DB66E3Fc7F', // ETHEREUM oracle v.1.1
-        name: 'Ethereum Oracle',
-        description: 'Oracle for Ethereum price feeds',
+        name: '3DPass Oracle',
+        description: 'Oracle providing price feeds for Ethereum bridges',
       },
     },
     tokens: {
@@ -136,44 +138,46 @@ export const NETWORKS = {
         managerAddress: '0x067Fac51f31Dc80263D55f9980DF1358357DC10d'
       }
     }
+  }, 
+  // BSC network configuration
+  BSC: {
+    id: 56,
+    name: 'Binance Smart Chain',
+    symbol: 'BSC',
+    rpcUrl: 'https://bsc-dataseed1.binance.org',
+    explorer: 'https://bscscan.com',
+    isHybrid: true,
+    isEVM: true,
+    erc20Precompile: false,
+    nativeCurrency: {
+      name: 'BNB',
+      symbol: 'BNB',
+      decimals: 18,
+    },
+    contracts: {
+      // CORE Counterstake contracts deployed on BSC
+      counterstakeFactory: '0xa5893a1A1FF15031d8AB5aC24531D3B3418612EE', // BSC_COUNTERSTAKE_FACTORY
+      assistantFactory: '0x9F60328982ab3e34020A9D43763db43d03Add7CF', // BSC_ASSISTANT_FACTORY
+    },
+    oracles: {
+      ORACLE_1: {
+        address: '0xdD52899A001a4260CDc43307413A5014642f37A2', // BSC oracle
+        name: 'Obyte Oracle',
+        description: 'Oracle providing price feeds for BSC bridges',
+      },
+    },
+    tokens: {
+      BNB: {
+        address: ADDRESS_ZERO,
+        symbol: 'BNB',
+        decimals: 18,
+        name: 'BNB token',
+        isPrecompile: false,
+        isNative: true,
+      },
+    },
   },
-  // BSC: {
-  //   id: 56,
-  //   name: 'Binance Smart Chain',
-  //   symbol: 'BSC',
-  //   rpcUrl: 'https://bsc-dataseed1.binance.org',
-  //   explorer: 'https://bscscan.com',
-  //   isHybrid: true,
-  //   isEVM: true,
-  //   erc20Precompile: false,
-  //   nativeCurrency: {
-  //     name: 'BNB',
-  //     symbol: 'BNB',
-  //     decimals: 18,
-  //   },
-  //   contracts: {
-  //     // CORE Counterstake contracts deployed on BSC
-  //     counterstakeFactory: '0xa5893a1A1FF15031d8AB5aC24531D3B3418612EE', // BSC_COUNTERSTAKE_FACTORY
-  //     assistantFactory: '0x9F60328982ab3e34020A9D43763db43d03Add7CF', // BSC_ASSISTANT_FACTORY
-  //   },
-  //   oracles: {
-  //     default: {
-  //       address: '0xdD52899A001a4260CDc43307413A5014642f37A2', // BSC oracle
-  //       name: 'BSC Oracle',
-  //       description: 'Main oracle for BSC price feeds',
-  //     },
-  //   },
-  //   tokens: {
-  //     BNB: {
-  //       address: ADDRESS_ZERO,
-  //       symbol: 'BNB',
-  //       decimals: 18,
-  //       name: 'BNB token',
-  //       isPrecompile: false,
-  //       isNative: true,
-  //     },
-  //   },
-  // },
+  // 3DPass network configuration
   THREEDPASS: {
     id: 1333,
     name: '3dpass',
@@ -198,10 +202,10 @@ export const NETWORKS = {
       assistantFactory: '0x51D7976F592724401e9DAE0dC75B126D889C9C9e', // AssistantFactory from deployment
     },
     oracles: {
-      Oracle_1: {
+      ORACLE_1: {
         address: '0x237527b4F7bb0030Bd5B7B863839Aa121cefd5fB', // Oracle from deployment
         name: '3DPass Oracle',
-        description: 'Oracle for 3dpass tokens price feeds',
+        description: 'Oracle providing price feeds for 3dpass bridges',
       },
     },
     tokens: {
@@ -311,7 +315,7 @@ export const NETWORKS = {
         address: '0xCf710B8715869b7fEd296275bEFCE275d69bDEd9', // ERC20 token itself, matches the P3DEA token address on 3dpass
         type: 'export_wrapper',
         bridgeAddress: '0x50fcE1D58b41c3600C74de03238Eee71aFDfBf1F', // Matches the bridge address on 3dpass P3D_EXPORT
-        description: 'P3D Import Assistant',
+        description: 'P3D Export Assistant',
         shareSymbol: 'P3DEA',
         shareName: 'P3D Import Assistant Shares',
         managerAddress: '0x067Fac51f31Dc80263D55f9980DF1358357DC10d'
