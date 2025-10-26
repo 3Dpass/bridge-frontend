@@ -223,6 +223,17 @@ const parseError = (error) => {
     };
   }
   
+  // ERC20 burn amount exceeds balance (third-party claim insufficient balance)
+  if (errorMessage.includes('ERC20: burn amount exceeds balance')) {
+    return {
+      type: 'insufficient_balance_for_assist',
+      title: 'Insufficient Balance',
+      message: 'Insufficient balance to assist with this transfer',
+      canRetry: false,
+      isUserError: true
+    };
+  }
+  
   // Contract/transaction errors
   if (errorMessage.includes('execution reverted') ||
       errorMessage.includes('revert')) {
@@ -306,6 +317,36 @@ const NewClaim = ({ isOpen, onClose, selectedToken = null, selectedTransfer = nu
   const [stakeTokenBalance, setStakeTokenBalance] = useState('0');
   const [isLoadingStakeBalance, setIsLoadingStakeBalance] = useState(false);
   const [selectedBridge, setSelectedBridge] = useState(null);
+
+  // Helper function to check if balance is insufficient for third-party claim
+  const isInsufficientBalanceForThirdPartyClaim = () => {
+    if (!isThirdPartyClaim || !formData.amount || !formData.reward || !tokenBalance) {
+      return false;
+    }
+    
+    const tokenDecimals = getTokenDecimals(network?.id, formData.tokenAddress);
+    
+    // Handle amount (should be in wei format)
+    let amountWei;
+    if (parseFloat(formData.amount) > 1000000000000) {
+      amountWei = ethers.BigNumber.from(formData.amount);
+    } else {
+      amountWei = ethers.utils.parseUnits(formData.amount, tokenDecimals);
+    }
+    
+    // Handle reward (use as-is from event)
+    let rewardWei;
+    if (parseFloat(formData.reward) > 1000000000000) {
+      rewardWei = ethers.BigNumber.from(formData.reward);
+    } else {
+      rewardWei = ethers.utils.parseUnits(formData.reward, tokenDecimals);
+    }
+    
+    const transferWei = amountWei.sub(rewardWei);
+    const balanceWei = ethers.utils.parseUnits(tokenBalance, tokenDecimals);
+    
+    return transferWei.gt(balanceWei);
+  };
   const [requiredStake, setRequiredStake] = useState('0');
   const [allowance, setAllowance] = useState('0');
   const [needsApproval, setNeedsApproval] = useState(true);
@@ -2984,6 +3025,11 @@ const NewClaim = ({ isOpen, onClose, selectedToken = null, selectedTransfer = nu
         errorMessage = providerMessage ? `Provider error (-32603): ${providerMessage}` : 'Provider internal error (-32603). Please try again or reconnect your wallet.';
       } else if (providerMessage?.includes('this transfer has already been claimed') || providerMessage?.includes('already been claimed')) {
         errorMessage = 'Transfer has already been claimed';
+      } else if (providerMessage?.includes('ERC20: burn amount exceeds balance') || 
+                 error.message?.includes('ERC20: burn amount exceeds balance') ||
+                 providerMessage?.includes('execution reverted: ERC20: burn amount exceeds balance') ||
+                 error.message?.includes('execution reverted: ERC20: burn amount exceeds balance')) {
+        errorMessage = 'Insufficient balance to assist with this transfer';
       } else if (providerMessage?.toLowerCase().includes('gas')) {
         errorMessage = 'Transaction failed due to gas issues. Please try again.';
       } else if (providerMessage?.includes('execution reverted') || providerMessage?.includes('revert')) {
@@ -3105,7 +3151,20 @@ const NewClaim = ({ isOpen, onClose, selectedToken = null, selectedTransfer = nu
                         </div>
                         <div className="text-right">
                           <p className="text-sm text-secondary-400">Balance</p>
-                          <p className="font-medium text-white">{tokenBalance}</p>
+                          <p className="font-medium text-white">
+                            {(() => {
+                              // Apply display multiplier for P3D tokens
+                              if (tokenMetadata?.symbol === 'P3D') {
+                                const multiplier = getStakeTokenDisplayMultiplier(NETWORKS.THREEDPASS.id);
+                                const numericAmount = parseFloat(tokenBalance);
+                                if (!isNaN(numericAmount)) {
+                                  return (numericAmount * multiplier).toString();
+                                }
+                              }
+                              
+                              return tokenBalance;
+                            })()}
+                          </p>
                         </div>
                       </div>
                       
@@ -3254,11 +3313,53 @@ const NewClaim = ({ isOpen, onClose, selectedToken = null, selectedTransfer = nu
                       <div className="space-y-2 text-sm">
                         <div className="flex justify-between">
                           <span className="text-secondary-400">Claim Amount:</span>
-                          <span className="font-medium text-white">{formData.amount} {tokenMetadata?.symbol}</span>
+                          <span className="font-medium text-white">
+                            {(() => {
+                              if (!formData.amount) return '0';
+                              
+                              const tokenDecimals = getTokenDecimals(network?.id, formData.tokenAddress);
+                              
+                              // Amount from transfer events is always in wei format
+                              const amountWei = ethers.BigNumber.from(formData.amount);
+                              let humanReadableAmount = ethers.utils.formatUnits(amountWei, tokenDecimals);
+                              
+                              // Apply display multiplier for P3D tokens
+                              if (tokenMetadata?.symbol === 'P3D') {
+                                const multiplier = getStakeTokenDisplayMultiplier(NETWORKS.THREEDPASS.id);
+                                const numericAmount = parseFloat(humanReadableAmount);
+                                if (!isNaN(numericAmount)) {
+                                  return (numericAmount * multiplier).toString();
+                                }
+                              }
+                              
+                              return humanReadableAmount;
+                            })()} {tokenMetadata?.symbol}
+                          </span>
                         </div>
                         <div className="flex justify-between">
                           <span className="text-secondary-400">Reward:</span>
-                          <span className="font-medium text-white">{formData.reward}</span>
+                          <span className="font-medium text-white">
+                            {(() => {
+                              if (!formData.reward) return '0';
+                              
+                              const tokenDecimals = getTokenDecimals(network?.id, formData.tokenAddress);
+                              
+                              // Reward from transfer events is always in wei format
+                              const rewardWei = ethers.BigNumber.from(formData.reward);
+                              let humanReadableReward = ethers.utils.formatUnits(rewardWei, tokenDecimals);
+                              
+                              // Apply display multiplier for P3D tokens
+                              if (tokenMetadata?.symbol === 'P3D') {
+                                const multiplier = getStakeTokenDisplayMultiplier(NETWORKS.THREEDPASS.id);
+                                const numericAmount = parseFloat(humanReadableReward);
+                                if (!isNaN(numericAmount)) {
+                                  return (numericAmount * multiplier).toString();
+                                }
+                              }
+                              
+                              return humanReadableReward;
+                            })()}
+                          </span>
                         </div>
                         <div className="flex justify-between">
                           <span className="text-secondary-400">Tokens to Transfer:</span>
@@ -3287,7 +3388,18 @@ const NewClaim = ({ isOpen, onClose, selectedToken = null, selectedTransfer = nu
                               }
                               
                               const transferWei = amountWei.sub(rewardWei);
-                              return ethers.utils.formatUnits(transferWei, tokenDecimals);
+                              let humanReadableTransfer = ethers.utils.formatUnits(transferWei, tokenDecimals);
+                              
+                              // Apply display multiplier for P3D tokens
+                              if (tokenMetadata?.symbol === 'P3D') {
+                                const multiplier = getStakeTokenDisplayMultiplier(NETWORKS.THREEDPASS.id);
+                                const numericAmount = parseFloat(humanReadableTransfer);
+                                if (!isNaN(numericAmount)) {
+                                  return (numericAmount * multiplier).toString();
+                                }
+                              }
+                              
+                              return humanReadableTransfer;
                             })()} {tokenMetadata?.symbol}
                           </span>
                         </div>
@@ -3323,7 +3435,18 @@ const NewClaim = ({ isOpen, onClose, selectedToken = null, selectedTransfer = nu
                               ? 'text-red-400' 
                               : 'text-white'
                           }`}>
-                            {tokenBalance} {tokenMetadata?.symbol}
+                            {(() => {
+                              // Apply display multiplier for P3D tokens
+                              if (tokenMetadata?.symbol === 'P3D') {
+                                const multiplier = getStakeTokenDisplayMultiplier(NETWORKS.THREEDPASS.id);
+                                const numericAmount = parseFloat(tokenBalance);
+                                if (!isNaN(numericAmount)) {
+                                  return (numericAmount * multiplier).toString();
+                                }
+                              }
+                              
+                              return tokenBalance;
+                            })()} {tokenMetadata?.symbol}
                             {(() => {
                               if (!formData.amount || !formData.reward) return null;
                               
@@ -3778,7 +3901,7 @@ const NewClaim = ({ isOpen, onClose, selectedToken = null, selectedTransfer = nu
                 {!needsApproval && (
                   <button
                     type="submit"
-                    disabled={submitting}
+                    disabled={submitting || isInsufficientBalanceForThirdPartyClaim()}
                     className="btn-primary flex-1 flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
                   >
                     {submitting ? (
