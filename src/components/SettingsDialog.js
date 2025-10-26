@@ -29,6 +29,7 @@ import {
 } from 'lucide-react';
 import CreateNewAssistant from './CreateNewAssistant';
 import CreateNewBridge from './CreateNewBridge';
+import DeployNewOracle from './DeployNewOracle';
 import { motion, AnimatePresence } from 'framer-motion';
 import toast from 'react-hot-toast';
 
@@ -67,6 +68,7 @@ const SettingsDialog = ({ isOpen, onClose }) => {
   const [detectedTokens, setDetectedTokens] = useState({});
   const [showCreateAssistant, setShowCreateAssistant] = useState({});
   const [showCreateBridge, setShowCreateBridge] = useState({});
+  const [showDeployOracle, setShowDeployOracle] = useState({});
   const [showAddOracle, setShowAddOracle] = useState({});
   const [newOracle, setNewOracle] = useState({});
 
@@ -961,6 +963,14 @@ const SettingsDialog = ({ isOpen, onClose }) => {
     addCustomBridgeInstanceForNetwork(networkKey, bridgeKey, bridgeConfig);
     
     toast.success(`Bridge ${bridgeKey} added to settings`);
+  };
+
+  // Handle oracle deployed from factory
+  const handleOracleDeployed = (networkKey, oracleKey, oracleConfig) => {
+    // Add the oracle to settings
+    updateOracle(networkKey, oracleKey, oracleConfig);
+    
+    toast.success(`Oracle ${oracleKey} added to settings`);
   };
 
   // Handle discovering bridges and assistants from registry
@@ -2464,13 +2474,80 @@ const SettingsDialog = ({ isOpen, onClose }) => {
                     {settings[networkKey]?.customOracles && (
                       <div className="space-y-3">
                         {!showAddOracle[networkKey] ? (
-                          <button
-                            onClick={() => setShowAddOracle(prev => ({ ...prev, [networkKey]: true }))}
-                            className="btn-secondary flex items-center gap-2 w-full"
-                          >
-                            <Plus className="w-4 h-4" />
-                            Add an existing Oracle
-                          </button>
+                          <div className="space-y-2">
+                            <button
+                              onClick={() => setShowAddOracle(prev => ({ ...prev, [networkKey]: true }))}
+                              className="btn-secondary flex items-center gap-2 w-full"
+                            >
+                              <Plus className="w-4 h-4" />
+                              Add an existing Oracle
+                            </button>
+                            <button
+                              onClick={async () => {
+                                // Check if we need to switch networks first
+                                const networkConfig = NETWORKS[networkKey];
+                                if (!networkConfig) {
+                                  toast.error('Could not determine required network');
+                                  return;
+                                }
+                                
+                                // Check current network
+                                if (!window.ethereum) {
+                                  console.error('MetaMask not available');
+                                  toast.error('MetaMask not available');
+                                  return;
+                                }
+                                
+                                let currentChainId;
+                                try {
+                                  const chainId = await window.ethereum.request({ method: 'eth_chainId' });
+                                  currentChainId = parseInt(chainId, 16);
+                                  console.log('🔍 Current chain ID:', currentChainId, 'Required chain ID:', networkConfig.id);
+                                } catch (error) {
+                                  console.error('Error getting chain ID:', error);
+                                  toast.error('Failed to check current network');
+                                  return;
+                                }
+                                
+                                if (currentChainId !== networkConfig.id) {
+                                  console.log('🚨 NETWORK SWITCHING WILL BE TRIGGERED NOW!');
+                                  console.log('🔄 Wrong network detected, switching automatically...');
+                                  
+                                  try {
+                                    const chainId = `0x${networkConfig.id.toString(16)}`;
+                                    console.log('🔄 Switching to network:', { networkKey, chainId });
+
+                                    await window.ethereum.request({
+                                      method: 'wallet_switchEthereumChain',
+                                      params: [{ chainId }],
+                                    });
+
+                                    console.log('✅ Network switched successfully to:', networkConfig.name);
+                                    toast.success(`Switched to ${networkConfig.name} network`);
+                                    
+                                    // Wait a moment for the network to settle
+                                    await new Promise(resolve => setTimeout(resolve, 1000));
+                                  } catch (error) {
+                                    console.error('❌ Network switch failed:', error);
+                                    if (error.code === 4902) {
+                                      // Network not added to MetaMask
+                                      toast.error(`${networkConfig.name} network not found in MetaMask. Please add it manually.`);
+                                    } else {
+                                      toast.error('Failed to switch network');
+                                    }
+                                    return;
+                                  }
+                                }
+                                
+                                // Now open the dialog
+                                setShowDeployOracle(prev => ({ ...prev, [networkKey]: true }));
+                              }}
+                              className="btn-primary flex items-center gap-2 w-full"
+                            >
+                              <Plus className="w-4 h-4" />
+                              Deploy New Oracle
+                            </button>
+                          </div>
                         ) : (
                           <div className="p-3 bg-dark-800 rounded border border-secondary-700 space-y-3">
                             {/* Oracle Address | Oracle Name */}
@@ -3300,6 +3377,20 @@ const SettingsDialog = ({ isOpen, onClose }) => {
             onClose={() => setShowCreateBridge(prev => ({ ...prev, [networkKey]: false }))}
             onBridgeCreated={(bridgeAddress, bridgeConfig) => 
               handleBridgeCreated(networkKey, bridgeAddress, bridgeConfig)
+            }
+          />
+        )
+      ))}
+
+      {/* Deploy New Oracle Dialog */}
+      {Object.entries(NETWORKS).map(([networkKey, networkConfig]) => (
+        showDeployOracle[networkKey] && (
+          <DeployNewOracle
+            key={networkKey}
+            networkKey={networkKey}
+            onClose={() => setShowDeployOracle(prev => ({ ...prev, [networkKey]: false }))}
+            onOracleCreated={(oracleKey, oracleConfig) => 
+              handleOracleDeployed(networkKey, oracleKey, oracleConfig)
             }
           />
         )
