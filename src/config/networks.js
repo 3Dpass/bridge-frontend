@@ -1,4 +1,22 @@
-// Network configuration for Counterstake Bridge
+// New bridges are created over the WEB User Interface. Navigate "Settings" to create new ones.
+// ----------------------------------------------------------------------------------------------
+// Creating neww bridges:
+// Adhere the following procedure exaclty to add new bridges into the configuration!
+// ----------------------------------------------------------------------------------------------
+// 1. Deploy Oracle on both source and destination blockchains
+// 2. Add home token to the `tokens` configuration under the chain it is going to be exported from
+// 3. Set up initial prices to the oracles (required: Token_address/_NATIVE_, token_symbol/_NAITVE_, _NATIVE_/Token_symbol)
+// 4. Create Import bridge instance on destination blockchain using the Oracle address and the home token address
+// 5. Add foreign token from Import bridge to the `tokens` configuraton (For Import Wrapper type the foreign token address must be added before the instance creation)
+// 6. Add Import bridge instance to the `bridges` configuration under the chain it is deployed to
+// 7. Create Export bridge instance on source blockchain using the Import bridge foreign token address
+// 8. Add Export bridge instance to the `bridges` configuration under the chain it is deployed to
+// ----------------------------------------------------------------------------------------------
+// Creating new pooled assistants:
+// 1. Navigate "Settings" to create new ones over the WEB User Interface.
+// 2. Add new assistants to the configuration under the chain it is deployed to
+
+// Counterstake Bridge configuration
 
 export const P3D_PRECOMPILE_ADDRESS = '0x0000000000000000000000000000000000000802'; // native token address on 3dpass
 export const ADDRESS_ZERO = '0x0000000000000000000000000000000000000000'; // native token address on most other networks
@@ -31,7 +49,7 @@ export const NETWORKS = {
       ORACLE_1: {
         address: '0xD69cdEF8cD89F1b47d820f4b4d7133DB66E3Fc7F', // ETHEREUM oracle v.1.1
         name: '3DPass Oracle',
-        description: 'Oracle providing price feeds for Ethereum bridges',
+        description: 'Oracle providing price feeds for 3DPass bridges on Ethereum',
       },
     },
     tokens: {
@@ -110,7 +128,7 @@ export const NETWORKS = {
         foreignTokenAddress: '0x4f3a4e37701402C61146071309e45A15843025E1', // Matches foreignTokenAddress on 3dpass P3D_Export bridge
         stakeTokenSymbol: 'ETH',
         stakeTokenAddress: ADDRESS_ZERO, // Stake is required for Claiming P3D on the way from 3dpass to Ethereum
-        oracleAddress: '0xdAC17F958D2ee523a2206206994597C13D831ec7',
+        oracleAddress: '0xD69cdEF8cD89F1b47d820f4b4d7133DB66E3Fc7F',
         description: 'P3D Import Bridge (3DPass → Ethereum)',
         isIssuerBurner: true // This bridge is issuer and burner of P3D on Ethereum
         }
@@ -142,7 +160,7 @@ export const NETWORKS = {
   // BSC network configuration
   BSC: {
     id: 56,
-    name: 'Binance Smart Chain',
+    name: 'BSC',
     symbol: 'BSC',
     rpcUrl: 'https://bsc-dataseed1.binance.org',
     explorer: 'https://bscscan.com',
@@ -156,15 +174,15 @@ export const NETWORKS = {
     },
     contracts: {
       // CORE Counterstake contracts deployed on BSC
-      counterstakeFactory: '0xa5893a1A1FF15031d8AB5aC24531D3B3418612EE', // BSC_COUNTERSTAKE_FACTORY
-      assistantFactory: '0x9F60328982ab3e34020A9D43763db43d03Add7CF', // BSC_ASSISTANT_FACTORY
+      counterstakeFactory: '0x91C79A253481bAa22E7E481f6509E70e5E6A883F', // BSC_COUNTERSTAKE_FACTORY
+      assistantFactory: '0xd634330ca14524A43d193E1c2e92cbaB72952896', // BSC_ASSISTANT_FACTORY
     },
     oracles: {
       ORACLE_1: {
-        address: '0xdD52899A001a4260CDc43307413A5014642f37A2', // BSC oracle
-        name: 'Obyte Oracle',
-        description: 'Oracle providing price feeds for BSC bridges',
-      },
+        address: '0xD69cdEF8cD89F1b47d820f4b4d7133DB66E3Fc7F', // 3dpass oracle
+        name: '3DPass Oracle',
+        description: 'Oracle providing price feeds for 3DPass bridges on BSC',
+      }
     },
     tokens: {
       BNB: {
@@ -175,7 +193,58 @@ export const NETWORKS = {
         isPrecompile: false,
         isNative: true,
       },
+      P3D: {
+        address: '0x078E7A2037b63846836E9d721cf2dabC08b94281',
+        symbol: 'P3D',
+        decimals: 18,
+        name: 'Bridged 3dpass P3D on Binance Smart Chain blockchain',
+        isPrecompile: false,
+        isNative: false,
+        standard: 'ERC20',
+        decimalsDisplayMultiplier: 1000000, // Multiplier for displaying decimals in the UI to compensate the differennce between Native P3D (12 decimals) and EVM P3D (18 decimals)
+      },
+      P3DIAS: {
+        address: '0xdaBb6424Fc6D256c8E01D091c2a0360bAcf1399E',
+        symbol: 'P3DIAS',
+        decimals: 18,
+        name: 'P3D import assistant shares on BSC',
+        isPrecompile: false,
+        isNative: false,
+        standard: 'ERC20',
+      },
     },
+      // Bridge instances deployed on BSC
+      bridges: {
+      // Import bridge contracts (3dpass <-> BSC)
+      P3D_IMPORT_2: {
+        address: '0x078E7A2037b63846836E9d721cf2dabC08b94281', // ERC20 token itself, matches the P3D token address on BSC
+        type: 'import',
+        homeNetwork: '3dpass',
+        homeTokenSymbol: 'P3D',
+        homeTokenAddress: P3D_PRECOMPILE_ADDRESS, // Matches homeTokenAddress on 3dpass P3D_Export bridge
+        foreignNetwork: 'BSC',
+        foreignTokenSymbol: 'P3D',
+        foreignTokenAddress: '0x078E7A2037b63846836E9d721cf2dabC08b94281', // Matches foreignTokenAddress on 3dpass P3D_Export bridge
+        stakeTokenSymbol: 'BNB',
+        stakeTokenAddress: ADDRESS_ZERO, // Stake is required for Claiming P3D on the way from 3dpass to BSC
+        oracleAddress: '0xD69cdEF8cD89F1b47d820f4b4d7133DB66E3Fc7F',
+        description: 'P3D Import Bridge (3DPass → BSC)',
+        isIssuerBurner: true // This bridge is issuer and burner of P3D on BSC
+       }
+     },  
+        // Assistant contracts deployed on Ethereum
+    assistants: {
+       // Import Assistants
+      P3D_IMPORT_ASSISTANT_2: {
+        address: '0xdaBb6424Fc6D256c8E01D091c2a0360bAcf1399E', // ERC20 token itself, matches the P3DIA token address on BSC
+        type: 'import',
+        bridgeAddress: '0x078E7A2037b63846836E9d721cf2dabC08b94281', // Matches the bridge address on Ethereum P3D_IMPORT
+        description: 'P3D Import Assistant on BSC',
+        shareSymbol: 'P3DIAS',
+        shareName: 'P3D import assistant shares on BSC',
+        managerAddress: '0x067Fac51f31Dc80263D55f9980DF1358357DC10d'
+      }
+    }  
   },
   // 3DPass network configuration
   THREEDPASS: {
@@ -205,7 +274,7 @@ export const NETWORKS = {
       ORACLE_1: {
         address: '0x237527b4F7bb0030Bd5B7B863839Aa121cefd5fB', // Oracle from deployment
         name: '3DPass Oracle',
-        description: 'Oracle providing price feeds for 3dpass bridges',
+        description: 'Oracle providing price feeds for 3dpass bridges on 3dpass',
       },
     },
     tokens: {
@@ -254,6 +323,15 @@ export const NETWORKS = {
         isPrecompile: false,
         isNative: false,
         standard: 'ERC20',
+      },
+      P3DEAS: {
+        address: '0x8de2F4FF2392d9f967c374469b70cc834a38766b',
+        symbol: 'P3DEAS',
+        decimals: 18,
+        name: 'P3D Export Assistant Shares 3dpass-BSC',
+        isPrecompile: false,
+        isNative: false,
+        standard: 'ERC20',
       }
     },
     // Bridge instances deployed on 3DPass
@@ -289,6 +367,20 @@ export const NETWORKS = {
         description: '3DPass P3D → Ethereum P3D Bridge',
         isIssuerBurner: false // This bridge can only lock and unlock P3D on 3dpass
       },
+      P3D_EXPORT_2: {
+        address: '0x65101a5889F33E303b3753aa7311161F6C708F27', // Not an ERC20 token itself, but a bridge contract that controls locked supply of P3D on 3dpass
+        type: 'export',
+        homeNetwork: '3dpass',
+        homeTokenSymbol: 'P3D',
+        homeTokenAddress: P3D_PRECOMPILE_ADDRESS, // Matches homeTokenAddress on BSC P3D_Import bridge
+        foreignNetwork: 'BSC',
+        foreignTokenSymbol: 'P3D',
+        foreignTokenAddress: '0x078E7A2037b63846836E9d721cf2dabC08b94281', // Matches foreignTokenAddress on BSC P3D_Import bridge
+        stakeTokenSymbol: 'P3D',
+        stakeTokenAddress: P3D_PRECOMPILE_ADDRESS, // Stake is required for Claiming P3D on the way back home from BSC to 3dpass
+        description: '3DPass P3D → BSC P3D Bridge',
+        isIssuerBurner: false // This bridge can only lock and unlock P3D on 3dpass
+      },
     },
     // Assistant contracts deployed on 3DPass
     assistants: {
@@ -315,9 +407,18 @@ export const NETWORKS = {
         address: '0xCf710B8715869b7fEd296275bEFCE275d69bDEd9', // ERC20 token itself, matches the P3DEA token address on 3dpass
         type: 'export_wrapper',
         bridgeAddress: '0x50fcE1D58b41c3600C74de03238Eee71aFDfBf1F', // Matches the bridge address on 3dpass P3D_EXPORT
-        description: 'P3D Export Assistant',
+        description: 'P3D Export Assistant 3dpass-Ethereum',
         shareSymbol: 'P3DEA',
         shareName: 'P3D Import Assistant Shares',
+        managerAddress: '0x067Fac51f31Dc80263D55f9980DF1358357DC10d'
+      },
+      P3D_EXPORT_ASSISTANT_2: {
+        address: '0x8de2F4FF2392d9f967c374469b70cc834a38766b', // ERC20 token itself, matches the P3DEAS token address on 3dpass
+        type: 'export_wrapper',
+        bridgeAddress: '0x65101a5889F33E303b3753aa7311161F6C708F27', // Matches the bridge address on 3dpass P3D_EXPORT_2
+        description: 'P3D Export Assistant 3Dpass-BSC',
+        shareSymbol: 'P3DEAS',
+        shareName: 'P3D Export Assistant Shares 3dpass-BSC',
         managerAddress: '0x067Fac51f31Dc80263D55f9980DF1358357DC10d'
       }
     }

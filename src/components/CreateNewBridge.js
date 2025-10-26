@@ -315,6 +315,26 @@ const CreateNewBridge = ({ networkKey, onClose, onBridgeCreated }) => {
 
 
 
+  // Validate stake token symbol function before creating bridge
+  const validateStakeTokenSymbol = async (tokenAddress) => {
+    try {
+      // Check if this is a native token (ADDRESS_ZERO)
+      if (tokenAddress === '0x0000000000000000000000000000000000000000') {
+        console.log('✅ Native token detected, no symbol() function needed');
+        return true;
+      }
+      
+      // For non-native tokens, check if symbol() function exists
+      const tokenContract = new ethers.Contract(tokenAddress, ['function symbol() view returns (string)'], signer);
+      const symbol = await tokenContract.symbol();
+      console.log('✅ Stake token symbol retrieved successfully:', symbol);
+      return true;
+    } catch (error) {
+      console.error('❌ Failed to retrieve stake token symbol:', error);
+      return false;
+    }
+  };
+
   // Create bridge contract
   const handleCreateBridge = async () => {
     if (!signer || !account) {
@@ -330,6 +350,57 @@ const CreateNewBridge = ({ networkKey, onClose, onBridgeCreated }) => {
     if ((bridgeType === 'import' || bridgeType === 'import_wrapper') && !oracleAddress) {
       toast.error('Oracle address is required for import bridges');
       return;
+    }
+
+    // Validate stake token symbol function for import bridges
+    if (bridgeType === 'import') {
+      console.log('🔍 Validating stake token symbol function...');
+      const isValidSymbol = await validateStakeTokenSymbol(stakeToken);
+      if (!isValidSymbol) {
+        toast.error('Stake token does not implement symbol() function properly. Please select a different stake token.');
+        return;
+      }
+    }
+
+    // Validate oracle for import bridges
+    if ((bridgeType === 'import' || bridgeType === 'import_wrapper') && oracleAddress) {
+      console.log('🔍 Validating oracle...');
+      try {
+        const oracleContract = new ethers.Contract(oracleAddress, ['function getPrice(string,string) view returns (uint256,uint256)'], signer);
+        
+        // Test oracle with a simple price query
+        await oracleContract.getPrice('test', 'test');
+        console.log('✅ Oracle basic validation successful');
+        
+        // For import bridges, also test with the actual token symbol
+        if (bridgeType === 'import') {
+          try {
+            let stakeTokenSymbol;
+            
+            // Handle native token (ADDRESS_ZERO)
+            if (stakeToken === '0x0000000000000000000000000000000000000000') {
+              stakeTokenSymbol = '_NATIVE_';
+              console.log('🔍 Using _NATIVE_ for native stake token');
+            } else {
+              // For non-native tokens, get the symbol
+              const stakeTokenContract = new ethers.Contract(stakeToken, ['function symbol() view returns (string)'], signer);
+              stakeTokenSymbol = await stakeTokenContract.symbol();
+              console.log('🔍 Testing oracle with stake token symbol:', stakeTokenSymbol);
+            }
+            
+            // Test if oracle has price for this token pair
+            const priceResult = await oracleContract.getPrice(homeAsset || 'test', stakeTokenSymbol);
+            console.log('✅ Oracle price validation successful:', priceResult);
+          } catch (priceError) {
+            console.warn('⚠️ Oracle price validation failed, but continuing:', priceError.message);
+            // Don't fail the transaction for price validation, just warn
+          }
+        }
+      } catch (error) {
+        console.error('❌ Oracle validation failed:', error);
+        toast.error('Oracle validation failed. Please check the oracle address and ensure it has proper price data.');
+        return;
+      }
     }
 
     // Auto-set networks and assets based on bridge type
@@ -627,8 +698,14 @@ const CreateNewBridge = ({ networkKey, onClose, onBridgeCreated }) => {
         toast.error('Transaction failed due to gas issues. Please try again or increase gas limit.');
       } else if (error.message?.includes('revert') || 
                  error.message?.includes('execution reverted')) {
-        // Contract revert
-        toast.error('Transaction failed. Please check your inputs and try again.');
+        // Contract revert - provide more specific error messages
+        if (error.message?.includes('bad oracle') || error.message?.includes('no price from oracle')) {
+          toast.error('Oracle validation failed. Please ensure the oracle has price data for the required token pairs.');
+        } else if (error.message?.includes('bad stake token') || error.message?.includes('symbol')) {
+          toast.error('Stake token validation failed. Please select a different stake token that implements the symbol() function properly.');
+        } else {
+          toast.error('Transaction failed. Please check your inputs and try again.');
+        }
       } else if (error.message?.includes('network') || 
                  error.message?.includes('Network')) {
         // Network related errors
@@ -1224,7 +1301,6 @@ const CreateNewBridge = ({ networkKey, onClose, onBridgeCreated }) => {
                   </div>
                 </div>
               )}
-
             </div>
           </div>
           
