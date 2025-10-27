@@ -1,91 +1,109 @@
 import { ethers } from 'ethers';
 import { NETWORKS } from '../config/networks';
-import { estimateBlocksFromTimeframe, getBlockTime } from './block-estimator';
 import { getBlockTimestamp } from './bridge-contracts';
 import { 
   getCachedEvents, 
   setCachedEvents, 
-  getMostRecentCachedBlock, 
   mergeEvents 
 } from './event-cache';
+import { 
+  EXPORT_ABI,
+  IMPORT_ABI,
+  IMPORT_WRAPPER_ABI
+} from '../contracts/abi';
 
 /**
- * Efficiently fetch events from most recent blocks first using chunked search
- * @param {ethers.Contract} contract - Contract instance
- * @param {ethers.EventFilter} filter - Event filter
- * @param {number} fromBlock - Starting block (oldest)
- * @param {number} toBlock - Ending block (newest)
- * @param {number} maxEvents - Maximum number of events to fetch
- * @param {number} chunkSize - Size of each chunk to search (default: 1000)
- * @returns {Promise<Array>} Array of events sorted by most recent first
+ * Fetch event details from provider using block numbers from unified fetcher
+ * This uses the normal flow: get block numbers from unified fetcher, then fetch event details from provider
+ * @param {ethers.providers.Provider} provider - Network provider
+ * @param {string} bridgeAddress - Bridge contract address
+ * @param {string} eventType - Event type ('NewExpatriation' or 'NewRepatriation')
+ * @param {Array} eventBlocks - Array of event block info from unified fetcher
+ * @param {string} bridgeType - Bridge type ('export', 'import', 'import_wrapper')
+ * @returns {Promise<Array>} Array of decoded events
  */
-const fetchEventsFromRecentBlocks = async (contract, filter, fromBlock, toBlock, maxEvents = 100, chunkSize = 1000) => {
-  const allEvents = [];
-  let currentToBlock = toBlock;
-  let consecutiveErrors = 0;
-  const maxConsecutiveErrors = 3;
-  
-  console.log(`🔍 Fetching events from block ${fromBlock} to ${toBlock} in chunks of ${chunkSize}, max ${maxEvents} events`);
-  
-  while (currentToBlock > fromBlock && allEvents.length < maxEvents) {
-    const currentFromBlock = Math.max(fromBlock, currentToBlock - chunkSize + 1);
+const fetchEventsFromProviderBlocks = async (provider, bridgeAddress, eventType, eventBlocks, bridgeType = null) => {
+  try {
+    console.log(`🔍 fetchEventsFromProviderBlocks: Processing ${eventBlocks.length} events for ${eventType} on ${bridgeAddress} (bridgeType: ${bridgeType})`);
     
-    try {
-      console.log(`🔍 Searching chunk: blocks ${currentFromBlock} to ${currentToBlock}`);
-      const chunkEvents = await contract.queryFilter(filter, currentFromBlock, currentToBlock);
-      
-      // Add events to our collection (they come in chronological order from queryFilter)
-      allEvents.push(...chunkEvents);
-      
-      console.log(`🔍 Found ${chunkEvents.length} events in chunk ${currentFromBlock}-${currentToBlock}, total: ${allEvents.length}`);
-      
-      // Reset consecutive errors on success
-      consecutiveErrors = 0;
-      
-      // Move to the next chunk (going backwards in time)
-      currentToBlock = currentFromBlock - 1;
-      
-      // If we have enough events, we can stop early
-      if (allEvents.length >= maxEvents) {
-        console.log(`🔍 Reached max events limit (${maxEvents}), stopping search early`);
-        break;
-      }
-      
-      // Add a small delay between requests to respect rate limits
-      await new Promise(resolve => setTimeout(resolve, 100));
-      
-    } catch (error) {
-      consecutiveErrors++;
-      console.warn(`🔍 Error fetching events from blocks ${currentFromBlock}-${currentToBlock}:`, error.message);
-      
-      // If we get too many consecutive errors, stop searching
-      if (consecutiveErrors >= maxConsecutiveErrors) {
-        console.warn(`🔍 Too many consecutive errors (${consecutiveErrors}), stopping search`);
-        break;
-      }
-      
-      // If it's a rate limit error (429), wait longer before continuing
-      if (error.message?.includes('429') || error.message?.includes('rate limit') || error.message?.includes('Too Many Requests')) {
-        console.warn(`🔍 Rate limit detected, waiting 2 seconds before continuing...`);
-        await new Promise(resolve => setTimeout(resolve, 2000));
+    // Get the correct ABI based on bridge type and event type
+    let bridgeABI;
+    if (eventType === 'NewExpatriation') {
+      bridgeABI = EXPORT_ABI;
+    } else if (eventType === 'NewRepatriation') {
+      if (bridgeType === 'import_wrapper') {
+        bridgeABI = IMPORT_WRAPPER_ABI;
       } else {
-        // For other errors, wait a shorter time
-        await new Promise(resolve => setTimeout(resolve, 500));
+        bridgeABI = IMPORT_ABI;
       }
-      
-      // Continue with next chunk
-      currentToBlock = currentFromBlock - 1;
+    } else {
+      throw new Error(`Unknown event type: ${eventType}`);
     }
+    
+    const contract = new ethers.Contract(bridgeAddress, bridgeABI, provider);
+    
+    const allEvents = [];
+    
+    // Group events by block number to minimize provider calls
+    const eventsByBlock = {};
+    eventBlocks.forEach(event => {
+      if (!eventsByBlock[event.blockNumber]) {
+        eventsByBlock[event.blockNumber] = [];
+      }
+      eventsByBlock[event.blockNumber].push(event);
+    });
+    
+    console.log(`🔍 Querying ${Object.keys(eventsByBlock).length} blocks for ${eventType} events`);
+    
+    for (const [blockNumber] of Object.entries(eventsByBlock)) {
+      try {
+        console.log(`🔍 Querying for ${eventType} events in block ${blockNumber}`);
+        
+        // Check if block number is valid
+        const blockNum = parseInt(blockNumber);
+        if (isNaN(blockNum) || blockNum <= 0) {
+          console.warn(`⚠️ Invalid block number: ${blockNumber}, skipping...`);
+          continue;
+        }
+        
+        // Get current block to check if we're querying future blocks
+        const currentBlock = await provider.getBlockNumber();
+        if (blockNum > currentBlock) {
+          console.warn(`⚠️ Block ${blockNumber} is in the future (current: ${currentBlock}), skipping...`);
+          continue;
+        }
+        
+        const filter = contract.filters[eventType]();
+        
+        // Convert block number to hex string for queryFilter
+        const blockNumberHex = `0x${blockNum.toString(16)}`;
+        console.log(`🔍 Using block number hex: ${blockNumberHex} for block ${blockNumber} (current: ${currentBlock})`);
+        
+        const events = await contract.queryFilter(filter, blockNumberHex, blockNumberHex);
+        
+        console.log(`🔍 Found ${events.length} ${eventType} events in block ${blockNumber}`);
+        
+        for (const event of events) {
+          const decodedEvent = {
+            args: event.args,
+            blockNumber: event.blockNumber,
+            transactionHash: event.transactionHash,
+            logIndex: event.logIndex
+          };
+          allEvents.push(decodedEvent);
+        }
+      } catch (blockError) {
+        console.warn(`⚠️ Error fetching ${eventType} events from block ${blockNumber}:`, blockError.message);
+      }
+    }
+    
+    console.log(`🔍 fetchEventsFromProviderBlocks: Returning ${allEvents.length} decoded ${eventType} events`);
+    return allEvents;
+    
+  } catch (error) {
+    console.error(`❌ Error in fetchEventsFromProviderBlocks for ${eventType}:`, error);
+    return [];
   }
-  
-  // Sort all events by block number (most recent first)
-  allEvents.sort((a, b) => b.blockNumber - a.blockNumber);
-  
-  // Return only the most recent events up to maxEvents
-  const result = allEvents.slice(0, maxEvents);
-  console.log(`🔍 Returning ${result.length} most recent events out of ${allEvents.length} total found`);
-  
-  return result;
 };
 
 /**
@@ -104,7 +122,8 @@ export const fetchLastTransfers = async ({
   getBridgeInstancesWithSettings,
   timeframeHours = 1,
   blocksToCheck = null,
-  maxEventsPerBridge = 100
+  maxEventsPerBridge = 100,
+  bridgeAddresses = null
 }) => {
   console.log('🔍 fetchLastTransfers: Loading transfer events from all networks');
 
@@ -181,9 +200,20 @@ export const fetchLastTransfers = async ({
       const p3dExportBridge = networkBridgeInstances.find(b => b.address === '0x50fcE1D58b41c3600C74de03238Eee71aFDfBf1F');
       console.log(`🔍 P3D_EXPORT bridge included:`, p3dExportBridge ? 'YES' : 'NO', p3dExportBridge);
 
+      // Filter bridges by direction if specified
+      let filteredBridges = networkBridgeInstances;
+      if (bridgeAddresses && bridgeAddresses.length > 0) {
+        filteredBridges = networkBridgeInstances.filter(bridge => 
+          bridgeAddresses.includes(bridge.address.toLowerCase())
+        );
+        console.log(`🔍 Filtered to ${filteredBridges.length} bridges for direction:`, 
+          filteredBridges.map(b => ({ address: b.address, type: b.type }))
+        );
+      }
+
       // Skip if no bridges found for this network
-      if (networkBridgeInstances.length === 0) {
-        console.log(`🔍 No bridges found for network ${networkKey}, skipping...`);
+      if (filteredBridges.length === 0) {
+        console.log(`🔍 No bridges found for network ${networkKey} after filtering, skipping...`);
         continue;
       }
 
@@ -199,50 +229,11 @@ export const fetchLastTransfers = async ({
       // Create provider for this network
       const networkProvider = new ethers.providers.JsonRpcProvider(rpcUrl);
       
-      // Get current block number
-      const currentBlock = await networkProvider.getBlockNumber();
-      
-      // Calculate blocks to check based on timeframe or fallback to blocksToCheck
-      let blocksToCheckForNetwork;
-      if (blocksToCheck !== null) {
-        // Use explicit blocksToCheck if provided
-        blocksToCheckForNetwork = blocksToCheck;
-        console.log(`🔍 Using explicit blocksToCheck: ${blocksToCheckForNetwork} for ${networkKey}`);
-      } else {
-        // Calculate blocks based on timeframe and network block time
-        blocksToCheckForNetwork = estimateBlocksFromTimeframe(timeframeHours, networkKey);
-        console.log(`🔍 Calculated blocks for ${timeframeHours}h on ${networkKey}: ${blocksToCheckForNetwork} blocks (block time: ${getBlockTime(networkKey)}s)`);
-      }
-      
-      // Check if we have cached events and can optimize the search range
-      let fromBlock = Math.max(0, currentBlock - blocksToCheckForNetwork);
-      
-      // Try to find the most recent cached block across all bridges for this network
-      let mostRecentCachedBlock = null;
-      for (const bridgeInstance of networkBridgeInstances) {
-        const expatBlock = getMostRecentCachedBlock(networkKey, bridgeInstance.address, 'NewExpatriation');
-        const repatBlock = getMostRecentCachedBlock(networkKey, bridgeInstance.address, 'NewRepatriation');
-        
-        if (expatBlock && (!mostRecentCachedBlock || expatBlock > mostRecentCachedBlock)) {
-          mostRecentCachedBlock = expatBlock;
-        }
-        if (repatBlock && (!mostRecentCachedBlock || repatBlock > mostRecentCachedBlock)) {
-          mostRecentCachedBlock = repatBlock;
-        }
-      }
-      
-      if (mostRecentCachedBlock && mostRecentCachedBlock > fromBlock) {
-        // Start searching from the most recent cached event + 1
-        fromBlock = mostRecentCachedBlock + 1;
-        console.log(`🚀 Using cache optimization: searching from block ${fromBlock} (most recent cached: ${mostRecentCachedBlock}) instead of ${Math.max(0, currentBlock - blocksToCheckForNetwork)}`);
-      } else {
-        console.log(`🔍 No recent cached events found, searching full range from block ${fromBlock}`);
-      }
-      
-      console.log(`🔍 Checking blocks ${fromBlock} to ${currentBlock} for transfer events on ${networkKey} (${currentBlock - fromBlock + 1} blocks) - searching from most recent first`);
+      // Using unified fetcher - no need for block range calculations
+      console.log(`🔍 Using unified fetcher for transfer events on ${networkKey}`);
       
       // Fetch transfer events from all bridge instances in this network
-      for (const bridgeInstance of networkBridgeInstances) {
+      for (const bridgeInstance of filteredBridges) {
         console.log(`🔍 Processing bridge: ${bridgeInstance.address} (${bridgeInstance.type}) on ${networkKey}`);
         try {
           // Additional safety check before creating contract
@@ -251,129 +242,62 @@ export const fetchLastTransfers = async ({
             continue;
           }
           
-          // Create contract instance for event filtering
-          const contract = new ethers.Contract(bridgeInstance.address, [
-            // NewExpatriation event (from Export contracts)
-            "event NewExpatriation(address sender_address, uint amount, int reward, string foreign_address, string data)",
-            // NewRepatriation event (from Import/ImportWrapper contracts)
-            "event NewRepatriation(address sender_address, uint amount, uint reward, string home_address, string data)"
-          ], networkProvider);
+          console.log(`✅ Processing bridge: ${bridgeInstance.address} on ${networkKey}`);
           
-          console.log(`✅ Contract created for bridge: ${bridgeInstance.address} on ${networkKey}`);
-          
-          // Fetch NewExpatriation events (for Export bridges) - search from most recent blocks first
+          // Fetch all transfer events for this bridge in one call using unified fetcher
           let expatriationEvents = [];
-          if (bridgeInstance.type === 'export') {
-            try {
+          let repatriationEvents = [];
+          
+          try {
+            // Import unified fetcher
+            const { getAllTransferBlockNumbersUnified } = await import('./unified-block-fetcher.js');
+            
+            // Get all transfer events for this bridge in one call
+            const result = await getAllTransferBlockNumbersUnified(networkKey, bridgeInstance.address, {
+              limit: maxEventsPerBridge
+            });
+            
+            console.log(`🔍 Got all transfer events for ${bridgeInstance.address}:`, {
+              expatriationEvents: result.expatriationEvents?.eventCount || 0,
+              repatriationEvents: result.repatriationEvents?.eventCount || 0,
+              totalEvents: result.totalEventCount
+            });
+            
+            // Process NewExpatriation events (for Export bridges)
+            if (bridgeInstance.type === 'export' && result.expatriationEvents) {
               // Get cached events first
               const cachedEvents = getCachedEvents(networkKey, bridgeInstance.address, 'NewExpatriation');
               
-              // Use efficient chunked search from most recent blocks first
-              // Use smaller chunk size for Ethereum to avoid rate limits
-              const chunkSize = networkKey === 'ETHEREUM' ? 500 : 1000;
-              const newEvents = await fetchEventsFromRecentBlocks(
-                contract,
-                contract.filters.NewExpatriation(),
-                fromBlock,
-                currentBlock,
-                maxEventsPerBridge,
-                chunkSize
+              // Use normal flow: fetch event details from provider using block numbers from unified fetcher
+              const newEvents = await fetchEventsFromProviderBlocks(
+                networkProvider,
+                bridgeInstance.address,
+                'NewExpatriation',
+                result.expatriationEvents.events.slice(0, maxEventsPerBridge),
+                bridgeInstance.type
               );
               
               // Merge with cached events
-              console.log(`🔍 Before merge - cached: ${cachedEvents?.length || 0}, new: ${newEvents.length}`);
-              if (cachedEvents && cachedEvents.length > 0) {
-                console.log(`🔍 First cached event structure:`, {
-                  event: cachedEvents[0],
-                  args: cachedEvents[0]?.args,
-                  argsLength: cachedEvents[0]?.args?.length,
-                  // Array access (correct)
-                  hasSenderAddress: !!cachedEvents[0]?.args?.[0],
-                  hasForeignAddress: !!cachedEvents[0]?.args?.[3],
-                  senderAddress: cachedEvents[0]?.args?.[0],
-                  foreignAddress: cachedEvents[0]?.args?.[3]
-                });
-              }
-              if (newEvents && newEvents.length > 0) {
-                console.log(`🔍 First new event structure:`, {
-                  event: newEvents[0],
-                  args: newEvents[0]?.args,
-                  argsLength: newEvents[0]?.args?.length,
-                  // Array access (correct)
-                  hasSenderAddress: !!newEvents[0]?.args?.[0],
-                  hasForeignAddress: !!newEvents[0]?.args?.[3],
-                  senderAddress: newEvents[0]?.args?.[0],
-                  foreignAddress: newEvents[0]?.args?.[3]
-                });
-              }
               expatriationEvents = mergeEvents(cachedEvents, newEvents);
               
               // Update cache with merged events
               setCachedEvents(networkKey, bridgeInstance.address, 'NewExpatriation', expatriationEvents);
               
               console.log(`🔍 Found ${newEvents.length} new + ${cachedEvents?.length || 0} cached = ${expatriationEvents.length} total NewExpatriation events from ${bridgeInstance.address}`);
-              
-              // Debug: Check if this is the P3D_EXPORT bridge and log specific details
-              if (bridgeInstance.address === '0x50fcE1D58b41c3600C74de03238Eee71aFDfBf1F') {
-                console.log(`🔍 P3D_EXPORT bridge event details:`, {
-                  bridgeAddress: bridgeInstance.address,
-                  bridgeType: bridgeInstance.type,
-                  homeNetwork: bridgeInstance.homeNetwork,
-                  foreignNetwork: bridgeInstance.foreignNetwork,
-                  newEventsCount: newEvents.length,
-                  cachedEventsCount: cachedEvents?.length || 0,
-                  totalEventsCount: expatriationEvents.length,
-                  firstEvent: newEvents.length > 0 ? {
-                    transactionHash: newEvents[0].transactionHash,
-                    blockNumber: newEvents[0].blockNumber,
-                    senderAddress: newEvents[0].args?.[0],
-                    amount: newEvents[0].args?.[1]?.toString()
-                  } : null
-                });
-              }
-              
-              // Debug: Log first few events to see their structure
-              if (expatriationEvents.length > 0) {
-                console.log(`🔍 First NewExpatriation event structure:`, {
-                  event: expatriationEvents[0],
-                  args: expatriationEvents[0]?.args,
-                  argsLength: expatriationEvents[0]?.args?.length,
-                  // Array access (correct)
-                  hasSenderAddress: !!expatriationEvents[0]?.args?.[0],
-                  hasForeignAddress: !!expatriationEvents[0]?.args?.[3],
-                  senderAddress: expatriationEvents[0]?.args?.[0],
-                  foreignAddress: expatriationEvents[0]?.args?.[3],
-                  // Object access (incorrect - for comparison)
-                  hasSenderAddressObj: !!expatriationEvents[0]?.args?.sender_address,
-                  hasForeignAddressObj: !!expatriationEvents[0]?.args?.foreign_address,
-                  senderAddressObj: expatriationEvents[0]?.args?.sender_address,
-                  foreignAddressObj: expatriationEvents[0]?.args?.foreign_address
-                });
-              }
-            } catch (error) {
-              console.log(`🔍 Error fetching NewExpatriation events from ${bridgeInstance.address}:`, error.message);
-              // Fallback to cached events if available
-              expatriationEvents = getCachedEvents(networkKey, bridgeInstance.address, 'NewExpatriation') || [];
             }
-          }
-          
-          // Fetch NewRepatriation events (for Import/ImportWrapper bridges) - search from most recent blocks first
-          let repatriationEvents = [];
-          if (bridgeInstance.type === 'import' || bridgeInstance.type === 'import_wrapper') {
-            try {
+            
+            // Process NewRepatriation events (for Import/ImportWrapper bridges)
+            if ((bridgeInstance.type === 'import' || bridgeInstance.type === 'import_wrapper') && result.repatriationEvents) {
               // Get cached events first
               const cachedEvents = getCachedEvents(networkKey, bridgeInstance.address, 'NewRepatriation');
               
-              // Use efficient chunked search from most recent blocks first
-              // Use smaller chunk size for Ethereum to avoid rate limits
-              const chunkSize = networkKey === 'ETHEREUM' ? 500 : 1000;
-              const newEvents = await fetchEventsFromRecentBlocks(
-                contract,
-                contract.filters.NewRepatriation(),
-                fromBlock,
-                currentBlock,
-                maxEventsPerBridge,
-                chunkSize
+              // Use normal flow: fetch event details from provider using block numbers from unified fetcher
+              const newEvents = await fetchEventsFromProviderBlocks(
+                networkProvider,
+                bridgeInstance.address,
+                'NewRepatriation',
+                result.repatriationEvents.events.slice(0, maxEventsPerBridge),
+                bridgeInstance.type
               );
               
               // Merge with cached events
@@ -383,30 +307,13 @@ export const fetchLastTransfers = async ({
               setCachedEvents(networkKey, bridgeInstance.address, 'NewRepatriation', repatriationEvents);
               
               console.log(`🔍 Found ${newEvents.length} new + ${cachedEvents?.length || 0} cached = ${repatriationEvents.length} total NewRepatriation events from ${bridgeInstance.address}`);
-              
-              // Debug: Log first few events to see their structure
-              if (repatriationEvents.length > 0) {
-                console.log(`🔍 First NewRepatriation event structure:`, {
-                  event: repatriationEvents[0],
-                  args: repatriationEvents[0]?.args,
-                  argsLength: repatriationEvents[0]?.args?.length,
-                  // Array access (correct)
-                  hasSenderAddress: !!repatriationEvents[0]?.args?.[0],
-                  hasHomeAddress: !!repatriationEvents[0]?.args?.[3],
-                  senderAddress: repatriationEvents[0]?.args?.[0],
-                  homeAddress: repatriationEvents[0]?.args?.[3],
-                  // Object access (incorrect - for comparison)
-                  hasSenderAddressObj: !!repatriationEvents[0]?.args?.sender_address,
-                  hasHomeAddressObj: !!repatriationEvents[0]?.args?.home_address,
-                  senderAddressObj: repatriationEvents[0]?.args?.sender_address,
-                  homeAddressObj: repatriationEvents[0]?.args?.home_address
-                });
-              }
-            } catch (error) {
-              console.log(`🔍 Error fetching NewRepatriation events from ${bridgeInstance.address}:`, error.message);
-              // Fallback to cached events if available
-              repatriationEvents = getCachedEvents(networkKey, bridgeInstance.address, 'NewRepatriation') || [];
             }
+            
+          } catch (error) {
+            console.log(`🔍 Error fetching transfer events from ${bridgeInstance.address}:`, error.message);
+            // Fallback to cached events if available
+            expatriationEvents = getCachedEvents(networkKey, bridgeInstance.address, 'NewExpatriation') || [];
+            repatriationEvents = getCachedEvents(networkKey, bridgeInstance.address, 'NewRepatriation') || [];
           }
           
           // Process expatriation events

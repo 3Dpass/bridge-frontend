@@ -4,7 +4,6 @@ import {
   getAllClaims, 
   createCounterstakeContract 
 } from './bridge-contracts';
-import { estimateClaimsFromTimeframe } from './claim-estimator';
 
 /**
  * Fetch claims from all networks and bridges
@@ -24,7 +23,7 @@ export const fetchClaimsFromAllNetworks = async ({
   account = null,
   getTransferTokenSymbol,
   getTokenDecimals,
-  claimSearchDepth = 1 // Default to 1 hour
+  bridgeAddresses = null
 }) => {
   console.log('🔍 fetchClaimsFromAllNetworks: Loading claims from all networks');
 
@@ -92,9 +91,20 @@ export const fetchClaimsFromAllNetworks = async ({
         networkBridgeInstances.map(b => ({ address: b.address, type: b.type }))
       );
 
+      // Filter bridges by direction if specified
+      let filteredBridges = networkBridgeInstances;
+      if (bridgeAddresses && bridgeAddresses.length > 0) {
+        filteredBridges = networkBridgeInstances.filter(bridge => 
+          bridgeAddresses.includes(bridge.address.toLowerCase())
+        );
+        console.log(`🔍 Filtered to ${filteredBridges.length} bridges for direction:`, 
+          filteredBridges.map(b => ({ address: b.address, type: b.type }))
+        );
+      }
+
       // Skip if no bridges found for this network
-      if (networkBridgeInstances.length === 0) {
-        console.log(`🔍 No bridges found for network ${networkKey}, skipping...`);
+      if (filteredBridges.length === 0) {
+        console.log(`🔍 No bridges found for network ${networkKey} after filtering, skipping...`);
         continue;
       }
 
@@ -112,12 +122,12 @@ export const fetchClaimsFromAllNetworks = async ({
       
       // Fetch claims from all bridge instances in this network
       console.log(`🔍 FETCHING CLAIMS FROM ${networkKey.toUpperCase()} BRIDGES:`, {
-        totalBridges: networkBridgeInstances.length,
+        totalBridges: filteredBridges.length,
         filter,
         account: account || 'not connected'
       });
       
-      for (const bridgeInstance of networkBridgeInstances) {
+      for (const bridgeInstance of filteredBridges) {
         console.log(`🔍 Processing bridge: ${bridgeInstance.address} (${bridgeInstance.type}) on ${networkKey}`);
         try {
           // Additional safety check before creating contract
@@ -129,9 +139,9 @@ export const fetchClaimsFromAllNetworks = async ({
           const contract = await createCounterstakeContract(networkProvider, bridgeInstance.address);
           console.log(`✅ Contract created for bridge: ${bridgeInstance.address} on ${networkKey}`);
           
-          // Calculate the number of claims to fetch based on timeframe and network
-          const estimatedClaims = estimateClaimsFromTimeframe(claimSearchDepth, networkKey);
-          console.log(`🔍 Estimated ${estimatedClaims} claims for ${networkKey} based on ${claimSearchDepth} hours`);
+          // Use a fixed limit since unified fetcher gets all events
+          const claimsLimit = 100;
+          console.log(`🔍 Fetching up to ${claimsLimit} claims from ${networkKey}`);
 
           let bridgeClaims;
           if (filter === 'my') {
@@ -139,10 +149,10 @@ export const fetchClaimsFromAllNetworks = async ({
             // For "My Claims", we need to filter by recipient address
             // Since getClaimsForRecipient gets claims where user is recipient,
             // we'll get all claims and filter by recipient on the frontend
-            bridgeClaims = await getAllClaims(contract, estimatedClaims, rpcUrl, claimSearchDepth, networkKey);
+            bridgeClaims = await getAllClaims(contract, claimsLimit, rpcUrl, networkKey);
           } else {
             console.log(`🔍 Fetching all claims from ${networkKey}`);
-            bridgeClaims = await getAllClaims(contract, estimatedClaims, rpcUrl, claimSearchDepth, networkKey);
+            bridgeClaims = await getAllClaims(contract, claimsLimit, rpcUrl, networkKey);
           }
           
           console.log(`✅ Fetched ${bridgeClaims.length} claims from bridge: ${bridgeInstance.address} on ${networkKey}`);

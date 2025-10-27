@@ -24,9 +24,7 @@ export const SettingsProvider = ({ children }) => {
       } else {
         // Initialize with default network config
         const defaultSettings = {
-          // Global settings
-          historySearchDepth: 1, // Default to 1 hour
-        claimSearchDepth: 1, // Default to 1 hour for claim search
+          // Global settings - search depth removed as unified fetcher gets all events
         };
         Object.keys(NETWORKS).forEach(networkKey => {
           const network = NETWORKS[networkKey];
@@ -711,23 +709,6 @@ export const SettingsProvider = ({ children }) => {
     return true;
   }, []);
 
-  // Validate search depth settings
-  const validateSearchDepth = useCallback((depth, type = 'history') => {
-    if (typeof depth !== 'number' || isNaN(depth)) {
-      return { valid: false, error: `${type} search depth must be a number` };
-    }
-    
-    if (depth < 0.25) {
-      return { valid: false, error: `${type} search depth must be at least 0.25 hours (15 minutes)` };
-    }
-    
-    if (depth > 168) { // 1 week
-      return { valid: false, error: `${type} search depth cannot exceed 168 hours (1 week)` };
-    }
-    
-    return { valid: true };
-  }, []);
-
   // Get token type description
   const getTokenTypeDescription = useCallback((tokenConfig) => {
     if (!tokenConfig) return 'Unknown';
@@ -910,48 +891,6 @@ export const SettingsProvider = ({ children }) => {
   }, []);
 
   // Initialize on mount
-  // History search depth utilities
-  const getHistorySearchDepth = useCallback(() => {
-    return settings.historySearchDepth || 1; // Default to 1 hour
-  }, [settings.historySearchDepth]);
-
-  const updateHistorySearchDepth = useCallback((depth) => {
-    const newSettings = {
-      ...settings,
-      historySearchDepth: depth
-    };
-    return saveSettings(newSettings);
-  }, [settings, saveSettings]);
-
-  const getClaimSearchDepth = useCallback(() => {
-    return settings.claimSearchDepth || 1; // Default to 1 hour
-  }, [settings.claimSearchDepth]);
-
-  const updateClaimSearchDepth = useCallback((depth) => {
-    const newSettings = {
-      ...settings,
-      claimSearchDepth: depth
-    };
-    return saveSettings(newSettings);
-  }, [settings, saveSettings]);
-
-  // Validate all search depth settings
-  const validateAllSearchDepths = useCallback(() => {
-    const historyDepth = getHistorySearchDepth();
-    const claimDepth = getClaimSearchDepth();
-    
-    const historyValidation = validateSearchDepth(historyDepth, 'History');
-    const claimValidation = validateSearchDepth(claimDepth, 'Claim');
-    
-    const errors = [];
-    if (!historyValidation.valid) errors.push(historyValidation.error);
-    if (!claimValidation.valid) errors.push(claimValidation.error);
-    
-    return {
-      valid: errors.length === 0,
-      errors
-    };
-  }, [getHistorySearchDepth, getClaimSearchDepth, validateSearchDepth]);
 
   useEffect(() => {
     initializeSettings();
@@ -981,12 +920,6 @@ export const SettingsProvider = ({ children }) => {
     updateAssistantManager,
     resetSettings,
     resetNetworkSettings,
-    
-    // History search depth
-    getHistorySearchDepth,
-    updateHistorySearchDepth,
-    getClaimSearchDepth,
-    updateClaimSearchDepth,
     
     // Utilities
     getNetworkWithSettings,
@@ -1035,10 +968,6 @@ export const SettingsProvider = ({ children }) => {
     // Token validation utilities
     validateTokenConfig,
     getTokenTypeDescription,
-    
-    // Search depth validation utilities
-    validateSearchDepth,
-    validateAllSearchDepths,
   };
 
   return (

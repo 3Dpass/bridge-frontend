@@ -162,11 +162,12 @@ export const NETWORKS = {
     id: 56,
     name: 'BSC',
     symbol: 'BSC',
-    rpcUrl: 'https://bsc-dataseed1.binance.org',
+    rpcUrl: 'https://bsc-mainnet.infura.io/v3/a68b71d194e7493db5231530985b00b7', // https://bsc-dataseed1.binance.org
     explorer: 'https://bscscan.com',
-    isHybrid: true,
+    isHybrid: false,
     isEVM: true,
     erc20Precompile: false,
+    blockTime: 3, // Average block time in seconds (BSC is ~3 seconds)
     nativeCurrency: {
       name: 'BNB',
       symbol: 'BNB',
@@ -174,8 +175,10 @@ export const NETWORKS = {
     },
     contracts: {
       // CORE Counterstake contracts deployed on BSC
-      counterstakeFactory: '0x91C79A253481bAa22E7E481f6509E70e5E6A883F', // BSC_COUNTERSTAKE_FACTORY
-      assistantFactory: '0xd634330ca14524A43d193E1c2e92cbaB72952896', // BSC_ASSISTANT_FACTORY
+      // counterstakeFactory: '0x91C79A253481bAa22E7E481f6509E70e5E6A883F', // v.1.0
+      counterstakeFactory: '0x472Af6Fdf5677C5B4A7F718Dc6baF8c9f86db7FB', // BSC_COUNTERSTAKE_FACTORY 1.1
+      // assistantFactory: '0xd634330ca14524A43d193E1c2e92cbaB72952896', // v.1.0
+      assistantFactory: '0x65f7CB5A76c975ff763BeAE41b761861D019301c', // BSC_ASSISTANT_FACTORY 1.1
     },
     oracles: {
       ORACLE_1: {
@@ -615,4 +618,67 @@ export const getAssistantContractForBridge = (bridgeAddress) => {
     }
     return null;
   }, null);
+};
+
+// Bridge direction helper functions
+export const getBridgeDirections = () => {
+  const directions = [];
+  const processedPairs = new Set();
+  
+  // Get all bridges
+  const allBridges = getBridgeInstances();
+  
+  // Find matching export/import pairs
+  Object.entries(allBridges).forEach(([exportKey, exportBridge]) => {
+    if (exportBridge.type !== 'export') return;
+    
+    // Find matching import bridge
+    Object.entries(allBridges).forEach(([importKey, importBridge]) => {
+      if (importBridge.type !== 'import' && importBridge.type !== 'import_wrapper') return;
+      
+      // Check if foreign token addresses match (indicating they're a pair)
+      if (exportBridge.foreignTokenAddress === importBridge.foreignTokenAddress) {
+        const pairKey = `${exportBridge.homeNetwork}-${exportBridge.foreignNetwork}`;
+        
+        if (!processedPairs.has(pairKey)) {
+          processedPairs.add(pairKey);
+          
+          directions.push({
+            id: pairKey,
+            name: `${exportBridge.homeTokenSymbol} ${exportBridge.homeNetwork} ↔ ${importBridge.foreignTokenSymbol} ${importBridge.foreignNetwork}`,
+            description: `${exportBridge.description} / ${importBridge.description}`,
+            exportBridge: {
+              key: exportKey,
+              ...exportBridge
+            },
+            importBridge: {
+              key: importKey,
+              ...importBridge
+            },
+            homeNetwork: exportBridge.homeNetwork,
+            foreignNetwork: exportBridge.foreignNetwork,
+            homeTokenSymbol: exportBridge.homeTokenSymbol,
+            foreignTokenSymbol: exportBridge.foreignTokenSymbol
+          });
+        }
+      }
+    });
+  });
+  
+  return directions.sort((a, b) => a.name.localeCompare(b.name));
+};
+
+export const getBridgeDirectionById = (directionId) => {
+  const directions = getBridgeDirections();
+  return directions.find(direction => direction.id === directionId);
+};
+
+export const getBridgeAddressesForDirection = (directionId) => {
+  const direction = getBridgeDirectionById(directionId);
+  if (!direction) return [];
+  
+  return [
+    direction.exportBridge.address,
+    direction.importBridge.address
+  ];
 }; 

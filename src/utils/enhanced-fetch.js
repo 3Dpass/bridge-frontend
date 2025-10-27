@@ -1,7 +1,5 @@
-import { createSearchDepthAwareRetry } from './retry-with-fallback';
-
 /**
- * Enhanced fetch functions with HTTP 429 detection and search depth awareness
+ * Enhanced fetch functions with HTTP 429 detection and retry logic
  */
 
 /**
@@ -9,22 +7,13 @@ import { createSearchDepthAwareRetry } from './retry-with-fallback';
  */
 export const fetchClaimsWithFallback = async (
   fetchClaimsFromAllNetworks,
-  getHistorySearchDepth,
-  getClaimSearchDepth,
   options = {}
 ) => {
   const {
     maxRetries = 3,
-    baseDelay = 1000,
-    enableSearchDepthAwareRetry = true
+    baseDelay = 1000
     // onRetryStatus = null // Available for future use
   } = options;
-
-  // Create search depth-aware retry function
-  const retryWithSearchDepth = createSearchDepthAwareRetry(
-    getHistorySearchDepth,
-    getClaimSearchDepth
-  );
 
   // Enhanced fetch function with HTTP 429 handling
   const enhancedFetchClaims = async () => {
@@ -53,22 +42,19 @@ export const fetchClaimsWithFallback = async (
     }
   };
 
-  if (enableSearchDepthAwareRetry) {
-    return await retryWithSearchDepth(enhancedFetchClaims, {
-      maxAttempts: maxRetries,
-      baseDelay,
-      searchDepthType: 'claim',
-      retryCondition: (error) => {
-        // Retry on HTTP 429, network errors, but not on configuration errors
-        return error.message?.includes('429') || 
-               error.message?.includes('network') ||
-               error.message?.includes('timeout') ||
-               error.code === 'NETWORK_ERROR' ||
-               error.code === 'TIMEOUT';
+  // Simple retry with exponential backoff
+  for (let attempt = 1; attempt <= maxRetries; attempt++) {
+    try {
+      return await enhancedFetchClaims();
+    } catch (error) {
+      if (attempt === maxRetries) {
+        throw error;
       }
-    });
-  } else {
-    return await enhancedFetchClaims();
+      
+      const delay = baseDelay * Math.pow(2, attempt - 1) + Math.random() * 1000;
+      console.log(`⏳ Retrying claims fetch in ${delay}ms (attempt ${attempt}/${maxRetries})`);
+      await new Promise(resolve => setTimeout(resolve, delay));
+    }
   }
 };
 
@@ -77,21 +63,12 @@ export const fetchClaimsWithFallback = async (
  */
 export const fetchTransfersWithFallback = async (
   fetchLastTransfers,
-  getHistorySearchDepth,
-  getClaimSearchDepth,
   options = {}
 ) => {
   const {
     maxRetries = 3,
-    baseDelay = 1000,
-    enableSearchDepthAwareRetry = true
+    baseDelay = 1000
   } = options;
-
-  // Create search depth-aware retry function
-  const retryWithSearchDepth = createSearchDepthAwareRetry(
-    getHistorySearchDepth,
-    getClaimSearchDepth
-  );
 
   // Enhanced fetch function with HTTP 429 handling
   const enhancedFetchTransfers = async () => {
@@ -119,22 +96,19 @@ export const fetchTransfersWithFallback = async (
     }
   };
 
-  if (enableSearchDepthAwareRetry) {
-    return await retryWithSearchDepth(enhancedFetchTransfers, {
-      maxAttempts: maxRetries,
-      baseDelay,
-      searchDepthType: 'history',
-      retryCondition: (error) => {
-        // Retry on HTTP 429, network errors, but not on configuration errors
-        return error.message?.includes('429') || 
-               error.message?.includes('network') ||
-               error.message?.includes('timeout') ||
-               error.code === 'NETWORK_ERROR' ||
-               error.code === 'TIMEOUT';
+  // Simple retry with exponential backoff
+  for (let attempt = 1; attempt <= maxRetries; attempt++) {
+    try {
+      return await enhancedFetchTransfers();
+    } catch (error) {
+      if (attempt === maxRetries) {
+        throw error;
       }
-    });
-  } else {
-    return await enhancedFetchTransfers();
+      
+      const delay = baseDelay * Math.pow(2, attempt - 1) + Math.random() * 1000;
+      console.log(`⏳ Retrying transfers fetch in ${delay}ms (attempt ${attempt}/${maxRetries})`);
+      await new Promise(resolve => setTimeout(resolve, delay));
+    }
   }
 };
 
@@ -143,22 +117,13 @@ export const fetchTransfersWithFallback = async (
  */
 export const fetchEventsWithChunkedRetry = async (
   fetchEventsFromRecentBlocks,
-  getHistorySearchDepth,
-  getClaimSearchDepth,
   options = {}
 ) => {
   const {
     maxRetries = 3,
-    baseDelay = 1000,
+    baseDelay = 1000
     // chunkSize = 1000, // Available for future use
-    enableSearchDepthAwareRetry = true
   } = options;
-
-  // Create search depth-aware retry function
-  const retryWithSearchDepth = createSearchDepthAwareRetry(
-    getHistorySearchDepth,
-    getClaimSearchDepth
-  );
 
   // Enhanced fetch function with HTTP 429 handling
   const enhancedFetchEvents = async () => {
@@ -186,22 +151,19 @@ export const fetchEventsWithChunkedRetry = async (
     }
   };
 
-  if (enableSearchDepthAwareRetry) {
-    return await retryWithSearchDepth(enhancedFetchEvents, {
-      maxAttempts: maxRetries,
-      baseDelay,
-      searchDepthType: 'history',
-      retryCondition: (error) => {
-        // Retry on HTTP 429, network errors, but not on configuration errors
-        return error.message?.includes('429') || 
-               error.message?.includes('network') ||
-               error.message?.includes('timeout') ||
-               error.code === 'NETWORK_ERROR' ||
-               error.code === 'TIMEOUT';
+  // Simple retry with exponential backoff
+  for (let attempt = 1; attempt <= maxRetries; attempt++) {
+    try {
+      return await enhancedFetchEvents();
+    } catch (error) {
+      if (attempt === maxRetries) {
+        throw error;
       }
-    });
-  } else {
-    return await enhancedFetchEvents();
+      
+      const delay = baseDelay * Math.pow(2, attempt - 1) + Math.random() * 1000;
+      console.log(`⏳ Retrying events fetch in ${delay}ms (attempt ${attempt}/${maxRetries})`);
+      await new Promise(resolve => setTimeout(resolve, delay));
+    }
   }
 };
 

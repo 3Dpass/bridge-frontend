@@ -2,7 +2,7 @@ import React, { useState, useEffect, useCallback } from 'react';
 import { ethers } from 'ethers';
 import { useWeb3 } from '../contexts/Web3Context';
 import { useSettings } from '../contexts/SettingsContext';
-import { NETWORKS } from '../config/networks';
+import { NETWORKS, getBridgeDirections, getBridgeAddressesForDirection } from '../config/networks';
 import { fetchClaimsFromAllNetworks } from '../utils/fetch-claims';
 import { fetchLastTransfers } from '../utils/fetch-last-transfers';
 import { aggregateClaimsAndTransfers } from '../utils/aggregate-claims-transfers';
@@ -248,7 +248,7 @@ const getFieldMatchStatus = (claim, field) => {
 
 const ClaimList = () => {
   const { account, network, getNetworkWithSettings } = useWeb3();
-  const { getBridgeInstancesWithSettings, getHistorySearchDepth, getClaimSearchDepth, getTokenDecimalsDisplayMultiplier } = useSettings();
+  const { getBridgeInstancesWithSettings, getTokenDecimalsDisplayMultiplier } = useSettings();
   const [claims, setClaims] = useState([]);
   const [aggregatedData, setAggregatedData] = useState(null);
   const [loading, setLoading] = useState(false);
@@ -262,6 +262,8 @@ const ClaimList = () => {
     }
     return 'all';
   }); // 'all', 'my', 'suspicious', 'pending', 'active'
+  const [bridgeDirection, setBridgeDirection] = useState('all'); // 'all' or specific direction ID
+  const [isSearching, setIsSearching] = useState(false); // Track if search is in progress
   const [retryStatus, setRetryStatus] = useState(null);
   const [currentBlock, setCurrentBlock] = useState(null);
   const [showNewClaim, setShowNewClaim] = useState(false);
@@ -1338,24 +1340,26 @@ const ClaimList = () => {
     // Search depth settings are handled internally by the retry mechanism
     
     try {
+      // Get bridge addresses to filter by if a specific direction is selected
+      const bridgeAddresses = bridgeDirection === 'all' ? null : getBridgeAddressesForDirection(bridgeDirection);
+      console.log('🔍 Bridge direction filter:', bridgeDirection, 'Bridge addresses:', bridgeAddresses);
+
       // Fetch claims from all networks with enhanced retry and fallback
       console.log('🔍 Fetching claims from all networks with enhanced retry...');
       const allClaims = await fetchClaimsWithFallback(
         () => fetchClaimsFromAllNetworks({
           getNetworkWithSettings,
-          getBridgeInstancesWithSettings,
-          filter,
-          account,
-          claimSearchDepth: getClaimSearchDepth(),
-          getTransferTokenSymbol,
-          getTokenDecimals
-        }),
-        getHistorySearchDepth,
-        getClaimSearchDepth,
-        {
-          maxRetries: 3,
-          baseDelay: 1000,
-          enableSearchDepthAwareRetry: true,
+        getBridgeInstancesWithSettings,
+        filter,
+        account,
+        getTransferTokenSymbol,
+        getTokenDecimals,
+        bridgeAddresses // Pass bridge addresses for filtering
+      }),
+      {
+        maxRetries: 3,
+        baseDelay: 1000,
+        enableSearchDepthAwareRetry: true,
           onRetryStatus: (status) => {
             setRetryStatus({ ...status, type: 'claims' });
           }
@@ -1363,16 +1367,13 @@ const ClaimList = () => {
       );
 
       // Fetch transfers from all networks with enhanced retry and fallback
-      const historySearchDepth = getHistorySearchDepth();
-      console.log(`🔍 Fetching transfers from all networks for ${historySearchDepth}h history with enhanced retry...`);
+      console.log(`🔍 Fetching transfers from all networks with enhanced retry...`);
       const allTransfers = await fetchTransfersWithFallback(
         () => fetchLastTransfers({
           getNetworkWithSettings,
           getBridgeInstancesWithSettings,
-          timeframeHours: historySearchDepth
+          bridgeAddresses // Pass bridge addresses for filtering
         }),
-        getHistorySearchDepth,
-        getClaimSearchDepth,
         {
           maxRetries: 3,
           baseDelay: 1000,
@@ -1454,11 +1455,6 @@ const ClaimList = () => {
         fraudDetected: aggregated.fraudDetected
       });
 
-      console.log('🔍 History search depth setting:', {
-        historySearchDepth,
-        historySearchDepthType: typeof historySearchDepth
-      });
-      
       // Debug: Show details of all aggregated data
       console.log('🔍 Aggregated data breakdown:', {
         completedTransfers: aggregated.completedTransfers.length,
@@ -1507,12 +1503,11 @@ const ClaimList = () => {
       let filteredAggregated = aggregated; // Default to unfiltered
       
       try {
-        const cutoffTs = Math.floor(Date.now() / 1000) - Math.floor(historySearchDepth * 3600);
+        const cutoffTs = Math.floor(Date.now() / 1000) - Math.floor(1 * 3600); // Use 1 hour as default
         const withinWindow = (ts) => typeof ts === 'number' && ts >= cutoffTs;
 
         console.log('🔍 Time filtering debug:', {
           currentTime: Math.floor(Date.now() / 1000),
-          historySearchDepth,
           cutoffTs,
           cutoffDate: new Date(cutoffTs * 1000).toISOString()
         });
@@ -1578,7 +1573,6 @@ const ClaimList = () => {
 
         console.log('🔍 Time-filtered aggregation:', {
           cutoffTs,
-          historySearchDepth,
           completedTransfers: filteredAggregated.completedTransfers.length,
           pendingTransfers: filteredAggregated.pendingTransfers.length,
           suspiciousClaims: filteredAggregated.suspiciousClaims.length,
@@ -1690,7 +1684,7 @@ const ClaimList = () => {
         setIsInitialLoad(false);
       }
     }
-  }, [account, currentBlock, getNetworkWithSettings, getBridgeInstancesWithSettings, filter, getTransferTokenSymbol, getTokenDecimals, getHistorySearchDepth, getClaimSearchDepth, isInitialLoad, loadStakeInformation, loadCachedData, cacheStatus.hasCachedData, contractSettings]);
+  }, [account, currentBlock, getNetworkWithSettings, getBridgeInstancesWithSettings, filter, bridgeDirection, getTransferTokenSymbol, getTokenDecimals, isInitialLoad, loadStakeInformation, loadCachedData, cacheStatus.hasCachedData, contractSettings]);
 
   // Cache management functions
   const clearCache = useCallback(() => {
@@ -1712,6 +1706,28 @@ const ClaimList = () => {
     loadClaimsAndTransfers(true);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []); // Removed loadClaimsAndTransfers from dependencies to prevent infinite loop
+
+  const searchSelectedDirection = useCallback(async () => {
+    if (bridgeDirection === 'all') {
+      toast.error('Please select a specific bridge direction to search');
+      return;
+    }
+
+    console.log('🔍 Starting discovery for selected direction:', bridgeDirection);
+    setIsSearching(true);
+    setCacheStatus(prev => ({ ...prev, isRefreshing: true }));
+    
+    try {
+      await loadClaimsAndTransfers(true);
+      toast.success(`Discovery completed for ${getBridgeDirections().find(d => d.id === bridgeDirection)?.name || bridgeDirection}`);
+    } catch (error) {
+      console.error('❌ Error during direction search:', error);
+      toast.error('Failed to discover data for selected direction');
+    } finally {
+      setIsSearching(false);
+      setCacheStatus(prev => ({ ...prev, isRefreshing: false }));
+    }
+  }, [bridgeDirection, loadClaimsAndTransfers]);
 
   // Check if a claim was recently updated
   const isClaimRecentlyUpdated = useCallback((claim) => {
@@ -1946,7 +1962,7 @@ const ClaimList = () => {
     setUserStakes({});
   }, [account]);
 
-  // Load claims and transfers on mount and when dependencies change
+  // Load claims and transfers on mount and when filter changes (not bridgeDirection)
   useEffect(() => {
     // Always load data - no wallet connection required
     loadClaimsAndTransfers();
@@ -2177,6 +2193,44 @@ const ClaimList = () => {
             
           </div>
           
+          {/* Bridge Direction Selector */}
+          <div className="flex items-center gap-2">
+            <label className="text-sm text-secondary-400">Bridge Direction:</label>
+            <select
+              value={bridgeDirection}
+              onChange={(e) => setBridgeDirection(e.target.value)}
+              className="bg-dark-800 border border-dark-700 rounded-md px-3 py-2 text-sm text-white focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-transparent min-w-[200px]"
+            >
+              <option value="all">All Bridge Directions</option>
+              {getBridgeDirections().map((direction) => (
+                <option key={direction.id} value={direction.id}>
+                  {direction.name}
+                </option>
+              ))}
+            </select>
+            <button
+              onClick={searchSelectedDirection}
+              disabled={isSearching || bridgeDirection === 'all'}
+              className={`flex items-center gap-2 px-3 py-2 rounded-md text-sm font-medium transition-colors ${
+                isSearching || bridgeDirection === 'all'
+                  ? 'bg-dark-700 text-secondary-500 cursor-not-allowed'
+                  : 'bg-primary-600 text-white hover:bg-primary-700 cursor-pointer'
+              }`}
+              title={bridgeDirection === 'all' ? 'Select a specific bridge direction to search' : 'Search for claims and transfers in selected direction'}
+            >
+              {isSearching ? (
+                <>
+                  <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
+                  Searching...
+                </>
+              ) : (
+                <>
+                  <RefreshCw className="w-4 h-4" />
+                  Search
+                </>
+              )}
+            </button>
+          </div>
           
         </div>
       </div>
@@ -2274,20 +2328,22 @@ const ClaimList = () => {
       )}
 
       {/* Loading State */}
-      {loading && (
+      {(loading || isSearching) && (
         <div className="text-center py-12">
           <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary-500 mx-auto mb-4"></div>
           <p className="text-secondary-400">
-            {cacheStatus.isShowingCached 
-              ? `Refreshing data from the last ${getHistorySearchDepth()} hours...`
-              : `Discovering transfers for the last ${getHistorySearchDepth()} hours...`
+            {isSearching 
+              ? `Searching ${getBridgeDirections().find(d => d.id === bridgeDirection)?.name || bridgeDirection}...`
+              : cacheStatus.isShowingCached 
+                ? `Refreshing data...`
+                : `Discovering transfers...`
             }
           </p>
         </div>
       )}
 
       {/* Empty State */}
-      {!loading && (!aggregatedData || (aggregatedData.completedTransfers.length === 0 && aggregatedData.suspiciousClaims.length === 0 && aggregatedData.pendingTransfers.length === 0)) && (
+      {!loading && !isSearching && (!aggregatedData || (aggregatedData.completedTransfers.length === 0 && aggregatedData.suspiciousClaims.length === 0 && aggregatedData.pendingTransfers.length === 0)) && (
         <div className="text-center py-12">
           <div className="text-secondary-400 mb-4">
             <Clock className="w-12 h-12 mx-auto mb-4" />

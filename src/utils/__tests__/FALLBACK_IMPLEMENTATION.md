@@ -79,29 +79,33 @@ This implementation provides a comprehensive solution for handling HTTP 429 (Too
 
 ## Usage Examples
 
-### Basic Retry with Search Depth Awareness
+### Basic Retry with Exponential Backoff
 ```javascript
-const retryFn = createSearchDepthAwareRetry(getHistorySearchDepth, getClaimSearchDepth);
-
-const result = await retryFn(async () => {
-  return await fetchData();
-}, {
-  maxAttempts: 3,
-  baseDelay: 1000,
-  searchDepthType: 'history'
-});
+// Simple retry with exponential backoff (search depth logic removed)
+const retryWithBackoff = async (fn, maxAttempts = 3) => {
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    try {
+      return await fn();
+    } catch (error) {
+      if (attempt === maxAttempts) {
+        throw error;
+      }
+      
+      const delay = 1000 * Math.pow(2, attempt - 1) + Math.random() * 1000;
+      console.log(`⏳ Retrying in ${delay}ms (attempt ${attempt}/${maxAttempts})`);
+      await new Promise(resolve => setTimeout(resolve, delay));
+    }
+  }
+};
 ```
 
-### Enhanced Fetch with Fallback
+### Enhanced Fetch with Retry
 ```javascript
 const claims = await fetchClaimsWithFallback(
   () => fetchClaimsFromAllNetworks(options),
-  getHistorySearchDepth,
-  getClaimSearchDepth,
   {
     maxRetries: 3,
     baseDelay: 1000,
-    enableSearchDepthAwareRetry: true,
     onRetryStatus: (status) => {
       console.log(`Retry attempt ${status.attempt}/${status.maxAttempts}`);
     }

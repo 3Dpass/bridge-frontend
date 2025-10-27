@@ -4,7 +4,7 @@ import {
   EXPORT_ASSISTANT_ABI,
   COUNTERSTAKE_ABI
 } from '../contracts/abi';
-import { getBridgeInstanceByAddress, NETWORKS } from '../config/networks';
+import { getBridgeInstanceByAddress } from '../config/networks';
 import { safeBigNumberToInt } from './safe-reward-handler';
 
 // 3DPass Bridge Contract Utilities
@@ -602,152 +602,133 @@ export const getClaimDetails = async (contract, claimNum, rpcUrl) => {
 };
 
 /**
- * Get NewClaim events to extract txid information
+ * Get NewClaim events using unified block fetcher (replaces block scanning)
  * @param {ethers.Contract} contract - Counterstake contract instance
  * @param {number} limit - Maximum number of events to fetch (default: 100)
+ * @param {string} networkKey - Network key for unified fetcher
  * @returns {Promise<Array>} Array of NewClaim events with txid
  */
-export const getNewClaimEvents = async (contract, limit = 100, claimSearchDepth = 1, networkKey = null) => {
+export const getNewClaimEvents = async (contract, limit = 100, networkKey = null) => {
   try {
-    console.log('🚀 getNewClaimEvents: STARTING - Getting NewClaim events from contract:', contract.address);
-    console.log('🚀 getNewClaimEvents: Parameters - limit:', limit, 'claimSearchDepth:', claimSearchDepth, 'networkKey:', networkKey);
+    console.log('🚀 getNewClaimEvents: Using unified block fetcher for contract:', contract.address);
+    console.log('🚀 getNewClaimEvents: Parameters - limit:', limit, 'networkKey:', networkKey);
     
-    // Get the last claim number to determine the range
-    const lastClaimNum = await contract.last_claim_num();
-    const startClaim = Math.max(1, lastClaimNum.toNumber() - limit + 1);
-    const endClaim = lastClaimNum.toNumber();
-    
-    console.log('🚀 getNewClaimEvents: Checking NewClaim events from', startClaim, 'to', endClaim, 'lastClaimNum:', lastClaimNum.toString());
-    
-    // Get current block number to limit the query range
-    const provider = contract.provider;
-    const currentBlock = await provider.getBlockNumber();
-    
-    // Query events using the Claim Search Depth setting for consistency
-    // Calculate block range based on time and network block time
-    let fromBlock;
-    if (networkKey && NETWORKS[networkKey]) {
-      const blockTime = NETWORKS[networkKey].blockTime || 12; // seconds per block
-      const blocksPerHour = 3600 / blockTime;
-      const maxBlocks = Math.floor(claimSearchDepth * blocksPerHour);
-      fromBlock = Math.max(0, currentBlock - maxBlocks);
-      console.log(`🚀 getNewClaimEvents: Using Claim Search Depth (${claimSearchDepth}h) = ${maxBlocks} blocks for ${networkKey}`);
-    } else {
-      // Fallback to a reasonable default if network info is not available
-      const defaultBlockTime = 12; // seconds per block
-      const blocksPerHour = 3600 / defaultBlockTime;
-      const maxBlocks = Math.floor(claimSearchDepth * blocksPerHour);
-      fromBlock = Math.max(0, currentBlock - maxBlocks);
-      console.log(`🚀 getNewClaimEvents: Using default block time (12s) for Claim Search Depth (${claimSearchDepth}h) = ${maxBlocks} blocks`);
+    if (!networkKey) {
+      console.error('❌ getNewClaimEvents: networkKey is required for unified fetcher');
+      return [];
     }
     
-    console.log('🚀 getNewClaimEvents: Querying events from block', fromBlock, 'to', currentBlock);
+    // Import unified fetcher
+    const { getNewClaimBlockNumbersUnified } = await import('./unified-block-fetcher.js');
     
-    try {
-      // Try to get recent NewClaim events with block range limit
-      const allEvents = await contract.queryFilter(
-        contract.filters.NewClaim(),
-        fromBlock,
-        currentBlock
-      );
-      
-      console.log('🚀 getNewClaimEvents: Found', allEvents.length, 'NewClaim events in recent blocks');
-      
-      // If we found events, process and return them
-      if (allEvents.length > 0) {
-        // Sort by claim number and return the most recent ones
-        const sortedEvents = allEvents.sort((a, b) => a.args.claim_num.toNumber() - b.args.claim_num.toNumber());
-        const recentEvents = sortedEvents.slice(-limit);
-        
-        const events = [];
-        for (const event of recentEvents) {
-          const claimNum = event.args.claim_num.toNumber();
-          const eventData = {
-            claim_num: claimNum,
-            author_address: event.args.author_address,
-            sender_address: event.args.sender_address,
-            recipient_address: event.args.recipient_address,
-            txid: event.args.txid,
-            txts: event.args.txts,
-            amount: event.args.amount,
-            reward: event.args.reward,
-            stake: event.args.stake,
-            data: event.args.data,
-            expiry_ts: event.args.expiry_ts,
-            blockNumber: event.blockNumber,
-            transactionHash: event.transactionHash,
-            logIndex: event.logIndex
-          };
-          events.push(eventData);
-          console.log('🔍 getNewClaimEvents: Found NewClaim event for claim', claimNum, 'with txid:', eventData.txid);
-        }
-        
-        console.log('🚀 getNewClaimEvents: Returning', events.length, 'most recent events');
-        return events;
-      }
-      
-    } catch (recentError) {
-      console.log('🔍 getNewClaimEvents: Recent events query failed:', recentError.message);
-    }
+    // Get block numbers where NewClaim events occurred
+    const result = await getNewClaimBlockNumbersUnified(networkKey, contract.address, {
+      limit: limit
+    });
     
-    // Fallback: try to get events for each claim individually with a much larger block range
-    console.log('🔍 getNewClaimEvents: Trying fallback method with larger block range...');
+    console.log('🚀 getNewClaimEvents: Found', result.eventCount, 'NewClaim events in', result.blockNumbers.length, 'blocks');
     
-    const events = [];
-    for (let claimNum = startClaim; claimNum <= endClaim; claimNum++) {
-      try {
-        const filter = contract.filters.NewClaim(claimNum);
-        // Use a much larger block range for individual queries (5x the normal range)
-        let fallbackFromBlock;
-        if (networkKey && NETWORKS[networkKey]) {
-          const blockTime = NETWORKS[networkKey].blockTime || 12;
-          const blocksPerHour = 3600 / blockTime;
-          const maxBlocks = Math.floor(claimSearchDepth * blocksPerHour * 5); // 5x larger for fallback
-          fallbackFromBlock = Math.max(0, currentBlock - maxBlocks);
-        } else {
-          const defaultBlockTime = 12;
-          const blocksPerHour = 3600 / defaultBlockTime;
-          const maxBlocks = Math.floor(claimSearchDepth * blocksPerHour * 5); // 5x larger for fallback
-          fallbackFromBlock = Math.max(0, currentBlock - maxBlocks);
-        }
-        const claimEvents = await Promise.race([
-          contract.queryFilter(filter, fallbackFromBlock, currentBlock),
-          new Promise((_, reject) => setTimeout(() => reject(new Error('Individual query timeout')), 10000))
-        ]);
-        
-        for (const event of claimEvents) {
-          const eventData = {
-            claim_num: claimNum,
-            author_address: event.args.author_address,
-            sender_address: event.args.sender_address,
-            recipient_address: event.args.recipient_address,
-            txid: event.args.txid,
-            txts: event.args.txts,
-            amount: event.args.amount,
-            reward: event.args.reward,
-            stake: event.args.stake,
-            data: event.args.data,
-            expiry_ts: event.args.expiry_ts,
-            blockNumber: event.blockNumber,
-            transactionHash: event.transactionHash,
-            logIndex: event.logIndex
-          };
-          events.push(eventData);
-          console.log('🔍 getNewClaimEvents: Found NewClaim event for claim', claimNum, 'with txid:', eventData.txid);
-        }
-      } catch (individualError) {
-        console.log(`🔍 getNewClaimEvents: Failed to get event for claim ${claimNum}:`, individualError.message);
-        // Continue with next claim
-      }
-    }
+    // Fetch actual event details from provider using block numbers from unified fetcher
+    const events = await fetchClaimEventsFromProviderBlocks(
+      contract.provider,
+      contract.address,
+      result.events.slice(0, limit)
+    );
     
-    console.log('🚀 getNewClaimEvents: Total NewClaim events found via fallback:', events.length);
+    console.log('🚀 getNewClaimEvents: Returning', events.length, 'events with actual data from provider');
     return events;
+    
   } catch (error) {
-    console.error('❌ Error getting NewClaim events:', error);
+    console.error('❌ Error getting NewClaim events with unified fetcher:', error);
     return [];
-  } finally {
-    console.log('🚀 getNewClaimEvents: FUNCTION COMPLETED');
+  }
+};
+
+/**
+ * Fetch NewClaim event details from provider using block numbers from unified fetcher
+ * @param {ethers.providers.Provider} provider - Network provider
+ * @param {string} bridgeAddress - Bridge contract address
+ * @param {Array} eventBlocks - Array of event block info from unified fetcher
+ * @returns {Promise<Array>} Array of decoded NewClaim events
+ */
+const fetchClaimEventsFromProviderBlocks = async (provider, bridgeAddress, eventBlocks) => {
+  try {
+    console.log(`🔍 fetchClaimEventsFromProviderBlocks: Processing ${eventBlocks.length} NewClaim events for ${bridgeAddress}`);
+    
+    // Use COUNTERSTAKE_ABI for NewClaim events
+    const contract = new ethers.Contract(bridgeAddress, COUNTERSTAKE_ABI, provider);
+    
+    const allEvents = [];
+    
+    // Group events by block number to minimize provider calls
+    const eventsByBlock = {};
+    eventBlocks.forEach(event => {
+      if (!eventsByBlock[event.blockNumber]) {
+        eventsByBlock[event.blockNumber] = [];
+      }
+      eventsByBlock[event.blockNumber].push(event);
+    });
+    
+    console.log(`🔍 Querying ${Object.keys(eventsByBlock).length} blocks for NewClaim events`);
+    
+    for (const [blockNumber] of Object.entries(eventsByBlock)) {
+      try {
+        console.log(`🔍 Querying for NewClaim events in block ${blockNumber}`);
+        
+        // Check if block number is valid
+        const blockNum = parseInt(blockNumber);
+        if (isNaN(blockNum) || blockNum <= 0) {
+          console.warn(`⚠️ Invalid block number: ${blockNumber}, skipping...`);
+          continue;
+        }
+        
+        // Get current block to check if we're querying future blocks
+        const currentBlock = await provider.getBlockNumber();
+        if (blockNum > currentBlock) {
+          console.warn(`⚠️ Block ${blockNumber} is in the future (current: ${currentBlock}), skipping...`);
+          continue;
+        }
+        
+        const filter = contract.filters.NewClaim();
+        
+        // Convert block number to hex string for queryFilter
+        const blockNumberHex = `0x${blockNum.toString(16)}`;
+        console.log(`🔍 Using block number hex: ${blockNumberHex} for block ${blockNumber} (current: ${currentBlock})`);
+        
+        const events = await contract.queryFilter(filter, blockNumberHex, blockNumberHex);
+        
+        console.log(`🔍 Found ${events.length} NewClaim events in block ${blockNumber}`);
+        
+        for (const event of events) {
+          const decodedEvent = {
+            claim_num: event.args.claim_num,
+            author_address: event.args.author_address,
+            sender_address: event.args.sender_address,
+            recipient_address: event.args.recipient_address,
+            txid: event.args.txid,
+            txts: event.args.txts,
+            amount: event.args.amount,
+            reward: event.args.reward,
+            stake: event.args.stake,
+            data: event.args.data,
+            expiry_ts: event.args.expiry_ts,
+            blockNumber: event.blockNumber,
+            transactionHash: event.transactionHash,
+            logIndex: event.logIndex
+          };
+          allEvents.push(decodedEvent);
+        }
+      } catch (blockError) {
+        console.warn(`⚠️ Error fetching NewClaim events from block ${blockNumber}:`, blockError.message);
+      }
+    }
+    
+    console.log(`🔍 fetchClaimEventsFromProviderBlocks: Returning ${allEvents.length} decoded NewClaim events`);
+    return allEvents;
+    
+  } catch (error) {
+    console.error(`❌ Error in fetchClaimEventsFromProviderBlocks:`, error);
+    return [];
   }
 };
 
@@ -757,7 +738,7 @@ export const getNewClaimEvents = async (contract, limit = 100, claimSearchDepth 
  * @param {number} limit - Maximum number of claims to fetch (default: 100)
  * @returns {Promise<Array>} Array of claim details
  */
-export const getAllClaims = async (contract, limit = 100, rpcUrl, claimSearchDepth = 1, networkKey = null) => {
+export const getAllClaims = async (contract, limit = 100, rpcUrl, networkKey = null) => {
   try {
     console.log('🔍 getAllClaims: Getting last_claim_num from contract:', contract.address);
     
@@ -771,8 +752,8 @@ export const getAllClaims = async (contract, limit = 100, rpcUrl, claimSearchDep
     console.log('🔍 getAllClaims: last_claim_num result:', lastClaimNum.toString());
     
     // Get NewClaim events to extract txid information
-    console.log('🚀 getAllClaims: About to call getNewClaimEvents with parameters:', { limit, claimSearchDepth, networkKey });
-    const newClaimEvents = await getNewClaimEvents(contract, limit, claimSearchDepth, networkKey);
+    console.log('🚀 getAllClaims: About to call getNewClaimEvents with parameters:', { limit, networkKey });
+    const newClaimEvents = await getNewClaimEvents(contract, limit, networkKey);
     console.log('🚀 getAllClaims: getNewClaimEvents returned', newClaimEvents.length, 'events');
     console.log('🔍 getAllClaims: Got NewClaim events:', newClaimEvents.length);
     console.log('🔍 getAllClaims: NewClaim events details:', newClaimEvents.map(event => ({
@@ -865,9 +846,9 @@ export const getAllClaims = async (contract, limit = 100, rpcUrl, claimSearchDep
  * @param {number} limit - Maximum number of claims to fetch (default: 100)
  * @returns {Promise<Array>} Array of claim details for the recipient
  */
-export const getClaimsForRecipient = async (contract, recipientAddress, limit = 100, rpcUrl, claimSearchDepth = 1, networkKey = null) => {
+export const getClaimsForRecipient = async (contract, recipientAddress, limit = 100, rpcUrl, networkKey = null) => {
   try {
-    const allClaims = await getAllClaims(contract, limit, rpcUrl, claimSearchDepth, networkKey);
+    const allClaims = await getAllClaims(contract, limit, rpcUrl, networkKey);
     return allClaims.filter(claim => 
       claim.recipient_address.toLowerCase() === recipientAddress.toLowerCase()
     );
