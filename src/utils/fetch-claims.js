@@ -1,10 +1,11 @@
 import { ethers } from 'ethers';
 import { NETWORKS } from '../config/networks';
-import { 
-  getAllClaims, 
-  createCounterstakeContract 
+import {
+  getAllClaims,
+  createCounterstakeContract
 } from './bridge-contracts';
 import { estimateClaimsFromTimeframe } from './claim-estimator';
+import { getBridgesForNetwork } from './bridge-filter';
 
 /**
  * Fetch claims from all networks and bridges
@@ -46,49 +47,11 @@ export const fetchClaimsFromAllNetworks = async ({
       }
       
       console.log(`🔍 Processing network: ${networkKey} (${networkConfig.name})`);
-      
-      // Get bridges for this network from network config
-      const defaultBridges = networkConfig.bridges ? Object.values(networkConfig.bridges) : [];
-      
-      // Also get import bridges that are defined at the network level (not in bridges object)
-      const importBridges = Object.entries(networkConfig)
-        .filter(([key, value]) => 
-          key !== 'bridges' && 
-          key !== 'assistants' && 
-          key !== 'tokens' && 
-          key !== 'contracts' &&
-          typeof value === 'object' && 
-          value.address && 
-          (value.type === 'import' || value.type === 'import_wrapper')
-        )
-        .map(([key, value]) => value);
-      
-      const allDefaultBridges = [...defaultBridges, ...importBridges];
-      
-      // Get custom bridges for this network
-      const customNetworkBridges = Object.values(customBridges).filter(bridge => {
-        // For export bridges: include when this network is the home network
-        if (bridge.type === 'export') {
-          return bridge.homeNetwork === networkConfig.name;
-        }
-        // For import bridges: include when this network is the foreign network
-        if (bridge.type === 'import' || bridge.type === 'import_wrapper') {
-          return bridge.foreignNetwork === networkConfig.name;
-        }
-        // For other types, use the old logic
-        return bridge.homeNetwork === networkConfig.name || bridge.foreignNetwork === networkConfig.name;
-      });
-      
-      // Combine default bridges with custom bridges, avoiding duplicates
-      const networkBridgeInstances = [...allDefaultBridges];
-      customNetworkBridges.forEach(customBridge => {
-        const exists = networkBridgeInstances.some(bridge => bridge.address === customBridge.address);
-        if (!exists) {
-          networkBridgeInstances.push(customBridge);
-        }
-      });
-      
-      console.log(`🔍 Found ${networkBridgeInstances.length} bridges for ${networkKey}:`, 
+
+      // Get bridges for this network
+      const networkBridgeInstances = getBridgesForNetwork(networkConfig, customBridges);
+
+      console.log(`🔍 Found ${networkBridgeInstances.length} bridges for ${networkKey}:`,
         networkBridgeInstances.map(b => ({ address: b.address, type: b.type }))
       );
 

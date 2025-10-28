@@ -2,12 +2,14 @@ import { ethers } from 'ethers';
 import { NETWORKS } from '../config/networks';
 import { estimateBlocksFromTimeframe, getBlockTime } from './block-estimator';
 import { getBlockTimestamp } from './bridge-contracts';
-import { 
-  getCachedEvents, 
-  setCachedEvents, 
-  getMostRecentCachedBlock, 
-  mergeEvents 
+import {
+  getCachedEvents,
+  setCachedEvents,
+  getMostRecentCachedBlock,
+  mergeEvents
 } from './event-cache';
+import { getBridgesForNetwork } from './bridge-filter';
+import { parseExpatriationEvent, parseRepatriationEvent } from './event-parser';
 
 /**
  * Efficiently fetch events from most recent blocks first using chunked search
@@ -126,54 +128,16 @@ export const fetchLastTransfers = async ({
       }
       
       console.log(`🔍 Processing network: ${networkKey} (${networkConfig.name})`);
-      
-      // Get bridges for this network from network config
-      const defaultBridges = networkConfig.bridges ? Object.values(networkConfig.bridges) : [];
-      
-      // Also get import bridges that are defined at the network level (not in bridges object)
-      const importBridges = Object.entries(networkConfig)
-        .filter(([key, value]) => 
-          key !== 'bridges' && 
-          key !== 'assistants' && 
-          key !== 'tokens' && 
-          key !== 'contracts' &&
-          typeof value === 'object' && 
-          value.address && 
-          (value.type === 'import' || value.type === 'import_wrapper')
-        )
-        .map(([key, value]) => value);
-      
-      const allDefaultBridges = [...defaultBridges, ...importBridges];
-      
-      // Get custom bridges for this network
-      const customNetworkBridges = Object.values(customBridges).filter(bridge => {
-        // For export bridges: include when this network is the home network
-        if (bridge.type === 'export') {
-          return bridge.homeNetwork === networkConfig.name;
-        }
-        // For import bridges: include when this network is the foreign network
-        if (bridge.type === 'import' || bridge.type === 'import_wrapper') {
-          return bridge.foreignNetwork === networkConfig.name;
-        }
-        // For other types, use the old logic
-        return bridge.homeNetwork === networkConfig.name || bridge.foreignNetwork === networkConfig.name;
-      });
-      
-      // Combine default bridges with custom bridges, avoiding duplicates
-      const networkBridgeInstances = [...allDefaultBridges];
-      customNetworkBridges.forEach(customBridge => {
-        const exists = networkBridgeInstances.some(bridge => bridge.address === customBridge.address);
-        if (!exists) {
-          networkBridgeInstances.push(customBridge);
-        }
-      });
-      
-      console.log(`🔍 Found ${networkBridgeInstances.length} bridges for ${networkKey}:`, 
-        networkBridgeInstances.map(b => ({ 
-          address: b.address, 
-          type: b.type, 
-          homeNetwork: b.homeNetwork, 
-          foreignNetwork: b.foreignNetwork 
+
+      // Get bridges for this network
+      const networkBridgeInstances = getBridgesForNetwork(networkConfig, customBridges);
+
+      console.log(`🔍 Found ${networkBridgeInstances.length} bridges for ${networkKey}:`,
+        networkBridgeInstances.map(b => ({
+          address: b.address,
+          type: b.type,
+          homeNetwork: b.homeNetwork,
+          foreignNetwork: b.foreignNetwork
         }))
       );
       
@@ -456,16 +420,19 @@ export const fetchLastTransfers = async ({
               rawAmountEq: event.args[1]?.eq?.(0)
             });
 
+            // Parse event args
+            const eventData = parseExpatriationEvent(event);
+
             const transferWithInfo = {
               // Event data
               eventType: 'NewExpatriation',
-                senderAddress: event.args[0] || 'Unknown', // sender_address
-                amount: event.args[1] ? (event.args[1].hex || event.args[1].toString()) : '0', // amount
-                reward: event.args[2] ? (event.args[2].hex || event.args[2].toString()) : '0', // reward
-                foreignAddress: event.args[3] || 'Unknown', // foreign_address
-                recipientAddress: event.args[3] || 'Unknown', // foreign_address (for UI compatibility)
-                data: event.args[4] || '', // data
-              
+                senderAddress: eventData.senderAddress,
+                amount: eventData.amount,
+                reward: eventData.reward,
+                foreignAddress: eventData.foreignAddress,
+                recipientAddress: eventData.foreignAddress, // for UI compatibility
+                data: eventData.data,
+
               // Event metadata
               blockNumber: event.blockNumber,
               transactionHash: event.transactionHash,
@@ -571,16 +538,19 @@ export const fetchLastTransfers = async ({
                 data_obj: event.args?.data
               });
 
+            // Parse event args
+            const eventData = parseRepatriationEvent(event);
+
             const transferWithInfo = {
               // Event data
               eventType: 'NewRepatriation',
-                senderAddress: event.args[0] || 'Unknown', // sender_address
-                amount: event.args[1] ? (event.args[1].hex || event.args[1].toString()) : '0', // amount
-                reward: event.args[2] ? (event.args[2].hex || event.args[2].toString()) : '0', // reward
-                homeAddress: event.args[3] || 'Unknown', // home_address
-                recipientAddress: event.args[3] || 'Unknown', // home_address (for UI compatibility)
-                data: event.args[4] || '', // data
-              
+                senderAddress: eventData.senderAddress,
+                amount: eventData.amount,
+                reward: eventData.reward,
+                homeAddress: eventData.homeAddress,
+                recipientAddress: eventData.homeAddress, // for UI compatibility
+                data: eventData.data,
+
               // Event metadata
               blockNumber: event.blockNumber,
               transactionHash: event.transactionHash,
