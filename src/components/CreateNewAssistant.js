@@ -15,6 +15,7 @@ import {
 import { motion, AnimatePresence } from 'framer-motion';
 import toast from 'react-hot-toast';
 import { ethers } from 'ethers';
+import { handleTransactionError } from '../utils/error-handler';
 
 const CreateNewAssistant = ({ networkKey, onClose, onAssistantCreated }) => {
   const { signer, account } = useWeb3();
@@ -358,25 +359,9 @@ const CreateNewAssistant = ({ networkKey, onClose, onAssistantCreated }) => {
       }
       
     } catch (error) {
-      console.error('Error creating assistant:', error);
-      
-      // Handle different types of errors gracefully
-      if (error.code === 'ACTION_REJECTED' || error.message?.includes('user rejected')) {
-        toast.error('Transaction was cancelled by user');
-      } else if (error.code === 'INSUFFICIENT_FUNDS') {
-        toast.error('Insufficient funds to pay for gas fees');
-      } else if (error.code === 'UNPREDICTABLE_GAS_LIMIT') {
-        toast.error('Gas estimation failed. Please try again or increase gas limit');
-      } else if (error.message?.includes('execution reverted')) {
-        // Extract revert reason if available
-        const revertReason = error.message.match(/execution reverted: (.+)/)?.[1] || 'Transaction failed';
-        toast.error(`Transaction failed: ${revertReason}`);
-      } else if (error.message?.includes('network')) {
-        toast.error('Network error. Please check your connection and try again');
-      } else {
-        // Generic error message for other cases
-        toast.error(`Failed to create assistant: ${error.message || 'Unknown error'}`);
-      }
+      handleTransactionError(error, {
+        messagePrefix: 'Failed to create assistant: '
+      });
     } finally {
       setIsCreating(false);
     }
@@ -451,25 +436,9 @@ const CreateNewAssistant = ({ networkKey, onClose, onAssistantCreated }) => {
       toast.success('Precompile approved successfully');
       
     } catch (error) {
-      console.error('Error approving precompile:', error);
-      
-      // Handle different types of errors gracefully
-      if (error.code === 'ACTION_REJECTED' || error.message?.includes('user rejected')) {
-        toast.error('Approval transaction was cancelled by user');
-      } else if (error.code === 'INSUFFICIENT_FUNDS') {
-        toast.error('Insufficient funds to pay for gas fees');
-      } else if (error.code === 'UNPREDICTABLE_GAS_LIMIT') {
-        toast.error('Gas estimation failed. Please try again or increase gas limit');
-      } else if (error.message?.includes('execution reverted')) {
-        // Extract revert reason if available
-        const revertReason = error.message.match(/execution reverted: (.+)/)?.[1] || 'Transaction failed';
-        toast.error(`Approval failed: ${revertReason}`);
-      } else if (error.message?.includes('network')) {
-        toast.error('Network error. Please check your connection and try again');
-      } else {
-        // Generic error message for other cases
-        toast.error(`Failed to approve precompile: ${error.message || 'Unknown error'}`);
-      }
+      handleTransactionError(error, {
+        messagePrefix: 'Failed to approve precompile: '
+      });
     } finally {
       setIsApproving(false);
     }

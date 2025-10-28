@@ -4,6 +4,7 @@ import { useSettings } from '../contexts/SettingsContext';
 import { ethers } from 'ethers';
 import toast from 'react-hot-toast';
 import { motion } from 'framer-motion';
+import { handleTransactionError } from '../utils/error-handler';
 
 const AssignNewManager = ({ assistant, onClose, onSuccess }) => {
   const { signer } = useWeb3();
@@ -122,46 +123,10 @@ const AssignNewManager = ({ assistant, onClose, onSuccess }) => {
         toast.error('Transaction failed', { id: 'assign-manager' });
       }
     } catch (error) {
-      console.error('Error assigning new manager:', error);
-      
-      // Handle user rejection gracefully
-      if (error.code === 'ACTION_REJECTED' || error.code === 'USER_REJECTED' || 
-          error.message?.includes('user rejected') || error.message?.includes('User denied')) {
-        toast.error('Transaction cancelled by user', { id: 'assign-manager' });
-        return; // Don't show additional error messages for user cancellation
-      }
-      
-      // Handle insufficient funds
-      if (error.code === 'INSUFFICIENT_FUNDS' || error.message?.includes('insufficient funds')) {
-        toast.error('Insufficient funds for gas fees', { id: 'assign-manager' });
-      } 
-      // Handle network issues
-      else if (error.code === 'NETWORK_ERROR' || error.message?.includes('network')) {
-        toast.error('Network error. Please check your connection and try again', { id: 'assign-manager' });
-      }
-      // Handle contract-specific errors
-      else if (error.message?.includes('zero address')) {
-        toast.error('Cannot assign zero address as manager', { id: 'assign-manager' });
-      } else if (error.message?.includes('P3D precompile cannot be manager')) {
-        toast.error('P3D precompile cannot be assigned as manager', { id: 'assign-manager' });
-      } else if (error.message?.includes('ERC20 precompile cannot be manager')) {
-        toast.error('ERC20 precompile cannot be assigned as manager', { id: 'assign-manager' });
-      } else if (error.message?.includes('onlyManager')) {
-        toast.error('Only the current manager can assign a new manager', { id: 'assign-manager' });
-      }
-      // Handle gas estimation errors
-      else if (error.message?.includes('gas') || error.code === 'UNPREDICTABLE_GAS_LIMIT') {
-        toast.error('Gas estimation failed. Please try again', { id: 'assign-manager' });
-      }
-      // Handle timeout errors
-      else if (error.message?.includes('timeout') || error.code === 'TIMEOUT') {
-        toast.error('Transaction timeout. Please try again', { id: 'assign-manager' });
-      }
-      // Generic error handling
-      else {
-        const errorMessage = error.message || error.reason || 'Unknown error occurred';
-        toast.error(`Failed to assign new manager: ${errorMessage}`, { id: 'assign-manager' });
-      }
+      handleTransactionError(error, {
+        messagePrefix: 'Failed to assign new manager: ',
+        toastOptions: { id: 'assign-manager' }
+      });
     } finally {
       setLoading(false);
     }

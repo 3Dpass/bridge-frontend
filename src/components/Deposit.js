@@ -3,14 +3,15 @@ import { useWeb3 } from '../contexts/Web3Context';
 import { useSettings } from '../contexts/SettingsContext';
 import { ethers } from 'ethers';
 import toast from 'react-hot-toast';
-import { 
-  EXPORT_ASSISTANT_ABI, 
-  EXPORT_WRAPPER_ASSISTANT_ABI, 
-  IMPORT_ASSISTANT_ABI, 
+import {
+  EXPORT_ASSISTANT_ABI,
+  EXPORT_WRAPPER_ASSISTANT_ABI,
+  IMPORT_ASSISTANT_ABI,
   IMPORT_WRAPPER_ASSISTANT_ABI,
   BATCH_ABI,
   IPRECOMPILE_ERC20_ABI
 } from '../contracts/abi';
+import { handleTransactionError } from '../utils/error-handler';
 
 const Deposit = ({ assistant, onClose, onSuccess }) => {
   console.log('🎯 Deposit component rendered for assistant:', assistant.address);
@@ -799,25 +800,9 @@ const Deposit = ({ assistant, onClose, onSuccess }) => {
       }
       
     } catch (error) {
-      console.error('Batch approval error:', error);
-      
-      if (error.code === 'ACTION_REJECTED') {
-        toast.error('Transaction was rejected by user');
-      } else if (error.code === 'INSUFFICIENT_FUNDS') {
-        toast.error('Insufficient funds for gas');
-      } else if (error.message?.includes('gas')) {
-        toast.error('Gas estimation failed. Please try again.');
-      } else if (error.message?.includes('revert')) {
-        toast.error('Transaction failed. Please check your inputs.');
-      } else if (error.code === 'NETWORK_ERROR') {
-        toast.error('Network error. Please check your connection.');
-      } else if (error.code === 'NONCE_EXPIRED') {
-        toast.error('Transaction nonce expired. Please try again.');
-      } else if (error.message?.includes('timeout')) {
-        toast.error('Transaction timeout. Please try again.');
-      } else {
-        toast.error(`Batch approval failed: ${error.message || 'Unknown error'}`);
-      }
+      handleTransactionError(error, {
+        messagePrefix: 'Failed to approve tokens: '
+      });
     } finally {
       setLoading(false);
     }
@@ -938,7 +923,7 @@ const Deposit = ({ assistant, onClose, onSuccess }) => {
       } else if (error.message?.includes('timeout')) {
         toast.error('Transaction timeout. Please try again.');
       } else {
-        toast.error(`Batch revoke failed: ${error.message || 'Unknown error'}`);
+        toast.error(`Failed to revoke allowances: ${error.message || 'Unknown error'}`);
       }
     } finally {
       setIsRevoking(false);
@@ -993,29 +978,9 @@ const Deposit = ({ assistant, onClose, onSuccess }) => {
       toast.success('Allowance revoked successfully!');
       
     } catch (error) {
-      console.error('❌ Revoke failed:', error);
-      
-      // Handle different types of errors gracefully
-      if (error.code === 'ACTION_REJECTED' || error.message?.includes('User denied')) {
-        toast.error('Transaction was cancelled by user');
-      } else if (error.code === 'INSUFFICIENT_FUNDS') {
-        toast.error('Insufficient funds for transaction');
-      } else if (error.message?.includes('gas')) {
-        toast.error('Transaction failed due to gas issues. Please try again.');
-      } else if (error.message?.includes('revert')) {
-        toast.error('Transaction failed. Please check your inputs and try again.');
-      } else if (error.message?.includes('network')) {
-        toast.error('Network error. Please check your connection and try again.');
-      } else if (error.message?.includes('execution reverted')) {
-        toast.error('Transaction reverted. Please check your inputs and try again.');
-      } else if (error.message?.includes('nonce')) {
-        toast.error('Transaction nonce error. Please try again.');
-      } else if (error.message?.includes('timeout')) {
-        toast.error('Transaction timeout. Please try again.');
-      } else {
-        const errorMessage = error.reason || error.message || 'Revoke failed';
-        toast.error(errorMessage);
-      }
+      handleTransactionError(error, {
+        messagePrefix: 'Failed to revoke allowance: '
+      });
     } finally {
       setIsRevoking(false);
     }
@@ -1182,29 +1147,9 @@ const Deposit = ({ assistant, onClose, onSuccess }) => {
       toast.success('Approval successful!');
       
     } catch (error) {
-      console.error('❌ Approval failed:', error);
-      
-      // Handle different types of errors gracefully
-      if (error.code === 'ACTION_REJECTED' || error.message?.includes('User denied')) {
-        toast.error('Transaction was cancelled by user');
-      } else if (error.code === 'INSUFFICIENT_FUNDS') {
-        toast.error('Insufficient funds for transaction');
-      } else if (error.message?.includes('gas')) {
-        toast.error('Transaction failed due to gas issues. Please try again.');
-      } else if (error.message?.includes('revert')) {
-        toast.error('Transaction failed. Please check your inputs and try again.');
-      } else if (error.message?.includes('network')) {
-        toast.error('Network error. Please check your connection and try again.');
-      } else if (error.message?.includes('execution reverted')) {
-        toast.error('Transaction reverted. Please check your inputs and try again.');
-      } else if (error.message?.includes('nonce')) {
-        toast.error('Transaction nonce error. Please try again.');
-      } else if (error.message?.includes('timeout')) {
-        toast.error('Transaction timeout. Please try again.');
-      } else {
-        const errorMessage = error.reason || error.message || 'Approval failed';
-        toast.error(errorMessage);
-      }
+      handleTransactionError(error, {
+        messagePrefix: 'Failed to approve: '
+      });
     } finally {
       setLoading(false);
     }
@@ -1981,30 +1926,9 @@ const Deposit = ({ assistant, onClose, onSuccess }) => {
       setStep('success');
       onSuccess();
     } catch (error) {
-      console.error('Deposit error:', error);
-      
-      // Handle different types of errors gracefully
-      if (error.code === 'ACTION_REJECTED' || error.message?.includes('User denied')) {
-        toast.error('Transaction was cancelled by user');
-      } else if (error.code === 'INSUFFICIENT_FUNDS') {
-        toast.error('Insufficient funds for transaction');
-      } else if (error.message?.includes('gas')) {
-        toast.error('Transaction failed due to gas issues. Please try again.');
-      } else if (error.message?.includes('revert')) {
-        toast.error('Transaction failed. Please check your inputs and try again.');
-      } else if (error.message?.includes('network')) {
-        toast.error('Network error. Please check your connection and try again.');
-      } else if (error.message?.includes('execution reverted')) {
-        toast.error('Transaction reverted. Please check your inputs and try again.');
-      } else if (error.message?.includes('nonce')) {
-        toast.error('Transaction nonce error. Please try again.');
-      } else if (error.message?.includes('timeout')) {
-        toast.error('Transaction timeout. Please try again.');
-      } else {
-        // Extract meaningful error message if available
-        const errorMessage = error.reason || error.message || 'Deposit failed';
-        toast.error(errorMessage);
-      }
+      handleTransactionError(error, {
+        messagePrefix: 'Failed to deposit: '
+      });
     } finally {
       setLoading(false);
     }
