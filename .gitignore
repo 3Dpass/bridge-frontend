@@ -5,6 +5,12 @@ yarn-debug.log*
 yarn-error.log*
 pnpm-debug.log*
 
+# pnpm store
+.pnpm-store/
+
+# Claude Code
+.claude/
+
 # Production builds
 /build
 /dist
