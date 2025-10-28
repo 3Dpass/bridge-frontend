@@ -3,6 +3,7 @@ import { useWeb3 } from '../contexts/Web3Context';
 import { ethers } from 'ethers';
 import toast from 'react-hot-toast';
 import { IMPORT_ASSISTANT_ABI, IMPORT_WRAPPER_ASSISTANT_ABI, EXPORT_ASSISTANT_ABI } from '../contracts/abi';
+import { handleTransactionError } from '../utils/error-handler';
 
 const WithdrawSuccessFee = ({ assistant, onClose, onSuccess }) => {
   const { provider, signer } = useWeb3();
@@ -145,34 +146,9 @@ const WithdrawSuccessFee = ({ assistant, onClose, onSuccess }) => {
       
       onClose();
     } catch (error) {
-      console.error('Error withdrawing success fee:', error);
-      
-      if (error.code === 4001 || error.code === 'ACTION_REJECTED') {
-        toast.error('Transaction rejected by user');
-      } else if (error.message?.includes('insufficient funds') || error.message?.includes('insufficient balance')) {
-        toast.error('Insufficient funds for gas');
-      } else if (error.message?.includes('onlyManager') || error.message?.includes('not manager')) {
-        toast.error('Only the manager can withdraw success fees');
-      } else if (error.message?.includes('no profit yet') || error.message?.includes('no profit')) {
-        toast.error('No profit available to withdraw yet');
-      } else if (error.message?.includes('network') || error.message?.includes('connection')) {
-        toast.error('Network error. Please check your connection and try again');
-      } else if (error.message?.includes('gas')) {
-        toast.error('Gas estimation failed. Please try again');
-      } else {
-        // Extract a more user-friendly error message
-        let errorMessage = 'Failed to withdraw success fee';
-        if (error.message) {
-          if (error.message.includes('user rejected')) {
-            errorMessage = 'Transaction rejected by user';
-          } else if (error.message.includes('execution reverted')) {
-            errorMessage = 'Transaction failed. Please check if you are the manager and try again';
-          } else {
-            errorMessage = `Failed to withdraw success fee: ${error.message}`;
-          }
-        }
-        toast.error(errorMessage);
-      }
+      handleTransactionError(error, {
+        messagePrefix: 'Failed to withdraw success fee: '
+      });
     } finally {
       setLoading(false);
     }

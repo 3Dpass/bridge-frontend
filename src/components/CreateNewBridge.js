@@ -16,6 +16,7 @@ import {
 import { motion, AnimatePresence } from 'framer-motion';
 import toast from 'react-hot-toast';
 import { ethers } from 'ethers';
+import { handleTransactionError } from '../utils/error-handler';
 
 // Constants
 const DEFAULT_COUNTERSTAKE_COEF = '160'; // 1.6%
@@ -673,61 +674,10 @@ const CreateNewBridge = ({ networkKey, onClose, onBridgeCreated }) => {
       }
       
     } catch (error) {
-      console.error('Error creating bridge:', error);
-      
-      // Dismiss any loading toasts first
       toast.dismiss();
-      
-      // Handle different types of errors gracefully
-      if (error.code === 4001 || 
-          error.code === 'ACTION_REJECTED' || 
-          error.message?.includes('User denied transaction') ||
-          error.message?.includes('user rejected transaction') ||
-          error.message?.includes('User rejected')) {
-        // User cancelled the transaction in MetaMask
-        toast.error('Transaction cancelled by user');
-      } else if (error.code === -32603 || 
-                 error.message?.includes('insufficient funds') ||
-                 error.message?.includes('insufficient balance')) {
-        // Insufficient funds
-        toast.error('Insufficient funds for transaction. Please check your wallet balance.');
-      } else if (error.message?.includes('gas') || 
-                 error.message?.includes('Gas') ||
-                 error.code === -32000) {
-        // Gas related errors
-        toast.error('Transaction failed due to gas issues. Please try again or increase gas limit.');
-      } else if (error.message?.includes('revert') || 
-                 error.message?.includes('execution reverted')) {
-        // Contract revert - provide more specific error messages
-        if (error.message?.includes('bad oracle') || error.message?.includes('no price from oracle')) {
-          toast.error('Oracle validation failed. Please ensure the oracle has price data for the required token pairs.');
-        } else if (error.message?.includes('bad stake token') || error.message?.includes('symbol')) {
-          toast.error('Stake token validation failed. Please select a different stake token that implements the symbol() function properly.');
-        } else {
-          toast.error('Transaction failed. Please check your inputs and try again.');
-        }
-      } else if (error.message?.includes('network') || 
-                 error.message?.includes('Network')) {
-        // Network related errors
-        toast.error('Network error. Please check your connection and try again.');
-      } else if (error.message?.includes('timeout') || 
-                 error.message?.includes('Timeout')) {
-        // Timeout errors
-        toast.error('Transaction timed out. Please try again.');
-      } else if (error.message?.includes('nonce')) {
-        // Nonce errors
-        toast.error('Transaction nonce error. Please try again.');
-      } else {
-        // Generic error - show a more user-friendly message
-        const errorMessage = error.message || 'Unknown error occurred';
-        console.error('Unhandled error details:', {
-          code: error.code,
-          message: error.message,
-          reason: error.reason,
-          action: error.action
-        });
-        toast.error(`Failed to create bridge: ${errorMessage}`);
-      }
+      handleTransactionError(error, {
+        messagePrefix: 'Failed to create bridge: '
+      });
     } finally {
       setIsCreating(false);
     }

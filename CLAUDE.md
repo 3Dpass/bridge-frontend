@@ -24,8 +24,17 @@ pnpm lint:fix        # Auto-fix ESLint issues
 
 ### Testing Individual Files
 ```bash
-pnpm test -- src/utils/__tests__/retry-with-fallback.test.js
+# Run tests in non-interactive mode (CI/automated)
+pnpm test -- --no-watch --passWithNoTests --watchAll=false
+
+# Run specific test file in non-interactive mode
+pnpm test -- --no-watch --passWithNoTests --watchAll=false src/utils/__tests__/retry-with-fallback.test.js
+
+# Run tests by pattern
 pnpm test -- --testNamePattern="test name pattern"
+
+# Watch mode (interactive)
+pnpm test -- src/utils/__tests__/retry-with-fallback.test.js
 ```
 
 ## Architecture Overview

@@ -14,6 +14,7 @@ import {
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import toast from 'react-hot-toast';
+import { handleTransactionError } from '../utils/error-handler';
 
 // Get maximum allowance value (2^256 - 1)
 const getMaxAllowance = () => {
@@ -571,23 +572,9 @@ const Challenge = ({ claim, onChallengeSuccess, onClose }) => {
       
       onClose();
     } catch (error) {
-      console.error('Error challenging claim:', error);
-      
-      // Handle different types of errors gracefully
-      if (error.code === 'ACTION_REJECTED' || error.message?.includes('user rejected')) {
-        toast.error('Transaction was cancelled by user');
-      } else if (error.code === 'INSUFFICIENT_FUNDS') {
-        toast.error('Insufficient funds for transaction');
-      } else if (error.code === 'NETWORK_ERROR' || error.message?.includes('network')) {
-        toast.error('Network error. Please check your connection');
-      } else if (error.message?.includes('gas')) {
-        toast.error('Transaction failed due to gas issues');
-      } else if (error.message?.includes('revert')) {
-        toast.error('Transaction was reverted by the contract');
-      } else {
-        // For other errors, show a generic message but log the full error
-        toast.error('Transaction failed. Please try again');
-      }
+      handleTransactionError(error, {
+        messagePrefix: 'Failed to challenge: '
+      });
     } finally {
       setLoading(false);
     }
@@ -657,21 +644,9 @@ const Challenge = ({ claim, onChallengeSuccess, onClose }) => {
         }
       );
     } catch (error) {
-      console.error('❌ Error revoking allowance:', error);
-      
-      if (error.code === 'ACTION_REJECTED' || error.message?.includes('user rejected')) {
-        toast.error('Transaction was cancelled by user');
-      } else if (error.code === 'INSUFFICIENT_FUNDS') {
-        toast.error('Insufficient funds for transaction');
-      } else if (error.code === 'NETWORK_ERROR' || error.message?.includes('network')) {
-        toast.error('Network error. Please check your connection');
-      } else if (error.message?.includes('gas')) {
-        toast.error('Transaction failed due to gas issues');
-      } else if (error.message?.includes('revert')) {
-        toast.error('Transaction was reverted by the contract');
-      } else {
-        toast.error('Transaction failed. Please try again');
-      }
+      handleTransactionError(error, {
+        messagePrefix: 'Failed to revoke allowance: '
+      });
     } finally {
       setIsRevoking(false);
     }
