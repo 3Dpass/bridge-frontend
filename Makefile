@@ -2,7 +2,7 @@
 
 # Run all tests once (CI mode)
 test:
-	pnpm test -- --watch=false
+	pnpm test -- --no-watch --passWithNoTests --watchAll=false
 
 # Run tests in watch mode (interactive development)
 test-watch:
@@ -10,7 +10,7 @@ test-watch:
 
 # Run tests with coverage report
 test-coverage:
-	pnpm test -- --coverage --watch=false
+	pnpm test -- --coverage --no-watch --passWithNoTests --watchAll=false
 
 # Run a specific test file
 # Usage: make test-file FILE=src/utils/__tests__/retry-with-fallback.test.js
@@ -20,7 +20,7 @@ test-file:
 		echo "Usage: make test-file FILE=src/utils/__tests__/retry-with-fallback.test.js"; \
 		exit 1; \
 	fi
-	pnpm test -- --watch=false --testPathPattern="$(FILE)"
+	pnpm test -- --no-watch --passWithNoTests --watchAll=false --testPathPattern="$(FILE)"
 
 # Run ESLint
 lint:
