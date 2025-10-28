@@ -373,7 +373,7 @@ class ProviderManager {
   }
 }
 
-// Export class for testing
+// Export the class for testing
 export { ProviderManager };
 
 // Create singleton instance
