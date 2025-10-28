@@ -5,6 +5,12 @@ yarn-debug.log*
 yarn-error.log*
 pnpm-debug.log*
 
+# pnpm store
+.pnpm-store/
+
+# Claude Code
+.claude/
+
 # Production builds
 /build
 /dist
@@ -54,6 +60,9 @@ jspm_packages/
 
 # Optional npm cache directory
 .npm
+
+# npm lock file (use pnpm-lock.yaml instead)
+package-lock.json
 
 # Optional eslint cache
 .eslintcache

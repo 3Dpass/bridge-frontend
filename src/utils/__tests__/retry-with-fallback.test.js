@@ -97,7 +97,19 @@ describe('Retry with Fallback', () => {
   });
 
   describe('ProviderHealthMonitor', () => {
-    it('should track provider health correctly', () => {
+    it('should track provider health correctly for rate limiting', () => {
+      const monitor = new ProviderHealthMonitor();
+
+      // Record some requests
+      monitor.recordRequest('ETHEREUM', null, true, 100);
+      monitor.recordRequest('ETHEREUM', null, true, 200);
+      monitor.recordRequest('ETHEREUM', null, false, 300, new Error('429'));
+
+      const health = monitor.getProviderHealth('ETHEREUM');
+      expect(health).toBe('rate_limited'); // 1/3 rate limit ratio (33%) exceeds 30% threshold
+    });
+
+    it('should track provider health correctly for degraded state', () => {
       const monitor = new ProviderHealthMonitor();
 
       // Record some requests

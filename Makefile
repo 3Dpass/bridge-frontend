@@ -2,15 +2,15 @@
 
 # Run all tests once (CI mode)
 test:
-	CI=1 npm test -- --watch=false
+	pnpm test -- --watch=false
 
 # Run tests in watch mode (interactive development)
 test-watch:
-	npm test
+	pnpm test
 
 # Run tests with coverage report
 test-coverage:
-	CI=1 npm test -- --coverage --watch=false
+	pnpm test -- --coverage --watch=false
 
 # Run a specific test file
 # Usage: make test-file FILE=src/utils/__tests__/retry-with-fallback.test.js
@@ -20,15 +20,15 @@ test-file:
 		echo "Usage: make test-file FILE=src/utils/__tests__/retry-with-fallback.test.js"; \
 		exit 1; \
 	fi
-	CI=1 npm test -- --watch=false --testPathPattern="$(FILE)"
+	pnpm test -- --watch=false --testPathPattern="$(FILE)"
 
 # Run ESLint
 lint:
-	npm run lint
+	pnpm lint
 
 # Auto-fix ESLint issues
 lint-fix:
-	npm run lint:fix
+	pnpm lint:fix
 
 # Show available commands
 help:

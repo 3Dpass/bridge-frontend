@@ -7,6 +7,7 @@ import toast from 'react-hot-toast';
 import { parseAndValidateReward } from '../utils/safe-reward-handler';
 import { addTransferEventToStorage } from './ClaimList';
 import { getBlockTimestamp } from '../utils/bridge-contracts';
+import { parseTransactionError } from '../utils/error-parser';
 
 // Safely convert to EIP-55 checksum if it's an EVM address
 const toChecksumAddress = (address) => {
@@ -28,85 +29,6 @@ const Repatriation = ({
   const [step, setStep] = useState('confirm'); // 'confirm', 'transfer', 'success'
   const [isLoading, setIsLoading] = useState(false);
   const [transferTxHash, setTransferTxHash] = useState('');
-
-  // Helper function to parse and categorize errors
-  const parseError = (error) => {
-    const errorMessage = error.message || error.toString();
-    
-    // User rejection/cancellation
-    if (errorMessage.includes('user rejected') || 
-        errorMessage.includes('ACTION_REJECTED') ||
-        errorMessage.includes('User denied') ||
-        errorMessage.includes('cancelled') ||
-        error.code === 'ACTION_REJECTED') {
-      return {
-        type: 'user_rejection',
-        title: 'Transaction Cancelled',
-        message: 'You cancelled the transaction. No changes were made.',
-        canRetry: true,
-        isUserError: true
-      };
-    }
-    
-    // Insufficient funds
-    if (errorMessage.includes('insufficient funds') || 
-        errorMessage.includes('insufficient balance')) {
-      return {
-        type: 'insufficient_funds',
-        title: 'Insufficient Funds',
-        message: 'You don\'t have enough tokens or ETH to complete this transaction.',
-        canRetry: false,
-        isUserError: true
-      };
-    }
-    
-    // Gas estimation failed
-    if (errorMessage.includes('gas required exceeds allowance') ||
-        errorMessage.includes('gas estimation failed')) {
-      return {
-        type: 'gas_error',
-        title: 'Gas Estimation Failed',
-        message: 'The transaction requires more gas than available. Try increasing gas limit.',
-        canRetry: true,
-        isUserError: false
-      };
-    }
-    
-    // Network issues
-    if (errorMessage.includes('network') || 
-        errorMessage.includes('timeout') ||
-        errorMessage.includes('connection')) {
-      return {
-        type: 'network_error',
-        title: 'Network Error',
-        message: 'There was a network issue. Please check your connection and try again.',
-        canRetry: true,
-        isUserError: false
-      };
-    }
-    
-    // Contract/transaction errors
-    if (errorMessage.includes('execution reverted') ||
-        errorMessage.includes('revert')) {
-      return {
-        type: 'contract_error',
-        title: 'Transaction Failed',
-        message: 'The transaction was rejected by the smart contract. Please check your inputs.',
-        canRetry: true,
-        isUserError: false
-      };
-    }
-    
-    // Default error
-    return {
-      type: 'unknown',
-      title: 'Operation Failed',
-      message: errorMessage,
-      canRetry: true,
-      isUserError: false
-    };
-  };
-
 
   // Create import wrapper contract for repatriation
   const createImportWrapperContract = useCallback(async () => {
@@ -315,7 +237,7 @@ const Repatriation = ({
       
     } catch (error) {
       console.error('❌ Repatriation failed:', error);
-      const errorInfo = parseError(error);
+      const errorInfo = parseTransactionError(error);
       setStep('confirm');
       
       // Show toast notification
