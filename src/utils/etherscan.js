@@ -78,7 +78,7 @@ async function makeApiRequest(baseUrl, params) {
  * @param {number} fromBlock - Start block (optional)
  * @param {number} toBlock - End block (optional)
  * @param {number} page - Page number (default: 1)
- * @param {number} offset - Results per page (default: 1000, max: 10000)
+ * @param {number} offset - Results per page (default: 10000, max: 10000)
  * @returns {Promise<Array>} Array of event logs
  */
 async function getEventLogs(networkKey, address, options = {}) {
@@ -87,7 +87,7 @@ async function getEventLogs(networkKey, address, options = {}) {
     fromBlock = null,
     toBlock = null,
     page = 1,
-    offset = 1000
+    offset = 10000 // Increased from 1000 to 10000 (API maximum)
   } = options;
 
   const apiConfig = getApiConfig(networkKey);

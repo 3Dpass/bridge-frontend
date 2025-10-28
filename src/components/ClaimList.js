@@ -2,7 +2,7 @@ import React, { useState, useEffect, useCallback } from 'react';
 import { ethers } from 'ethers';
 import { useWeb3 } from '../contexts/Web3Context';
 import { useSettings } from '../contexts/SettingsContext';
-import { NETWORKS, getBridgeDirections, getBridgeAddressesForDirection } from '../config/networks';
+import { NETWORKS, getBridgeDirections, getBridgeAddressesForDirection, getNetworksForDirection } from '../config/networks';
 import { fetchClaimsFromAllNetworks } from '../utils/fetch-claims';
 import { fetchLastTransfers } from '../utils/fetch-last-transfers';
 import { aggregateClaimsAndTransfers } from '../utils/aggregate-claims-transfers';
@@ -248,7 +248,7 @@ const getFieldMatchStatus = (claim, field) => {
 
 const ClaimList = () => {
   const { account, network, getNetworkWithSettings } = useWeb3();
-  const { getBridgeInstancesWithSettings, getTokenDecimalsDisplayMultiplier } = useSettings();
+  const { getBridgeInstancesWithSettings, getTokenDecimalsDisplayMultiplier, settings } = useSettings();
   const [claims, setClaims] = useState([]);
   const [aggregatedData, setAggregatedData] = useState(null);
   const [loading, setLoading] = useState(false);
@@ -1315,6 +1315,12 @@ const ClaimList = () => {
 
   // Load claims and transfers from all networks with fraud detection
   const loadClaimsAndTransfers = useCallback(async (forceRefresh = false) => {
+    // Prevent concurrent executions
+    if (loading || isSearching) {
+      console.log('🔍 loadClaimsAndTransfers: Already loading, skipping duplicate call');
+      return;
+    }
+    
     // No connection check needed - we can load all data without wallet connection
     console.log('🔍 loadClaimsAndTransfers: Loading claims and transfers from all networks (no wallet connection required)');
     console.log('🔍 Current filter:', filter);
@@ -1340,12 +1346,13 @@ const ClaimList = () => {
     // Search depth settings are handled internally by the retry mechanism
     
     try {
-      // Get bridge addresses to filter by if a specific direction is selected
+      // Get bridge addresses and networks to filter by if a specific direction is selected
       const bridgeAddresses = bridgeDirection === 'all' ? null : getBridgeAddressesForDirection(bridgeDirection);
-      console.log('🔍 Bridge direction filter:', bridgeDirection, 'Bridge addresses:', bridgeAddresses);
+      const targetNetworks = bridgeDirection === 'all' ? null : getNetworksForDirection(bridgeDirection);
+      console.log('🔍 Bridge direction filter:', bridgeDirection, 'Bridge addresses:', bridgeAddresses, 'Target networks:', targetNetworks);
 
-      // Fetch claims from all networks with enhanced retry and fallback
-      console.log('🔍 Fetching claims from all networks with enhanced retry...');
+      // Fetch claims from specific networks with enhanced retry and fallback
+      console.log('🔍 Fetching claims from', targetNetworks ? `networks ${targetNetworks.join(', ')}` : 'all networks', 'with enhanced retry...');
       const allClaims = await fetchClaimsWithFallback(
         () => fetchClaimsFromAllNetworks({
           getNetworkWithSettings,
@@ -1354,7 +1361,8 @@ const ClaimList = () => {
         account,
         getTransferTokenSymbol,
         getTokenDecimals,
-        bridgeAddresses // Pass bridge addresses for filtering
+        bridgeAddresses, // Pass bridge addresses for filtering
+        targetNetworks // Pass specific networks to search
       }),
       {
         maxRetries: 3,
@@ -1366,13 +1374,14 @@ const ClaimList = () => {
         }
       );
 
-      // Fetch transfers from all networks with enhanced retry and fallback
-      console.log(`🔍 Fetching transfers from all networks with enhanced retry...`);
+      // Fetch transfers from specific networks with enhanced retry and fallback
+      console.log(`🔍 Fetching transfers from`, targetNetworks ? `networks ${targetNetworks.join(', ')}` : 'all networks', `with enhanced retry...`);
       const allTransfers = await fetchTransfersWithFallback(
         () => fetchLastTransfers({
           getNetworkWithSettings,
           getBridgeInstancesWithSettings,
-          bridgeAddresses // Pass bridge addresses for filtering
+          bridgeAddresses, // Pass bridge addresses for filtering
+          targetNetworks // Pass specific networks to search
         }),
         {
           maxRetries: 3,
@@ -1503,10 +1512,13 @@ const ClaimList = () => {
       let filteredAggregated = aggregated; // Default to unfiltered
       
       try {
-        const cutoffTs = Math.floor(Date.now() / 1000) - Math.floor(1 * 3600); // Use 1 hour as default
+        // Get history search depth from settings, default to 168 hours (1 week) if not set
+        const historySearchDepth = settings?.historySearchDepth || 168;
+        const cutoffTs = Math.floor(Date.now() / 1000) - Math.floor(historySearchDepth * 3600);
         const withinWindow = (ts) => typeof ts === 'number' && ts >= cutoffTs;
 
         console.log('🔍 Time filtering debug:', {
+          historySearchDepth,
           currentTime: Math.floor(Date.now() / 1000),
           cutoffTs,
           cutoffDate: new Date(cutoffTs * 1000).toISOString()
@@ -1684,7 +1696,7 @@ const ClaimList = () => {
         setIsInitialLoad(false);
       }
     }
-  }, [account, currentBlock, getNetworkWithSettings, getBridgeInstancesWithSettings, filter, bridgeDirection, getTransferTokenSymbol, getTokenDecimals, isInitialLoad, loadStakeInformation, loadCachedData, cacheStatus.hasCachedData, contractSettings]);
+  }, [account, currentBlock, getNetworkWithSettings, getBridgeInstancesWithSettings, filter, bridgeDirection, getTransferTokenSymbol, getTokenDecimals, isInitialLoad, loadStakeInformation, loadCachedData, cacheStatus.hasCachedData, contractSettings, settings?.historySearchDepth, loading, isSearching]);
 
   // Cache management functions
   const clearCache = useCallback(() => {
@@ -1708,18 +1720,16 @@ const ClaimList = () => {
   }, []); // Removed loadClaimsAndTransfers from dependencies to prevent infinite loop
 
   const searchSelectedDirection = useCallback(async () => {
-    if (bridgeDirection === 'all') {
-      toast.error('Please select a specific bridge direction to search');
-      return;
-    }
-
-    console.log('🔍 Starting discovery for selected direction:', bridgeDirection);
+    console.log('🔍 Starting discovery for direction:', bridgeDirection);
     setIsSearching(true);
     setCacheStatus(prev => ({ ...prev, isRefreshing: true }));
     
     try {
       await loadClaimsAndTransfers(true);
-      toast.success(`Discovery completed for ${getBridgeDirections().find(d => d.id === bridgeDirection)?.name || bridgeDirection}`);
+      const directionName = bridgeDirection === 'all' 
+        ? 'All Bridge Directions' 
+        : getBridgeDirections().find(d => d.id === bridgeDirection)?.name || bridgeDirection;
+      toast.success(`Discovery completed for ${directionName}`);
     } catch (error) {
       console.error('❌ Error during direction search:', error);
       toast.error('Failed to discover data for selected direction');
@@ -1727,7 +1737,8 @@ const ClaimList = () => {
       setIsSearching(false);
       setCacheStatus(prev => ({ ...prev, isRefreshing: false }));
     }
-  }, [bridgeDirection, loadClaimsAndTransfers]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [bridgeDirection]); // Removed loadClaimsAndTransfers from dependencies to prevent double execution
 
   // Check if a claim was recently updated
   const isClaimRecentlyUpdated = useCallback((claim) => {
@@ -1739,6 +1750,38 @@ const ClaimList = () => {
     const thirtySecondsAgo = Date.now() - 30000;
     return updateTime > thirtySecondsAgo;
   }, [claimUpdates.updateTimestamps]);
+
+  // Callback for when a claim is submitted successfully
+  const handleClaimSubmitted = useCallback((claimData) => {
+    console.log('🔍 Claim submitted successfully, refreshing claim list:', claimData);
+    // Refresh the claim list to show the new claim
+    loadClaimsAndTransfers();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []); // Empty dependency array since loadClaimsAndTransfers is stable
+
+  // Callback for when a claim is withdrawn successfully
+  const handleWithdrawSuccess = useCallback((claimNum) => {
+    console.log(`🔍 Withdraw successful for claim #${claimNum}, clearing cache and refreshing claims...`);
+    setShowWithdrawModal(false);
+    setSelectedClaim(null);
+    // Clear cache to ensure fresh data is fetched
+    clearAllCachedEvents();
+    // Refresh the claims list
+    loadClaimsAndTransfers();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []); // Empty dependency array since loadClaimsAndTransfers is stable
+
+  // Callback for when a claim is challenged successfully
+  const handleChallengeSuccess = useCallback((claimNum) => {
+    console.log(`🔍 Challenge successful for claim #${claimNum}, clearing cache and refreshing claims...`);
+    setShowChallengeModal(false);
+    setSelectedClaim(null);
+    // Clear cache to ensure fresh data is fetched
+    clearAllCachedEvents();
+    // Refresh the claims list
+    loadClaimsAndTransfers();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []); // Empty dependency array since loadClaimsAndTransfers is stable
 
   // Manual update for a specific claim
   const updateSpecificClaim = useCallback(async (claim) => {
@@ -1962,12 +2005,11 @@ const ClaimList = () => {
     setUserStakes({});
   }, [account]);
 
-  // Load claims and transfers on mount and when filter changes (not bridgeDirection)
-  useEffect(() => {
-    // Always load data - no wallet connection required
-    loadClaimsAndTransfers();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [filter]); // Removed loadClaimsAndTransfers from dependencies to prevent infinite loop
+  // No automatic loading - only manual search via button
+  // useEffect(() => {
+  //   // Disabled automatic loading - users must click search button
+  //   // loadClaimsAndTransfers();
+  // }, [filter]);
 
   // Auto-refresh disabled - users can manually refresh when needed
   // This prevents unnecessary network requests and gives users control
@@ -2195,7 +2237,6 @@ const ClaimList = () => {
           
           {/* Bridge Direction Selector */}
           <div className="flex items-center gap-2">
-            <label className="text-sm text-secondary-400">Bridge Direction:</label>
             <select
               value={bridgeDirection}
               onChange={(e) => setBridgeDirection(e.target.value)}
@@ -2210,13 +2251,13 @@ const ClaimList = () => {
             </select>
             <button
               onClick={searchSelectedDirection}
-              disabled={isSearching || bridgeDirection === 'all'}
+              disabled={isSearching}
               className={`flex items-center gap-2 px-3 py-2 rounded-md text-sm font-medium transition-colors ${
-                isSearching || bridgeDirection === 'all'
+                isSearching
                   ? 'bg-dark-700 text-secondary-500 cursor-not-allowed'
                   : 'bg-primary-600 text-white hover:bg-primary-700 cursor-pointer'
               }`}
-              title={bridgeDirection === 'all' ? 'Select a specific bridge direction to search' : 'Search for claims and transfers in selected direction'}
+              title="Search for claims and transfers in selected direction"
             >
               {isSearching ? (
                 <>
@@ -2283,8 +2324,7 @@ const ClaimList = () => {
                 <button
                   onClick={() => {
                     console.log('🔄 Manual update triggered by user');
-                    setCacheStatus(prev => ({ ...prev, isRefreshing: true }));
-                    loadClaimsAndTransfers(true); // Force refresh to get fresh data
+                    refreshData(); // Use the centralized refresh function
                   }}
                   className="text-xs text-green-400 hover:text-green-300 underline ml-2"
                   title="Scan through the blockchain"
@@ -2351,22 +2391,34 @@ const ClaimList = () => {
               {filter === 'suspicious' ? 'No Suspicious Claims Found' :
                filter === 'pending' ? 'No Pending Transfers Found' :
                filter === 'active' ? 'No Active Claims Found' :
-               'No Claims Found'}
+               'No Transactions Found'}
             </h3>
-            <p className="text-secondary-400">
+            <p className="text-secondary-400 mb-6">
               {filter === 'my' 
-                ? (account ? 'You don\'t have any claims across all networks' : 'Connect your wallet to see your claims')
+                ? (account ? 'You don\'t have any claims in the selected bridge direction' : 'Connect your wallet to see your claims')
                 : filter === 'suspicious'
-                ? 'No suspicious claims detected across all networks'
+                ? 'No suspicious claims detected in the selected bridge direction'
                 : filter === 'pending'
-                ? 'No pending transfers found across all networks'
+                ? 'No pending transfers found in the selected bridge direction'
                 : filter === 'active'
-                ? 'No active claims found across all networks'
-                : 'No claims found across all networks'
+                ? 'No active claims found in the selected bridge direction'
+                : 'Select a bridge direction and click Search to discover transactions'
               }
             </p>
+            {!aggregatedData && (
+              <div className="bg-dark-800 border border-dark-700 rounded-lg p-4 max-w-md mx-auto">
+                <p className="text-sm text-secondary-300 mb-3">
+                  To get started:
+                </p>
+                <ol className="text-sm text-secondary-400 text-left space-y-2">
+                  <li>1. Select a bridge direction from the dropdown above</li>
+                  <li>2. Click the "Search" button to discover transactions</li>
+                  <li>3. View claims and transfers for that specific bridge pair</li>
+                </ol>
+              </div>
+            )}
             {!account && (
-              <p className="text-xs text-secondary-500 mt-2">
+              <p className="text-xs text-secondary-500 mt-4">
                 💡 You can view all claims and transfers without connecting your wallet. Connect only when you need to interact with them.
               </p>
             )}
@@ -3340,26 +3392,14 @@ const ClaimList = () => {
           setSelectedTransfer(null);
         }}
         selectedTransfer={selectedTransfer}
-        onClaimSubmitted={(claimData) => {
-          console.log('🔍 Claim submitted successfully, refreshing claim list:', claimData);
-          // Refresh the claim list to show the new claim
-          loadClaimsAndTransfers();
-        }}
+        onClaimSubmitted={handleClaimSubmitted}
       />
 
       {/* Withdraw Claim Dialog */}
       {showWithdrawModal && selectedClaim && (
         <WithdrawClaim
           claim={selectedClaim}
-          onWithdrawSuccess={(claimNum) => {
-            console.log(`🔍 Withdraw successful for claim #${claimNum}, clearing cache and refreshing claims...`);
-            setShowWithdrawModal(false);
-            setSelectedClaim(null);
-            // Clear cache to ensure fresh data is fetched
-            clearAllCachedEvents();
-            // Refresh the claims list
-            loadClaimsAndTransfers();
-          }}
+          onWithdrawSuccess={handleWithdrawSuccess}
           onClose={() => {
             setShowWithdrawModal(false);
             setSelectedClaim(null);
@@ -3371,15 +3411,7 @@ const ClaimList = () => {
       {showChallengeModal && selectedClaim && (
         <Challenge
           claim={selectedClaim}
-          onChallengeSuccess={(claimNum) => {
-            console.log(`🔍 Challenge successful for claim #${claimNum}, clearing cache and refreshing claims...`);
-            setShowChallengeModal(false);
-            setSelectedClaim(null);
-            // Clear cache to ensure fresh data is fetched
-            clearAllCachedEvents();
-            // Refresh the claims list
-            loadClaimsAndTransfers();
-          }}
+          onChallengeSuccess={handleChallengeSuccess}
           onClose={() => {
             setShowChallengeModal(false);
             setSelectedClaim(null);

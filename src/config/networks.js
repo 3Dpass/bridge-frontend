@@ -678,7 +678,32 @@ export const getBridgeAddressesForDirection = (directionId) => {
   if (!direction) return [];
   
   return [
-    direction.exportBridge.address,
-    direction.importBridge.address
+    direction.exportBridge.address.toLowerCase(),
+    direction.importBridge.address.toLowerCase()
   ];
+};
+
+export const getNetworksForDirection = (directionId) => {
+  const direction = getBridgeDirectionById(directionId);
+  if (!direction) return [];
+  
+  // Find the network keys that contain these bridge addresses
+  const networks = [];
+  
+  Object.entries(NETWORKS).forEach(([networkKey, network]) => {
+    if (network.bridges) {
+      const hasExportBridge = Object.values(network.bridges).some(bridge => 
+        bridge.address.toLowerCase() === direction.exportBridge.address.toLowerCase()
+      );
+      const hasImportBridge = Object.values(network.bridges).some(bridge => 
+        bridge.address.toLowerCase() === direction.importBridge.address.toLowerCase()
+      );
+      
+      if (hasExportBridge || hasImportBridge) {
+        networks.push(networkKey);
+      }
+    }
+  });
+  
+  return networks;
 }; 

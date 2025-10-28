@@ -123,21 +123,22 @@ export const fetchLastTransfers = async ({
   timeframeHours = 1,
   blocksToCheck = null,
   maxEventsPerBridge = 100,
-  bridgeAddresses = null
+  bridgeAddresses = null,
+  targetNetworks = null
 }) => {
   console.log('🔍 fetchLastTransfers: Loading transfer events from all networks');
 
   try {
-    // Get all available networks
-    const allNetworks = Object.keys(NETWORKS);
-    console.log('🔍 Loading transfers from all networks:', allNetworks);
+    // Get networks to process (either specific target networks or all networks)
+    const networksToProcess = targetNetworks || Object.keys(NETWORKS);
+    console.log('🔍 Loading transfers from networks:', networksToProcess);
 
-    // Fetch transfers from all networks simultaneously
+    // Fetch transfers from specified networks simultaneously
     const allTransfers = [];
     const customBridges = getBridgeInstancesWithSettings();
     
     // Process each network
-    for (const networkKey of allNetworks) {
+    for (const networkKey of networksToProcess) {
       const networkConfig = getNetworkWithSettings(networkKey);
       if (!networkConfig || !networkConfig.contracts) {
         console.log(`🔍 Skipping network ${networkKey}: no configuration found`);
@@ -164,52 +165,87 @@ export const fetchLastTransfers = async ({
       
       const allDefaultBridges = [...defaultBridges, ...importBridges];
       
-      // Get custom bridges for this network
-      const customNetworkBridges = Object.values(customBridges).filter(bridge => {
-        // For export bridges: include when this network is the home network
-        if (bridge.type === 'export') {
-          return bridge.homeNetwork === networkConfig.name;
-        }
-        // For import bridges: include when this network is the foreign network
-        if (bridge.type === 'import' || bridge.type === 'import_wrapper') {
-          return bridge.foreignNetwork === networkConfig.name;
-        }
-        // For other types, use the old logic
-        return bridge.homeNetwork === networkConfig.name || bridge.foreignNetwork === networkConfig.name;
-      });
+      // Build only the bridges we need (optimized approach)
+      let networkBridgeInstances = [];
       
-      // Combine default bridges with custom bridges, avoiding duplicates
-      const networkBridgeInstances = [...allDefaultBridges];
-      customNetworkBridges.forEach(customBridge => {
-        const exists = networkBridgeInstances.some(bridge => bridge.address === customBridge.address);
-        if (!exists) {
-          networkBridgeInstances.push(customBridge);
-        }
-      });
-      
-      console.log(`🔍 Found ${networkBridgeInstances.length} bridges for ${networkKey}:`, 
-        networkBridgeInstances.map(b => ({ 
-          address: b.address, 
-          type: b.type, 
-          homeNetwork: b.homeNetwork, 
-          foreignNetwork: b.foreignNetwork 
-        }))
-      );
-      
-      // Debug: Check if P3D_EXPORT bridge is included
-      const p3dExportBridge = networkBridgeInstances.find(b => b.address === '0x50fcE1D58b41c3600C74de03238Eee71aFDfBf1F');
-      console.log(`🔍 P3D_EXPORT bridge included:`, p3dExportBridge ? 'YES' : 'NO', p3dExportBridge);
-
-      // Filter bridges by direction if specified
-      let filteredBridges = networkBridgeInstances;
       if (bridgeAddresses && bridgeAddresses.length > 0) {
-        filteredBridges = networkBridgeInstances.filter(bridge => 
+        // Only build bridges that match our target addresses
+        console.log(`🔍 Building only target bridges for ${networkKey}:`, bridgeAddresses);
+        
+        // Check default bridges first
+        const matchingDefaultBridges = allDefaultBridges.filter(bridge => 
           bridgeAddresses.includes(bridge.address.toLowerCase())
         );
-        console.log(`🔍 Filtered to ${filteredBridges.length} bridges for direction:`, 
-          filteredBridges.map(b => ({ address: b.address, type: b.type }))
+        
+        // Check custom bridges
+        const matchingCustomBridges = Object.values(customBridges).filter(bridge => {
+          // First check if this bridge matches our target addresses
+          const matchesTarget = bridgeAddresses.includes(bridge.address.toLowerCase());
+          if (!matchesTarget) return false;
+          
+          // Then check if it belongs to this network
+          if (bridge.type === 'export') {
+            return bridge.homeNetwork === networkConfig.name;
+          }
+          if (bridge.type === 'import' || bridge.type === 'import_wrapper') {
+            return bridge.foreignNetwork === networkConfig.name;
+          }
+          return bridge.homeNetwork === networkConfig.name || bridge.foreignNetwork === networkConfig.name;
+        });
+        
+        // Combine matching bridges, avoiding duplicates
+        networkBridgeInstances = [...matchingDefaultBridges];
+        matchingCustomBridges.forEach(customBridge => {
+          const exists = networkBridgeInstances.some(bridge => bridge.address === customBridge.address);
+          if (!exists) {
+            networkBridgeInstances.push(customBridge);
+          }
+        });
+        
+        console.log(`🔍 Built ${networkBridgeInstances.length} target bridges for ${networkKey}:`, 
+          networkBridgeInstances.map(b => ({ 
+            address: b.address, 
+            type: b.type, 
+            homeNetwork: b.homeNetwork, 
+            foreignNetwork: b.foreignNetwork 
+          }))
         );
+      } else {
+        // No specific bridges requested, build all bridges for this network (original logic)
+        const customNetworkBridges = Object.values(customBridges).filter(bridge => {
+          if (bridge.type === 'export') {
+            return bridge.homeNetwork === networkConfig.name;
+          }
+          if (bridge.type === 'import' || bridge.type === 'import_wrapper') {
+            return bridge.foreignNetwork === networkConfig.name;
+          }
+          return bridge.homeNetwork === networkConfig.name || bridge.foreignNetwork === networkConfig.name;
+        });
+        
+        networkBridgeInstances = [...allDefaultBridges];
+        customNetworkBridges.forEach(customBridge => {
+          const exists = networkBridgeInstances.some(bridge => bridge.address === customBridge.address);
+          if (!exists) {
+            networkBridgeInstances.push(customBridge);
+          }
+        });
+        
+        console.log(`🔍 Built ${networkBridgeInstances.length} bridges for ${networkKey}:`, 
+          networkBridgeInstances.map(b => ({ 
+            address: b.address, 
+            type: b.type, 
+            homeNetwork: b.homeNetwork, 
+            foreignNetwork: b.foreignNetwork 
+          }))
+        );
+        
+        // Debug: Check if P3D_EXPORT bridge is included
+        const p3dExportBridge = networkBridgeInstances.find(b => b.address === '0x50fcE1D58b41c3600C74de03238Eee71aFDfBf1F');
+        console.log(`🔍 P3D_EXPORT bridge included:`, p3dExportBridge ? 'YES' : 'NO', p3dExportBridge);
       }
+      
+      // Use the built bridges directly (no additional filtering needed)
+      const filteredBridges = networkBridgeInstances;
 
       // Skip if no bridges found for this network
       if (filteredBridges.length === 0) {
@@ -376,6 +412,7 @@ export const fetchLastTransfers = async ({
               // Event metadata
               blockNumber: event.blockNumber,
               transactionHash: event.transactionHash,
+              txid: event.transactionHash, // CRITICAL: Add txid field for matching (use transaction hash)
               logIndex: event.logIndex,
               timestamp: await getBlockTimestamp(networkProvider, event.blockNumber),
               
@@ -491,6 +528,7 @@ export const fetchLastTransfers = async ({
               // Event metadata
               blockNumber: event.blockNumber,
               transactionHash: event.transactionHash,
+              txid: event.transactionHash, // CRITICAL: Add txid field for matching (use transaction hash)
               logIndex: event.logIndex,
               timestamp: await getBlockTimestamp(networkProvider, event.blockNumber),
               
