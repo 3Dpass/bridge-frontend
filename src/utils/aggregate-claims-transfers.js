@@ -1,5 +1,6 @@
 
 import { ethers } from 'ethers';
+import { normalizeAmount } from './data-normalizer';
 
 /**
  * Aggregate claims and transfers with fraud detection
@@ -44,34 +45,6 @@ export const aggregateClaimsAndTransfers = (claims, transfers) => {
   const amountsMatchBigNumber = (amount1, amount2) => {
     if (!amount1 || !amount2) return { match: false, reason: 'missing_amount' };
     try {
-      // Helper function to normalize amounts (similar to formatAmount in ClaimList.js)
-      const normalizeAmount = (amount) => {
-        // Handle BigNumber objects (including deserialized ones from cache)
-        if (typeof amount?.toNumber === 'function') {
-          return amount.toString();
-        } else if (typeof amount === 'string') {
-          return amount;
-        } else if (typeof amount === 'number') {
-          return amount.toString();
-        } else if (typeof amount === 'object' && amount !== null) {
-          // Handle deserialized BigNumber objects from cache
-          // They might have properties like _hex, _isBigNumber, or be plain objects with hex values
-          if (amount._hex) {
-            return amount._hex;
-          } else if (amount.hex) {
-            return amount.hex;
-          } else if (amount.toString && typeof amount.toString === 'function') {
-            return amount.toString();
-          } else {
-            return '0';
-          }
-        } else if (!amount) {
-          return '0';
-        } else {
-          return '0';
-        }
-      };
-      
       // Normalize both amounts
       const normalized1 = normalizeAmount(amount1);
       const normalized2 = normalizeAmount(amount2);
@@ -162,34 +135,6 @@ export const aggregateClaimsAndTransfers = (claims, transfers) => {
     }
     
     try {
-      // Helper function to normalize amounts (same as in amountsMatchBigNumber)
-      const normalizeAmount = (amount) => {
-        // Handle BigNumber objects (including deserialized ones from cache)
-        if (typeof amount?.toNumber === 'function') {
-          return amount.toString();
-        } else if (typeof amount === 'string') {
-          return amount;
-        } else if (typeof amount === 'number') {
-          return amount.toString();
-        } else if (typeof amount === 'object' && amount !== null) {
-          // Handle deserialized BigNumber objects from cache
-          // They might have properties like _hex, _isBigNumber, or be plain objects with hex values
-          if (amount._hex) {
-            return amount._hex;
-          } else if (amount.hex) {
-            return amount.hex;
-          } else if (amount.toString && typeof amount.toString === 'function') {
-            return amount.toString();
-          } else {
-            return '0';
-          }
-        } else if (!amount) {
-          return '0';
-        } else {
-          return '0';
-        }
-      };
-      
       // Normalize both rewards
       const normalizedClaimReward = normalizeAmount(claimReward);
       const normalizedTransferReward = normalizeAmount(transferReward);

@@ -92,6 +92,9 @@ src/
 ├── utils/
 │   ├── bridge-detector.js     # Auto-detect bridge type
 │   ├── bridge-contracts.js    # Bridge interaction helpers
+│   ├── bridge-filter.js       # Extract bridges for specific network
+│   ├── data-normalizer.js     # Normalize BigNumber/amounts to strings
+│   ├── event-parser.js        # Parse event args into named fields
 │   ├── threedpass.js          # 3DPass precompile utilities
 │   ├── token-detector.js      # Auto-detect token type
 │   ├── assistant-detector.js  # Assistant type detection
@@ -113,6 +116,12 @@ src/
 **Settings Integration**: Settings from localStorage can override default network configs (RPC URLs, contract addresses, tokens). See `src/utils/settings.js`.
 
 **Decimal Handling**: P3D has special decimal handling - native P3D uses 12 decimals on-chain but 18 decimals in EVM representation. Use `decimalsDisplayMultiplier: 1000000` in token configs to compensate.
+
+**Bridge Filtering**: `bridge-filter.js` provides centralized logic for extracting bridges relevant to a specific network. It combines default bridges from config, import bridges defined at network level, and custom bridges from user settings, with automatic deduplication.
+
+**Data Normalization**: `data-normalizer.js` handles conversion of various amount formats (BigNumber objects, hex strings, numbers) into consistent string representations. Essential for working with event args from smart contracts.
+
+**Event Parsing**: `event-parser.js` converts raw event args arrays into named field objects, eliminating magic array indices and improving type safety. Automatically handles amount normalization.
 
 ## Critical Implementation Details
 
@@ -156,10 +165,18 @@ When MetaMask changes networks, the context automatically updates provider, sign
 ## Testing Notes
 
 Tests exist in `src/utils/__tests__/`:
+- `bridge-filter.test.js` - Network-specific bridge extraction
+- `data-normalizer.test.js` - Amount/BigNumber normalization
+- `event-parser.test.js` - Event args parsing
+- `fetch-last-transfers.test.js` - Module import validation
 - `retry-with-fallback.test.js` - Provider fallback logic
 - `settings-consistency.test.js` - Settings validation
+- `network-switcher.test.js` - Network switching logic
+- `error-parser.test.js` - Error message parsing
+- `decimal-converter.test.js` - Decimal conversion utilities
 
 Run tests with `pnpm test` for watch mode.
+Run full test suite: `pnpm test -- --no-watch --passWithNoTests --watchAll=false`
 
 ## Test-Driven Development (TDD)
 
@@ -264,4 +281,31 @@ const abi = get3DPassTokenABI(tokenAddress);
 import { getProvider } from './utils/provider-manager';
 const provider = await getProvider('ETHEREUM', settings);
 // Automatically handles fallback if primary RPC fails
+```
+
+**Filtering bridges for a network**:
+```javascript
+import { getBridgesForNetwork } from './utils/bridge-filter';
+const bridges = getBridgesForNetwork(networkConfig, customBridges);
+// Returns: Array of bridge instances for the network
+// Combines default, import, and custom bridges with deduplication
+```
+
+**Normalizing event amounts**:
+```javascript
+import { normalizeAmount } from './utils/data-normalizer';
+const amount = normalizeAmount(event.args[1]);
+// Handles BigNumber, string, number, objects with hex properties
+// Returns: string representation or '0' if invalid
+```
+
+**Parsing event args**:
+```javascript
+import { parseExpatriationEvent, parseRepatriationEvent } from './utils/event-parser';
+const eventData = parseExpatriationEvent(event);
+// Returns: { senderAddress, amount, reward, foreignAddress, data }
+
+const eventData = parseRepatriationEvent(event);
+// Returns: { senderAddress, amount, reward, homeAddress, data }
+// Eliminates magic array indices, uses normalizeAmount internally
 ```
