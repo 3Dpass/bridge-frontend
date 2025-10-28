@@ -3,15 +3,8 @@ import { ethers } from 'ethers';
 import { useWeb3 } from '../contexts/Web3Context';
 import { useSettings } from '../contexts/SettingsContext';
 import { NETWORKS, getBridgeDirections, getBridgeAddressesForDirection, getNetworksForDirection } from '../config/networks';
-import { fetchClaimsFromAllNetworks } from '../utils/fetch-claims';
-import { fetchLastTransfers } from '../utils/fetch-last-transfers';
+import { discoverAllBridgeEvents, loadClaimDataWithUpdates } from '../utils/parallel-bridge-discovery';
 import { aggregateClaimsAndTransfers } from '../utils/aggregate-claims-transfers';
-import { 
-  fetchClaimsWithFallback, 
-  fetchTransfersWithFallback
-  // testProviderWithRetry, // Available for future use
-  // getProviderHealthWithRetry // Available for future use
-} from '../utils/enhanced-fetch';
 import { clearAllCachedEvents } from '../utils/event-cache';
 import { 
   COUNTERSTAKE_ABI,
@@ -248,7 +241,7 @@ const getFieldMatchStatus = (claim, field) => {
 
 const ClaimList = () => {
   const { account, network, getNetworkWithSettings } = useWeb3();
-  const { getBridgeInstancesWithSettings, getTokenDecimalsDisplayMultiplier, settings } = useSettings();
+  const { getBridgeInstancesWithSettings, getTokenDecimalsDisplayMultiplier } = useSettings();
   const [claims, setClaims] = useState([]);
   const [aggregatedData, setAggregatedData] = useState(null);
   const [loading, setLoading] = useState(false);
@@ -264,7 +257,6 @@ const ClaimList = () => {
   }); // 'all', 'my', 'suspicious', 'pending', 'active'
   const [bridgeDirection, setBridgeDirection] = useState('all'); // 'all' or specific direction ID
   const [isSearching, setIsSearching] = useState(false); // Track if search is in progress
-  const [retryStatus, setRetryStatus] = useState(null);
   const [currentBlock, setCurrentBlock] = useState(null);
   const [showNewClaim, setShowNewClaim] = useState(false);
   const [selectedTransfer, setSelectedTransfer] = useState(null);
@@ -281,6 +273,22 @@ const ClaimList = () => {
     isRefreshing: false,
     lastUpdated: null,
     cacheAge: null
+  });
+
+  // Parallel discovery state
+  const [discoveryState, setDiscoveryState] = useState({
+    isDiscovering: false,
+    bridgeResults: [],
+    matchedTransfers: [],
+    completedTransfers: [],
+    pendingTransfers: [],
+    suspiciousClaims: [],
+    discoveryProgress: {
+      bridgesCompleted: 0,
+      totalBridges: 0,
+      claimDataLoaded: 0,
+      totalClaims: 0
+    }
   });
 
   // Individual claim update tracking
@@ -942,7 +950,6 @@ const ClaimList = () => {
     if (!account || !claims || claims.length === 0) {
       return;
     }
-
     
     const stakePromises = claims.map(async (claim) => {
       if (!claim.bridgeAddress || (!claim.actualClaimNum && !claim.claimNum)) {
@@ -1224,6 +1231,16 @@ const ClaimList = () => {
         }
         if (cachedAggregated) {
           setAggregatedData(cachedAggregated);
+          
+          // Load stake information for cached completed claims
+          const completedClaims = cachedAggregated.completedTransfers
+            .filter(t => t.claim)
+            .map(t => t.claim);
+          
+          if (completedClaims.length > 0) {
+            console.log('🔄 Loading stake information for cached completed claims...');
+            loadStakeInformation(completedClaims);
+          }
         } else if ((cachedClaims && cachedClaims.length > 0) || (cachedTransfers && cachedTransfers.length > 0)) {
           // If we have claims or transfers but no aggregated data, process them through aggregation
           console.log('🔍 No cached aggregated data found, processing claims and transfers through aggregation...');
@@ -1278,6 +1295,17 @@ const ClaimList = () => {
               }
             };
             setAggregatedData(fallbackAggregated);
+            
+            // Load stake information for fallback completed claims
+            const completedClaims = fallbackAggregated.completedTransfers
+              .filter(t => t.claim)
+              .map(t => t.claim);
+            
+            if (completedClaims.length > 0) {
+              console.log('🔄 Loading stake information for fallback completed claims...');
+              loadStakeInformation(completedClaims);
+            }
+            
             console.log('✅ Created fallback aggregated data structure');
           }
         }
@@ -1307,396 +1335,167 @@ const ClaimList = () => {
       setCacheStatus(prev => ({ ...prev, hasCachedData: false, isShowingCached: false }));
       return false;
     }
-  }, [currentBlock, getNetworkWithSettings, getBridgeInstancesWithSettings]);
+  }, [currentBlock, getNetworkWithSettings, getBridgeInstancesWithSettings, loadStakeInformation]);
 
   // updateIndividualClaims function removed - no longer needed since we don't do background updates
 
   // Cache statistics removed from UI - cache still works internally
 
-  // Load claims and transfers from all networks with fraud detection
-  const loadClaimsAndTransfers = useCallback(async (forceRefresh = false) => {
+  // New parallel discovery system
+  const loadClaimsAndTransfersParallel = useCallback(async (forceRefresh = false) => {
     // Prevent concurrent executions
-    if (loading || isSearching) {
-      console.log('🔍 loadClaimsAndTransfers: Already loading, skipping duplicate call');
+    if (loading || isSearching || discoveryState.isDiscovering) {
+      console.log('🔍 loadClaimsAndTransfersParallel: Already loading, skipping duplicate call');
       return;
     }
-    
-    // No connection check needed - we can load all data without wallet connection
-    console.log('🔍 loadClaimsAndTransfers: Loading claims and transfers from all networks (no wallet connection required)');
-    console.log('🔍 Current filter:', filter);
-    console.log('🔍 Current account:', account);
-    console.log('🔍 Force refresh:', forceRefresh);
 
     // Step 1: Try to load cached data first (unless force refresh)
     if (!forceRefresh && isInitialLoad) {
       const hasCachedData = await loadCachedData();
       if (hasCachedData) {
         console.log('✅ Displaying cached data. User can manually refresh if needed.');
-        // Don't automatically fetch fresh data - let user decide
+        setIsInitialLoad(false);
         return; // Exit early, just show cached data
       }
     }
 
-    // Step 2: Only fetch fresh data if no cached data or force refresh
-    // Only show loading spinner if we don't have cached data or it's a force refresh
-    if (isInitialLoad && (!cacheStatus.hasCachedData || forceRefresh)) {
+    console.log('🚀 Starting parallel bridge discovery...');
+    setDiscoveryState(prev => ({ ...prev, isDiscovering: true }));
       setLoading(true);
-    }
-    
-    // Search depth settings are handled internally by the retry mechanism
     
     try {
-      // Get bridge addresses and networks to filter by if a specific direction is selected
+      // Step 1: Get bridge configurations for the selected direction
       const bridgeAddresses = bridgeDirection === 'all' ? null : getBridgeAddressesForDirection(bridgeDirection);
       const targetNetworks = bridgeDirection === 'all' ? null : getNetworksForDirection(bridgeDirection);
+      
       console.log('🔍 Bridge direction filter:', bridgeDirection, 'Bridge addresses:', bridgeAddresses, 'Target networks:', targetNetworks);
 
-      // Fetch claims from specific networks with enhanced retry and fallback
-      console.log('🔍 Fetching claims from', targetNetworks ? `networks ${targetNetworks.join(', ')}` : 'all networks', 'with enhanced retry...');
-      const allClaims = await fetchClaimsWithFallback(
-        () => fetchClaimsFromAllNetworks({
-          getNetworkWithSettings,
-        getBridgeInstancesWithSettings,
-        filter,
-        account,
-        getTransferTokenSymbol,
-        getTokenDecimals,
-        bridgeAddresses, // Pass bridge addresses for filtering
-        targetNetworks // Pass specific networks to search
-      }),
-      {
-        maxRetries: 3,
-        baseDelay: 1000,
-        enableSearchDepthAwareRetry: true,
-          onRetryStatus: (status) => {
-            setRetryStatus({ ...status, type: 'claims' });
+      // Get all bridge instances
+      const allBridges = getBridgeInstancesWithSettings();
+      const bridgeConfigs = Object.values(allBridges)
+        .filter(bridge => {
+          // Filter by direction if specified
+          if (bridgeAddresses && !bridgeAddresses.map(addr => addr.toLowerCase()).includes(bridge.address.toLowerCase())) {
+            return false;
           }
-        }
-      );
-
-      // Fetch transfers from specific networks with enhanced retry and fallback
-      console.log(`🔍 Fetching transfers from`, targetNetworks ? `networks ${targetNetworks.join(', ')}` : 'all networks', `with enhanced retry...`);
-      const allTransfers = await fetchTransfersWithFallback(
-        () => fetchLastTransfers({
-          getNetworkWithSettings,
-          getBridgeInstancesWithSettings,
-          bridgeAddresses, // Pass bridge addresses for filtering
-          targetNetworks // Pass specific networks to search
-        }),
-        {
-          maxRetries: 3,
-          baseDelay: 1000,
-          enableSearchDepthAwareRetry: true,
-          onRetryStatus: (status) => {
-            setRetryStatus({ ...status, type: 'transfers' });
+          // Filter by network if specified - check both home and foreign networks
+          if (targetNetworks && !targetNetworks.includes(bridge.homeNetwork) && !targetNetworks.includes(bridge.foreignNetwork)) {
+            return false;
           }
-        }
-      );
-
-      console.log(`🔍 Raw transfers fetched:`, {
-        totalTransfers: allTransfers.length,
-        transfers: allTransfers.map(t => ({
-          eventType: t.eventType,
-          senderAddress: t.senderAddress,
-          recipientAddress: t.recipientAddress,
-          amount: t.amount?.toString(),
-          transactionHash: t.transactionHash,
-          blockNumber: t.blockNumber,
-          bridgeAddress: t.bridgeAddress,
-          networkKey: t.networkKey,
-          bridgeType: t.bridgeType,
-          direction: t.direction,
-          fromNetwork: t.fromNetwork,
-          toNetwork: t.toNetwork
-        }))
-      });
-
-      // Log the full transfer object for the first transfer
-      if (allTransfers.length > 0) {
-        console.log(`🔍 Full first transfer object:`, allTransfers[0]);
-      }
-
-      // Aggregate claims and transfers with fraud detection
-      console.log('🔍 Aggregating claims and transfers with fraud detection...');
-      console.log('🔍 About to call aggregateClaimsAndTransfers with:', {
-        claimsCount: allClaims.length,
-        transfersCount: allTransfers.length,
-        firstTransfer: allTransfers[0] ? {
-          eventType: allTransfers[0].eventType,
-          transactionHash: allTransfers[0].transactionHash,
-          senderAddress: allTransfers[0].senderAddress
-        } : null
-      });
-      
-      let aggregated;
-      try {
-        aggregated = aggregateClaimsAndTransfers(allClaims, allTransfers);
-        console.log('🔍 Aggregation completed successfully');
-      } catch (error) {
-        console.error('🔍 Error in aggregation:', error);
-        // Create a fallback aggregated object
-        aggregated = {
-          completedTransfers: [],
-          suspiciousClaims: [],
-          pendingTransfers: allTransfers.map(t => ({ ...t, status: 'pending' })),
-          fraudDetected: false,
-          stats: {
-            totalClaims: allClaims.length,
-            totalTransfers: allTransfers.length,
-            completedTransfers: 0,
-            suspiciousClaims: 0,
-            pendingTransfers: allTransfers.length
-          }
-        };
-      }
-      
-      console.log('🔍 Aggregation completed, result:', {
-        hasResult: !!aggregated,
-        completedTransfers: aggregated?.completedTransfers?.length || 0,
-        pendingTransfers: aggregated?.pendingTransfers?.length || 0,
-        suspiciousClaims: aggregated?.suspiciousClaims?.length || 0
-      });
-
-      console.log('🔍 Aggregated data:', {
-        completedTransfers: aggregated.completedTransfers.length,
-        suspiciousClaims: aggregated.suspiciousClaims.length,
-        pendingTransfers: aggregated.pendingTransfers.length,
-        fraudDetected: aggregated.fraudDetected
-      });
-
-      // Debug: Show details of all aggregated data
-      console.log('🔍 Aggregated data breakdown:', {
-        completedTransfers: aggregated.completedTransfers.length,
-        suspiciousClaims: aggregated.suspiciousClaims.length,
-        pendingTransfers: aggregated.pendingTransfers.length,
-        fraudDetected: aggregated.fraudDetected
-      });
-
-      // Debug: Show details of pending transfers
-      if (aggregated.pendingTransfers.length > 0) {
-        console.log('🔍 Pending transfers details (BEFORE time filtering):', aggregated.pendingTransfers.map(t => ({
-          eventType: t.eventType,
-          senderAddress: t.senderAddress,
-          recipientAddress: t.recipientAddress,
-          amount: t.amount?.toString(),
-          transactionHash: t.transactionHash,
-          blockNumber: t.blockNumber,
-          timestamp: t.timestamp,
-          timestampDate: t.timestamp ? new Date(t.timestamp * 1000).toISOString() : 'No timestamp',
-          status: t.status,
-          bridgeAddress: t.bridgeAddress,
-          networkKey: t.networkKey
-        })));
-      } else {
-        console.log('🔍 No pending transfers found');
-      }
-
-      // Debug: Show details of completed transfers
-      if (aggregated.completedTransfers.length > 0) {
-        console.log('🔍 Completed transfers details:', aggregated.completedTransfers.map(t => ({
-          eventType: t.eventType,
-          senderAddress: t.senderAddress,
-          recipientAddress: t.recipientAddress,
-          amount: t.amount?.toString(),
-          transactionHash: t.transactionHash,
-          blockNumber: t.blockNumber,
-          status: t.status,
-          bridgeAddress: t.bridgeAddress,
-          networkKey: t.networkKey
-        })));
-      } else {
-        console.log('🔍 No completed transfers found');
-      }
-
-      // Apply time window filtering based on History Search Depth to the aggregated result
-      let filteredAggregated = aggregated; // Default to unfiltered
-      
-      try {
-        // Get history search depth from settings, default to 168 hours (1 week) if not set
-        const historySearchDepth = settings?.historySearchDepth || 168;
-        const cutoffTs = Math.floor(Date.now() / 1000) - Math.floor(historySearchDepth * 3600);
-        const withinWindow = (ts) => typeof ts === 'number' && ts >= cutoffTs;
-
-        console.log('🔍 Time filtering debug:', {
-          historySearchDepth,
-          currentTime: Math.floor(Date.now() / 1000),
-          cutoffTs,
-          cutoffDate: new Date(cutoffTs * 1000).toISOString()
-        });
-
-        const filteredCompleted = (aggregated.completedTransfers || []).filter((ct) => {
-          // Prefer transfer timestamp when available
-          if (ct.transfer?.timestamp) {
-            const result = withinWindow(ct.transfer.timestamp);
-            console.log(`🔍 Completed transfer ${ct.transfer.transactionHash} timestamp check:`, {
-              timestamp: ct.transfer.timestamp,
-              timestampDate: new Date(ct.transfer.timestamp * 1000).toISOString(),
-              cutoffTs,
-              cutoffDate: new Date(cutoffTs * 1000).toISOString(),
-              withinWindow: result
-            });
-            return result;
-          }
-          // Fallbacks: blockTimestamp on claim if present
-          if (ct.blockTimestamp) return withinWindow(ct.blockTimestamp);
-          // As a last resort, use expiryTs if available (approximation)
-          if (ct.expiryTs) {
-            const exp = typeof ct.expiryTs.toNumber === 'function' ? ct.expiryTs.toNumber() : ct.expiryTs;
-            return withinWindow(exp);
-          }
-          return false;
-        });
-
-        const filteredPending = (aggregated.pendingTransfers || []).filter((pt) => {
-          const result = withinWindow(pt.timestamp);
-          console.log(`🔍 Pending transfer ${pt.transactionHash} timestamp check:`, {
-            timestamp: pt.timestamp,
-            timestampDate: new Date(pt.timestamp * 1000).toISOString(),
-            cutoffTs,
-            cutoffDate: new Date(cutoffTs * 1000).toISOString(),
-            withinWindow: result
-          });
-          return result;
-        });
-
-        const filteredSuspicious = (aggregated.suspiciousClaims || []).filter((sc) => {
-          // If we have a timestamp-like field, use it
-          if (sc.blockTimestamp) return withinWindow(sc.blockTimestamp);
-          // No timestamp: approximate using expiryTs if present; otherwise exclude
-          if (sc.expiryTs) {
-            const exp = typeof sc.expiryTs.toNumber === 'function' ? sc.expiryTs.toNumber() : sc.expiryTs;
-            return withinWindow(exp);
-          }
-          return false;
-        });
-
-        filteredAggregated = {
-          ...aggregated,
-          completedTransfers: filteredCompleted,
-          pendingTransfers: filteredPending,
-          suspiciousClaims: filteredSuspicious,
-          stats: {
-            ...aggregated.stats,
-            completedTransfers: filteredCompleted.length,
-            pendingTransfers: filteredPending.length,
-            suspiciousClaims: filteredSuspicious.length,
-          },
-        };
-
-        console.log('🔍 Time-filtered aggregation:', {
-          cutoffTs,
-          completedTransfers: filteredAggregated.completedTransfers.length,
-          pendingTransfers: filteredAggregated.pendingTransfers.length,
-          suspiciousClaims: filteredAggregated.suspiciousClaims.length,
-      });
-      } catch (filterErr) {
-        console.warn('⚠️ Failed to apply time filtering to aggregated data, using unfiltered results:', filterErr);
-      }
-
-      // Update claims and aggregated data
-      // Since we're not auto-updating cached data anymore, always set fresh data directly
-        setAggregatedData(filteredAggregated);
-      setClaims(allClaims);
-
-      // Cache the fresh data
-      console.log('💾 Caching fresh data to browser storage...');
-      setCachedData(STORAGE_KEYS.CLAIMS, allClaims);
-      setCachedData(STORAGE_KEYS.TRANSFERS, allTransfers);
-      setCachedData(STORAGE_KEYS.AGGREGATED, filteredAggregated);
-      setCachedData(STORAGE_KEYS.SETTINGS, contractSettings);
-
-      // Update cache status
-      setCacheStatus(prev => ({
-        ...prev,
-        hasCachedData: true,
-        isShowingCached: false,
-        isRefreshing: false,
-        lastUpdated: new Date(),
-        cacheAge: 0
-      }));
-
-      // Load stake information for all claims
-      loadStakeInformation(allClaims);
-
-      // Set current block from the first available network for timestamp calculations
-      if (!currentBlock) {
-        try {
-          // Try to get current block from any available network
-          const networksWithSettings = Object.values(NETWORKS).filter(network => 
-            getNetworkWithSettings(network.symbol)?.rpcUrl
-          );
+          return true;
+        })
+        .map(bridge => {
+          // Map network names to network keys
+          const networkKeyMap = {
+            'Ethereum': 'ETHEREUM',
+            'BSC': 'BSC', 
+            '3dpass': 'THREEDPASS'
+          };
           
-          if (networksWithSettings.length > 0) {
-            const networkConfig = getNetworkWithSettings(networksWithSettings[0].symbol);
-          if (networkConfig?.rpcUrl) {
-            const networkProvider = new ethers.providers.JsonRpcProvider(networkConfig.rpcUrl);
-            const block = await networkProvider.getBlock('latest');
-            setCurrentBlock(block);
-              console.log(`🔍 Set current block from ${networksWithSettings[0].symbol}:`, {
-                blockNumber: block.number,
-                timestamp: block.timestamp,
-                timestampDate: new Date(block.timestamp * 1000).toISOString()
-              });
-            }
-          } else {
-            console.log('⚠️ No networks with RPC URLs available for current block');
-              }
-            } catch (error) {
-          console.log(`🔍 Could not get block for timestamp calculations:`, error.message);
-        }
-      }
-
-      console.log(`✅ FINAL RESULT: Loaded ${allClaims.length} claims and ${allTransfers.length} transfers`);
-      console.log(`✅ Aggregation results:`, {
-        completedTransfers: aggregated.stats.completedTransfers,
-        suspiciousClaims: aggregated.stats.suspiciousClaims,
-        pendingTransfers: aggregated.stats.pendingTransfers,
-        fraudDetected: aggregated.fraudDetected
-      });
-
-      // Debug: Log first few fresh claims to see their structure
-      if (allClaims.length > 0) {
-        console.log('🔍 First fresh claim structure:', {
-          claimNum: allClaims[0].claimNum,
-          actualClaimNum: allClaims[0].actualClaimNum,
-          amount: allClaims[0].amount?.toString(),
-          reward: allClaims[0].reward?.toString(),
-          yesStake: allClaims[0].yesStake?.toString(),
-          noStake: allClaims[0].noStake?.toString(),
-          currentOutcome: allClaims[0].currentOutcome,
-          finished: allClaims[0].finished,
-          withdrawn: allClaims[0].withdrawn
+          return {
+            bridgeAddress: bridge.address,
+            networkKey: networkKeyMap[bridge.homeNetwork] || bridge.homeNetwork,
+            bridgeType: bridge.type,
+            homeNetwork: bridge.homeNetwork,
+            foreignNetwork: bridge.foreignNetwork
+          };
         });
+      
+      console.log(`🔍 Found ${bridgeConfigs.length} bridges to discover`);
+      
+      // Step 2: Discover all bridge events in parallel
+      const discoveryResults = await discoverAllBridgeEvents(bridgeConfigs, {
+        limit: 50,
+        includeClaimData: false // We'll load claim data separately
+      });
+      
+      console.log('✅ Parallel discovery completed:', discoveryResults.stats);
+      
+      // Step 3: Categorize results
+      const completedTransfers = discoveryResults.allMatchedTransfers.filter(t => t.isComplete);
+      const pendingTransfers = discoveryResults.allMatchedTransfers.filter(t => !t.isComplete);
+      
+      // Update discovery state
+      setDiscoveryState(prev => ({
+        ...prev,
+        bridgeResults: discoveryResults.bridgeResults,
+        matchedTransfers: discoveryResults.allMatchedTransfers,
+        completedTransfers,
+        pendingTransfers,
+        discoveryProgress: {
+          bridgesCompleted: discoveryResults.stats.successfulBridges,
+          totalBridges: discoveryResults.stats.totalBridges,
+          claimDataLoaded: 0,
+          totalClaims: discoveryResults.stats.totalClaims
+        }
+      }));
+      
+      // Step 4: Load claim data in parallel with real-time updates
+      if (discoveryResults.allMatchedTransfers.length > 0) {
+        console.log('🔄 Loading claim data in parallel with real-time updates...');
+        
+        await loadClaimDataWithUpdates(
+          discoveryResults.allMatchedTransfers,
+          (updatedTransfers) => {
+            // Real-time UI update callback
+            const completed = updatedTransfers.filter(t => t.isComplete);
+            const pending = updatedTransfers.filter(t => !t.isComplete);
+            
+            setDiscoveryState(prev => ({
+              ...prev,
+              matchedTransfers: updatedTransfers,
+              completedTransfers: completed,
+              pendingTransfers: pending,
+              discoveryProgress: {
+                ...prev.discoveryProgress,
+                claimDataLoaded: completed.length
+              }
+            }));
+          }
+        );
+        
+        console.log('✅ Claim data loading completed');
       }
-
-      // Clear retry status on success
-      setRetryStatus(null);
-
-      // Cache statistics removed from UI - cache still works internally
+      
+      // Step 5: Create aggregated data structure
+      const aggregated = {
+        completedTransfers: discoveryResults.allMatchedTransfers.filter(t => t.isComplete),
+        suspiciousClaims: [], // Would be populated by fraud detection
+        pendingTransfers: discoveryResults.allMatchedTransfers.filter(t => !t.isComplete),
+        fraudDetected: false,
+          stats: {
+          totalClaims: discoveryResults.stats.totalClaims,
+          totalTransfers: discoveryResults.stats.totalTransfers,
+          completedTransfers: discoveryResults.allMatchedTransfers.filter(t => t.isComplete).length,
+          suspiciousClaims: 0,
+          pendingTransfers: discoveryResults.allMatchedTransfers.filter(t => !t.isComplete).length
+        }
+      };
+      
+      setAggregatedData(aggregated);
+      
+      // Step 6: Load stake information for completed claims
+      const completedClaims = discoveryResults.allMatchedTransfers
+        .filter(t => t.isComplete && t.claim)
+        .map(t => t.claim);
+      
+      if (completedClaims.length > 0) {
+        console.log('🔄 Loading stake information for completed claims...');
+        loadStakeInformation(completedClaims);
+      }
+      
+      console.log('✅ Parallel discovery and aggregation completed');
 
     } catch (error) {
-      console.error('Error loading claims and transfers from all networks:', error);
-      
-      // Enhanced error handling with retry and search depth information
-      if (error.message?.includes('Search depth limit too restrictive')) {
-        toast.error(`Search depth too restrictive: ${error.message}. Please increase search depth in settings.`);
-      } else if (error.message?.includes('429') || error.message?.includes('rate limit')) {
-        toast.error(`Rate limit exceeded. Retrying with fallback providers...`);
-      } else if (error.message?.includes('Circuit breaker is OPEN')) {
-        toast.error(`Provider temporarily unavailable. Using fallback providers...`);
-      } else if (error.message?.includes('All providers failed')) {
-        toast.error(`All RPC providers failed. Please check your network connection and RPC settings.`);
-      } else {
-        toast.error(`Failed to load data: ${error.message}`);
-      }
+      console.error('❌ Parallel discovery failed:', error);
+      toast.error(`Discovery failed: ${error.message}`);
     } finally {
       setLoading(false);
-      // Mark that initial load is complete
-      if (isInitialLoad) {
-        setIsInitialLoad(false);
+      setDiscoveryState(prev => ({ ...prev, isDiscovering: false }));
       }
-    }
-  }, [account, currentBlock, getNetworkWithSettings, getBridgeInstancesWithSettings, filter, bridgeDirection, getTransferTokenSymbol, getTokenDecimals, isInitialLoad, loadStakeInformation, loadCachedData, cacheStatus.hasCachedData, contractSettings, settings?.historySearchDepth, loading, isSearching]);
+  }, [bridgeDirection, getBridgeInstancesWithSettings, loading, isSearching, discoveryState.isDiscovering, isInitialLoad, loadCachedData, loadStakeInformation]);
+
+  // Legacy discovery system removed - using only parallel discovery system
 
   // Cache management functions
   const clearCache = useCallback(() => {
@@ -1713,32 +1512,32 @@ const ClaimList = () => {
   }, []);
 
   const refreshData = useCallback(() => {
-    console.log('🔄 Force refreshing data...');
+    console.log('🔄 Force refreshing data using parallel discovery...');
     setCacheStatus(prev => ({ ...prev, isRefreshing: true }));
-    loadClaimsAndTransfers(true);
+    loadClaimsAndTransfersParallel(true);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []); // Removed loadClaimsAndTransfers from dependencies to prevent infinite loop
+  }, []); // Removed loadClaimsAndTransfersParallel from dependencies to prevent infinite loop
 
   const searchSelectedDirection = useCallback(async () => {
-    console.log('🔍 Starting discovery for direction:', bridgeDirection);
+    console.log('🔍 Starting parallel discovery for direction:', bridgeDirection);
     setIsSearching(true);
     setCacheStatus(prev => ({ ...prev, isRefreshing: true }));
     
     try {
-      await loadClaimsAndTransfers(true);
+      await loadClaimsAndTransfersParallel(true);
       const directionName = bridgeDirection === 'all' 
         ? 'All Bridge Directions' 
         : getBridgeDirections().find(d => d.id === bridgeDirection)?.name || bridgeDirection;
-      toast.success(`Discovery completed for ${directionName}`);
+      toast.success(`Parallel discovery completed for ${directionName}`);
     } catch (error) {
-      console.error('❌ Error during direction search:', error);
+      console.error('❌ Error during parallel discovery:', error);
       toast.error('Failed to discover data for selected direction');
     } finally {
       setIsSearching(false);
       setCacheStatus(prev => ({ ...prev, isRefreshing: false }));
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [bridgeDirection]); // Removed loadClaimsAndTransfers from dependencies to prevent double execution
+  }, [bridgeDirection]); // Removed loadClaimsAndTransfersParallel from dependencies to prevent double execution
 
   // Check if a claim was recently updated
   const isClaimRecentlyUpdated = useCallback((claim) => {
@@ -1755,9 +1554,9 @@ const ClaimList = () => {
   const handleClaimSubmitted = useCallback((claimData) => {
     console.log('🔍 Claim submitted successfully, refreshing claim list:', claimData);
     // Refresh the claim list to show the new claim
-    loadClaimsAndTransfers();
+    loadClaimsAndTransfersParallel();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []); // Empty dependency array since loadClaimsAndTransfers is stable
+  }, []); // Empty dependency array since loadClaimsAndTransfersParallel is stable
 
   // Callback for when a claim is withdrawn successfully
   const handleWithdrawSuccess = useCallback((claimNum) => {
@@ -1767,9 +1566,9 @@ const ClaimList = () => {
     // Clear cache to ensure fresh data is fetched
     clearAllCachedEvents();
     // Refresh the claims list
-    loadClaimsAndTransfers();
+    loadClaimsAndTransfersParallel();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []); // Empty dependency array since loadClaimsAndTransfers is stable
+  }, []); // Empty dependency array since loadClaimsAndTransfersParallel is stable
 
   // Callback for when a claim is challenged successfully
   const handleChallengeSuccess = useCallback((claimNum) => {
@@ -1779,9 +1578,9 @@ const ClaimList = () => {
     // Clear cache to ensure fresh data is fetched
     clearAllCachedEvents();
     // Refresh the claims list
-    loadClaimsAndTransfers();
+    loadClaimsAndTransfersParallel();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []); // Empty dependency array since loadClaimsAndTransfers is stable
+  }, []); // Empty dependency array since loadClaimsAndTransfersParallel is stable
 
   // Manual update for a specific claim
   const updateSpecificClaim = useCallback(async (claim) => {
@@ -2344,24 +2143,36 @@ const ClaimList = () => {
         </div>
       )}
 
-      {/* Retry Status - Only show when actively retrying */}
-      {retryStatus && (
+
+      {/* Parallel Discovery Progress */}
+      {discoveryState.isDiscovering && (
         <div className="mb-4 p-3 bg-dark-800 rounded-lg border border-dark-700">
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-2 text-sm">
-              <span className="text-secondary-400">Retry Status:</span>
-              <span className="text-yellow-400">
-                {retryStatus.type} - Attempt {retryStatus.attempt}/{retryStatus.maxAttempts}
+              <span className="text-secondary-400">Parallel Discovery:</span>
+              <span className="text-blue-400">
+                Bridges: {discoveryState.discoveryProgress.bridgesCompleted}/{discoveryState.discoveryProgress.totalBridges}
               </span>
-              {retryStatus.delay && (
-                <span className="text-secondary-400">
-                  (Next retry in {Math.round(retryStatus.delay / 1000)}s)
+              <span className="text-secondary-400">•</span>
+              <span className="text-green-400">
+                Claims: {discoveryState.discoveryProgress.claimDataLoaded}/{discoveryState.discoveryProgress.totalClaims}
                 </span>
-              )}
             </div>
             <div className="flex items-center gap-2">
-              <div className="w-2 h-2 bg-yellow-500 rounded-full animate-pulse"></div>
-              <span className="text-xs text-yellow-400">Retrying...</span>
+              <div className="w-2 h-2 bg-blue-500 rounded-full animate-pulse"></div>
+              <span className="text-xs text-blue-400">Discovering...</span>
+            </div>
+          </div>
+          <div className="mt-2">
+            <div className="w-full bg-dark-700 rounded-full h-2">
+              <div 
+                className="bg-blue-500 h-2 rounded-full transition-all duration-300"
+                style={{ 
+                  width: `${discoveryState.discoveryProgress.totalBridges > 0 
+                    ? (discoveryState.discoveryProgress.bridgesCompleted / discoveryState.discoveryProgress.totalBridges) * 100 
+                    : 0}%` 
+                }}
+              ></div>
             </div>
           </div>
         </div>

@@ -6,8 +6,14 @@ import { NETWORKS, getBridgeInstances, getAssistantContracts, P3D_PRECOMPILE_ADD
  */
 export const loadSettings = () => {
   try {
-    const savedSettings = localStorage.getItem('bridgeSettings');
-    return savedSettings ? JSON.parse(savedSettings) : null;
+    // Check if we're in a browser environment
+    if (typeof window !== 'undefined' && window.localStorage) {
+      const savedSettings = localStorage.getItem('bridgeSettings');
+      return savedSettings ? JSON.parse(savedSettings) : null;
+    } else {
+      // Node.js environment - return null (will use defaults)
+      return null;
+    }
   } catch (error) {
     console.error('Error loading settings:', error);
     return null;

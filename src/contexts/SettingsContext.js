@@ -46,9 +46,7 @@ export const SettingsProvider = ({ children }) => {
       console.error('Error initializing settings:', error);
       // Fallback to defaults
       const defaultSettings = {
-        // Global settings
-        historySearchDepth: 1, // Default to 1 hour
-        claimSearchDepth: 1, // Default to 1 hour for claim search
+        // Global settings - search depth removed as unified fetcher gets all events
       };
       Object.keys(NETWORKS).forEach(networkKey => {
         const network = NETWORKS[networkKey];
@@ -366,9 +364,7 @@ export const SettingsProvider = ({ children }) => {
     try {
       localStorage.removeItem('bridgeSettings');
       const defaultSettings = {
-        // Global settings
-        historySearchDepth: 1, // Default to 1 hour
-        claimSearchDepth: 1, // Default to 1 hour for claim search
+        // Global settings - search depth removed as unified fetcher gets all events
       };
       Object.keys(NETWORKS).forEach(networkKey => {
         const network = NETWORKS[networkKey];

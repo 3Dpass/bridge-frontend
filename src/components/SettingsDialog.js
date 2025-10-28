@@ -3295,69 +3295,7 @@ const SettingsDialog = ({ isOpen, onClose }) => {
                 <Settings className="w-5 h-5 text-primary-500" />
                 <h3 className="text-lg font-semibold text-white">Global Settings</h3>
               </div>
-
-              {/* History Search Depth */}
-              <div className="mb-4">
-                <label className="text-sm font-medium text-secondary-300 mb-2 block">
-                  History Search Depth
-                </label>
-                <select
-                  value={settings?.historySearchDepth || 168}
-                  onChange={(e) => {
-                    const newSettings = { ...settings };
-                    newSettings.historySearchDepth = parseFloat(e.target.value);
-                    saveSettings(newSettings);
-                  }}
-                  className="input-field"
-                >
-                  <option value={0.25}>15 minutes</option>
-                  <option value={0.5}>30 minutes</option>
-                  <option value={1}>1 hour</option>
-                  <option value={2}>2 hours</option>
-                  <option value={6}>6 hours</option>
-                  <option value={12}>12 hours</option>
-                  <option value={24}>1 day</option>
-                  <option value={48}>2 days</option>
-                  <option value={72}>3 days</option>
-                  <option value={168}>1 week</option>
-                  <option value={720}>1 month</option>
-                </select>
-                <p className="text-xs text-secondary-400 mt-1">
-                  How far back to search for bridge transactions and claims
-                </p>
-              </div>
-
-              {/* Claim Search Depth */}
-              <div className="mb-4">
-                <label className="text-sm font-medium text-secondary-300 mb-2 block">
-                  Claim Search Depth
-                </label>
-                <select
-                  value={settings?.claimSearchDepth || 168}
-                  onChange={(e) => {
-                    const newSettings = { ...settings };
-                    newSettings.claimSearchDepth = parseFloat(e.target.value);
-                    saveSettings(newSettings);
-                  }}
-                  className="input-field"
-                >
-                  <option value={0.25}>15 minutes</option>
-                  <option value={0.5}>30 minutes</option>
-                  <option value={1}>1 hour</option>
-                  <option value={2}>2 hours</option>
-                  <option value={6}>6 hours</option>
-                  <option value={12}>12 hours</option>
-                  <option value={24}>1 day</option>
-                  <option value={48}>2 days</option>
-                  <option value={72}>3 days</option>
-                  <option value={168}>1 week</option>
-                  <option value={720}>1 month</option>
-                </select>
-                <p className="text-xs text-secondary-400 mt-1">
-                  How far back to search for claim events specifically
-                </p>
-              </div>
-              </div>
+            </div>
           </div>
 
           {/* Footer */}
@@ -3398,7 +3336,6 @@ const SettingsDialog = ({ isOpen, onClose }) => {
           </div>
         </motion.div>
       </motion.div>
-
       {/* Create New Assistant Dialog */}
       {Object.entries(NETWORKS).map(([networkKey, networkConfig]) => (
         showCreateAssistant[networkKey] && (

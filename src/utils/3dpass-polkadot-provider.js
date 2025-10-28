@@ -1,5 +1,4 @@
 import { ApiPromise, WsProvider } from '@polkadot/api';
-import { request } from './request.js';
 
 /**
  * 3DPass Polkadot.js Provider for fetching EVM logs
