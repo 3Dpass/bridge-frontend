@@ -13,12 +13,12 @@ const TEST_CONFIGS = [
     name: 'BSC',
     bridgeAddress: '0x078E7A2037b63846836E9d721cf2dabC08b94281', // P3D Import Bridge on BSC
     networkKey: 'BSC',
-    rpcUrl: 'https://bsc.drpc.org',
-    chainId: 56
+    rpcUrl: NETWORKS.BSC.rpcUrl,
+    chainId: NETWORKS.BSC.id
   },
   {
     name: 'Ethereum',
-    bridgeAddress: '0x50fcE1D58b41c3600C74de03238Eee71aFDfBf1F', // P3D Export Bridge on Ethereum
+    bridgeAddress: '0x4f3a4e37701402C61146071309e45A15843025E1', // P3D Export Bridge on Ethereum
     networkKey: 'ETHEREUM',
     rpcUrl: NETWORKS.ETHEREUM.rpcUrl,
     chainId: NETWORKS.ETHEREUM.id

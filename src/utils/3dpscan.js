@@ -2,6 +2,7 @@ import { request } from './request.js';
 import { wait } from './utils.js';
 
 const threedpass_base_url = process.env.testnet ? 'https://api-testnet.3dpscan.xyz' : 'https://api.3dpscan.xyz';
+const PAGE_SIZE = 25; // Adjustable page size for 3DPass API requests
 let last_req_ts = 0;
 
 /**
@@ -18,7 +19,7 @@ async function getAddressBlocks({ address, startblock, endblock, count = 0 }) {
 		let page = 1;
 		let all_blocks = [];
 		let consecutive_empty_pages = 0;
-		const max_empty_pages = 3; // Stop after 3 consecutive pages with no relevant events
+		const max_empty_pages = 2; // Stop after 2 consecutive pages with no relevant events
 		
 		while (true) {
 			// Rate limiting: 1 request per second
@@ -29,11 +30,13 @@ async function getAddressBlocks({ address, startblock, endblock, count = 0 }) {
 			}
 			
 			// Build URL for EVM events query
-			let url = `${threedpass_base_url}/events?section=evm&is_extrinsic=false&block_start=${startblock || 0}`;
+			let url = `${threedpass_base_url}/events?section=evm&method=Log&is_extrinsic=false&time_dimension=block&page=${page}&page_size=${PAGE_SIZE}`;
+			if (startblock) {
+				url += `&block_start=${startblock}`;
+			}
 			if (endblock) {
 				url += `&block_end=${endblock}`;
 			}
-			url += `&page=${page}`;
 			
 			console.log(`Querying 3DPass EVM events for address ${address}: ${url}`);
 			const resp = await request(url);
