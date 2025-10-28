@@ -6,6 +6,7 @@ import toast from 'react-hot-toast';
 import { parseAndValidateReward } from '../utils/safe-reward-handler';
 import { addTransferEventToStorage } from './ClaimList';
 import { getBlockTimestamp } from '../utils/bridge-contracts';
+import { parseTransactionError } from '../utils/error-parser';
 
 // Safely convert to EIP-55 checksum if it's an EVM address
 const toChecksumAddress = (address) => {
@@ -39,111 +40,6 @@ const Expatriation = ({
   const [isCheckingApproval, setIsCheckingApproval] = useState(true);
   const [useMaxAllowance, setUseMaxAllowance] = useState(false);
   const [isRevoking, setIsRevoking] = useState(false);
-
-  // Helper function to parse and categorize errors
-  const parseError = (error) => {
-    const errorMessage = error.message || error.toString();
-    
-    // User rejection/cancellation
-    if (errorMessage.includes('user rejected') || 
-        errorMessage.includes('ACTION_REJECTED') ||
-        errorMessage.includes('User denied') ||
-        errorMessage.includes('cancelled') ||
-        error.code === 'ACTION_REJECTED') {
-      return {
-        type: 'user_rejection',
-        title: 'Transaction Cancelled',
-        message: 'You cancelled the transaction. No changes were made.',
-        canRetry: true,
-        isUserError: true
-      };
-    }
-    
-    // Transaction replaced/repriced (user adjusted gas)
-    if (errorMessage.includes('transaction was replaced') ||
-        error.code === 'TRANSACTION_REPLACED') {
-      return {
-        type: 'transaction_replaced',
-        title: 'Transaction Repriced',
-        message: 'Your wallet automatically adjusted the gas price for faster confirmation. The transaction was successful.',
-        canRetry: false,
-        isUserError: false,
-        isSuccess: true
-      };
-    }
-    
-    // Transaction hash issues (specific to your problem)
-    if (errorMessage.includes('Transaction does not have a transaction hash') ||
-        errorMessage.includes('there was a problem') ||
-        error.code === -32603) {
-      return {
-        type: 'transaction_hash_error',
-        title: 'Transaction Submission Failed',
-        message: 'The transaction could not be submitted properly. This often happens with allowance increases.',
-        canRetry: true,
-        isUserError: false
-      };
-    }
-    
-    // Insufficient funds
-    if (errorMessage.includes('insufficient funds') || 
-        errorMessage.includes('insufficient balance')) {
-      return {
-        type: 'insufficient_funds',
-        title: 'Insufficient Funds',
-        message: 'You don\'t have enough tokens or ETH to complete this transaction.',
-        canRetry: false,
-        isUserError: true
-      };
-    }
-    
-    // Gas estimation failed
-    if (errorMessage.includes('gas required exceeds allowance') ||
-        errorMessage.includes('gas estimation failed')) {
-      return {
-        type: 'gas_error',
-        title: 'Gas Estimation Failed',
-        message: 'The transaction requires more gas than available. Try increasing gas limit.',
-        canRetry: true,
-        isUserError: false
-      };
-    }
-    
-    // Network issues
-    if (errorMessage.includes('network') || 
-        errorMessage.includes('timeout') ||
-        errorMessage.includes('connection')) {
-      return {
-        type: 'network_error',
-        title: 'Network Error',
-        message: 'There was a network issue. Please check your connection and try again.',
-        canRetry: true,
-        isUserError: false
-      };
-    }
-    
-    // Contract/transaction errors
-    if (errorMessage.includes('execution reverted') ||
-        errorMessage.includes('revert')) {
-      return {
-        type: 'contract_error',
-        title: 'Transaction Failed',
-        message: 'The transaction was rejected by the smart contract. Please check your inputs.',
-        canRetry: true,
-        isUserError: false
-      };
-    }
-    
-    // Default error
-    return {
-      type: 'unknown',
-      title: 'Operation Failed',
-      message: errorMessage,
-      canRetry: true,
-      isUserError: false
-    };
-  };
-
 
   // Create token contract for approval
   const createTokenContract = useCallback((tokenAddress) => {
@@ -234,7 +130,7 @@ const Expatriation = ({
       return needsApproval;
     } catch (error) {
       console.error('Error checking approval:', error);
-      const errorInfo = parseError(error);
+      const errorInfo = parseTransactionError(error);
       
       // Show toast notification
       toast.error(
@@ -399,7 +295,7 @@ const Expatriation = ({
     } catch (error) {
       console.error('❌ Approval failed:', error);
       
-      const errorInfo = parseError(error);
+      const errorInfo = parseTransactionError(error);
       
       // Handle transaction replacement as success
       if (errorInfo.type === 'transaction_replaced') {
@@ -799,7 +695,7 @@ const Expatriation = ({
       
     } catch (error) {
       console.error('❌ Transfer failed:', error);
-      const errorInfo = parseError(error);
+      const errorInfo = parseTransactionError(error);
       
       // Show toast notification
       toast.error(
@@ -847,7 +743,7 @@ const Expatriation = ({
         }
       } catch (error) {
         console.error('Error in approval check:', error);
-        const errorInfo = parseError(error);
+        const errorInfo = parseTransactionError(error);
         
         // Show toast notification
         toast.error(
@@ -933,7 +829,7 @@ const Expatriation = ({
       
     } catch (error) {
       console.error('❌ Allowance revocation failed:', error);
-      const errorInfo = parseError(error);
+      const errorInfo = parseTransactionError(error);
       
       // Handle transaction replacement as success
       if (errorInfo.type === 'transaction_replaced') {

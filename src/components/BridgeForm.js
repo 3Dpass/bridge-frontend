@@ -5,6 +5,8 @@ import { NETWORKS } from '../config/networks';
 import { getTokenBalance, isValidAddress, isValidAmount } from '../utils/web3';
 import { transferToForeignChain, createBridgeContract } from '../utils/bridge-contracts';
 import { getMaxSafeReward } from '../utils/safe-reward-handler';
+import { convertActualToDisplay, convertDisplayToActual } from '../utils/decimal-converter';
+import { switchNetwork } from '../utils/network-switcher';
 import { ArrowDown, ArrowRightLeft, Eye, EyeOff } from 'lucide-react';
 import { motion } from 'framer-motion';
 import Expatriation from './Expatriation';
@@ -24,53 +26,6 @@ const compareBalances = (amount, balance, tolerance = 0.000001) => {
   
   // Use tolerance for floating point precision issues
   return numAmount <= numBalance + tolerance;
-};
-
-// Convert from actual amount (from contract) to display amount (with multiplier)
-const convertActualToDisplay = (actualAmount, decimals, tokenAddress, getTokenDecimalsDisplayMultiplier) => {
-  try {
-    if (!actualAmount || parseFloat(actualAmount) === 0) return '0';
-    
-    const num = parseFloat(actualAmount);
-    
-    // Check if this is a P3D token and apply the multiplier
-    if (tokenAddress) {
-      const decimalsDisplayMultiplier = getTokenDecimalsDisplayMultiplier(tokenAddress);
-      if (decimalsDisplayMultiplier) {
-        // Apply the multiplier: 0.000001 * 1000000 = 1.0
-        const displayNumber = num * decimalsDisplayMultiplier;
-        return displayNumber.toFixed(6).replace(/\.?0+$/, '') || '0';
-      }
-    }
-    
-    return actualAmount;
-  } catch (error) {
-    return '0';
-  }
-};
-
-// Convert from display amount (with multiplier) to actual amount (for contract)
-const convertDisplayToActual = (displayAmount, decimals, tokenAddress, getTokenDecimalsDisplayMultiplier) => {
-  try {
-    if (!displayAmount || parseFloat(displayAmount) === 0) return '0';
-    
-    const num = parseFloat(displayAmount);
-    
-    // Check if this is a P3D token and remove the multiplier
-    if (tokenAddress) {
-      const decimalsDisplayMultiplier = getTokenDecimalsDisplayMultiplier(tokenAddress);
-      if (decimalsDisplayMultiplier) {
-        // Remove the multiplier: 1.0 / 1000000 = 0.000001
-        const actualNumber = num / decimalsDisplayMultiplier;
-        // Format to the correct number of decimal places to avoid precision issues
-        return actualNumber.toFixed(decimals);
-      }
-    }
-    
-    return displayAmount;
-  } catch (error) {
-    return '0';
-  }
 };
 
 const BridgeForm = ({ onNavigateToTransfers }) => {
@@ -542,70 +497,29 @@ const BridgeForm = ({ onNavigateToTransfers }) => {
 
   // Switch to selected network
   const switchToNetwork = async (networkName) => {
-    if (!window.ethereum) {
-      console.error('MetaMask not available');
+    const networkKey = Object.keys(NETWORKS).find(key => NETWORKS[key].name === networkName);
+    if (!networkKey) {
+      console.error('Network not found:', networkName);
+      toast.error(`Network ${networkName} not found`);
       return false;
     }
 
+    const networkConfig = NETWORKS[networkKey];
     setIsSwitchingNetwork(true);
-    
+
     try {
-      // Find the network configuration
-      const networkKey = Object.keys(NETWORKS).find(key => NETWORKS[key].name === networkName);
-      if (!networkKey) {
-        console.error('Network not found:', networkName);
-        return false;
-      }
+      console.log('🔄 Switching to network:', networkName);
+      const success = await switchNetwork(networkConfig);
 
-      const networkConfig = NETWORKS[networkKey];
-      const chainId = `0x${networkConfig.id.toString(16)}`;
-
-      console.log('🔄 Switching to network:', { networkName, chainId });
-
-      await window.ethereum.request({
-        method: 'wallet_switchEthereumChain',
-        params: [{ chainId }],
-      });
-
-      console.log('✅ Network switched successfully to:', networkName);
-      toast.success(`Switched to ${networkName} network`);
-      return true;
-    } catch (error) {
-      console.error('❌ Network switch failed:', error);
-      
-      // If the network is not added to MetaMask, try to add it
-      if (error.code === 4902) {
-        try {
-          const networkKey = Object.keys(NETWORKS).find(key => NETWORKS[key].name === networkName);
-          const networkConfig = NETWORKS[networkKey];
-          
-          await window.ethereum.request({
-            method: 'wallet_addEthereumChain',
-            params: [{
-              chainId: `0x${networkConfig.id.toString(16)}`,
-              chainName: networkConfig.name,
-              nativeCurrency: networkConfig.nativeCurrency,
-              rpcUrls: [networkConfig.rpcUrl],
-              blockExplorerUrls: [networkConfig.explorer],
-            }],
-          });
-          
-          console.log('✅ Network added and switched successfully to:', networkName);
-          toast.success(`Added and switched to ${networkName} network`);
-          return true;
-        } catch (addError) {
-          console.error('❌ Failed to add network:', addError);
-          toast.error(`Failed to add ${networkName} network to MetaMask`);
-          return false;
-        }
-      } else if (error.code === 4001) {
-        // User rejected the request
-        toast.error('Network switch cancelled by user');
-        return false;
+      if (success) {
+        console.log('✅ Network switched successfully to:', networkName);
+        toast.success(`Switched to ${networkName} network`);
       } else {
+        console.error('❌ Network switch failed');
         toast.error(`Failed to switch to ${networkName} network`);
-        return false;
       }
+
+      return success;
     } finally {
       setIsSwitchingNetwork(false);
     }

@@ -10,6 +10,7 @@ import WithdrawManagementFee from './WithdrawManagementFee';
 import WithdrawSuccessFee from './WithdrawSuccessFee';
 import AssignNewManager from './AssignNewManager';
 import { IPRECOMPILE_ERC20_ABI } from '../contracts/abi';
+import { switchNetwork } from '../utils/network-switcher';
 
 const AssistantsList = () => {
   const { getAssistantContractsWithSettings, getAllNetworksWithSettings, get3DPassTokenDecimalsDisplayMultiplier } = useSettings();
@@ -939,48 +940,17 @@ const AssistantsList = () => {
   }, []);
 
   const switchToRequiredNetwork = useCallback(async (requiredNetwork) => {
-    try {
-      console.log('🔄 Switching to network:', requiredNetwork.name, 'Chain ID:', requiredNetwork.chainId);
-      
-      const chainIdHex = `0x${requiredNetwork.chainId.toString(16)}`;
-      
-      try {
-        await window.ethereum.request({
-          method: 'wallet_switchEthereumChain',
-          params: [{ chainId: chainIdHex }],
-        });
-        console.log('✅ Network switched successfully');
-        return true;
-      } catch (switchError) {
-        console.log('⚠️ Network not added, attempting to add it...');
-        
-        if (switchError.code === 4902) {
-          try {
-            await window.ethereum.request({
-              method: 'wallet_addEthereumChain',
-              params: [{
-                chainId: chainIdHex,
-                chainName: requiredNetwork.name,
-                nativeCurrency: requiredNetwork.nativeCurrency,
-                rpcUrls: [requiredNetwork.rpcUrl],
-                blockExplorerUrls: [requiredNetwork.explorer],
-              }],
-            });
-            console.log('✅ Network added and switched successfully');
-            return true;
-          } catch (addError) {
-            console.error('❌ Failed to add network:', addError);
-            return false;
-          }
-        } else {
-          console.error('❌ Failed to switch network:', switchError);
-          return false;
-        }
-      }
-    } catch (error) {
-      console.error('❌ Network switching error:', error);
-      return false;
+    console.log('🔄 Switching to network:', requiredNetwork.name, 'Chain ID:', requiredNetwork.chainId);
+
+    const success = await switchNetwork(requiredNetwork);
+
+    if (success) {
+      console.log('✅ Network switched successfully');
+    } else {
+      console.error('❌ Network switching failed');
     }
+
+    return success;
   }, []);
 
   const handleDeposit = useCallback(async (assistant) => {

@@ -373,6 +373,9 @@ class ProviderManager {
   }
 }
 
+// Export class for testing
+export { ProviderManager };
+
 // Create singleton instance
 const providerManager = new ProviderManager();
 
