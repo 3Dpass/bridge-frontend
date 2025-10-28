@@ -1252,6 +1252,63 @@ const SettingsDialog = ({ isOpen, onClose }) => {
                     )}
                   </div>
 
+                  {/* API Key Settings */}
+                  <div className="mb-4">
+                    <div className="flex items-center justify-between mb-2">
+                      <label className="text-sm font-medium text-secondary-300">
+                        Etherscan API Key
+                      </label>
+                      <div className="flex items-center gap-2">
+                        <input
+                          type="checkbox"
+                          id={`customApiKey-${networkKey}`}
+                          checked={settings[networkKey]?.customApiKey || false}
+                          onChange={(e) => updateNetworkSetting(networkKey, 'customApiKey', e.target.checked)}
+                          className="w-4 h-4 text-primary-600 bg-dark-800 border-secondary-600 rounded focus:ring-primary-500"
+                        />
+                        <label htmlFor={`customApiKey-${networkKey}`} className="text-xs text-secondary-400">
+                          Custom
+                        </label>
+                      </div>
+                    </div>
+                    
+                    <div className="flex gap-2">
+                      <input
+                        type="password"
+                        value={settings[networkKey]?.customApiKey ? (settings[networkKey]?.apiKey || '') : (NETWORKS[networkKey]?.apiKey || '')}
+                        onChange={(e) => updateNetworkSetting(networkKey, 'apiKey', e.target.value)}
+                        placeholder="Enter Etherscan API Key"
+                        disabled={!settings[networkKey]?.customApiKey}
+                        className={`flex-1 input-field ${
+                          !settings[networkKey]?.customApiKey ? 'opacity-50 cursor-not-allowed bg-dark-800' : ''
+                        }`}
+                      />
+                      <button
+                        onClick={() => copyToClipboard(settings[networkKey]?.customApiKey ? (settings[networkKey]?.apiKey || '') : (NETWORKS[networkKey]?.apiKey || ''), 'API Key')}
+                        disabled={!settings[networkKey]?.customApiKey}
+                        className={`btn-secondary px-3 ${!settings[networkKey]?.customApiKey ? 'opacity-50 cursor-not-allowed' : ''}`}
+                      >
+                        {copiedField === 'API Key' ? (
+                          <CheckCircle className="w-4 h-4" />
+                        ) : (
+                          <Copy className="w-4 h-4" />
+                        )}
+                      </button>
+                    </div>
+                    
+                    <p className="text-xs text-secondary-400 mt-1">
+                      Used for Ethereum and BSC API calls. Get your free API key from{' '}
+                      <a 
+                        href="https://etherscan.io/apis" 
+                        target="_blank" 
+                        rel="noopener noreferrer"
+                        className="text-primary-400 hover:text-primary-300 underline"
+                      >
+                        etherscan.io/apis
+                      </a>
+                    </p>
+                  </div>
+
                   {/* Contract Addresses */}
                   <div className="mb-4">
                     <div className="flex items-center justify-between mb-2">

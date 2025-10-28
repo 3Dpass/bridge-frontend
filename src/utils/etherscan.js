@@ -4,12 +4,10 @@
  */
 
 import { NETWORKS } from '../config/networks.js';
+import { getNetworkWithSettings } from './settings.js';
 
 // Unified Etherscan API endpoint (V2)
 const ETHERSCAN_API = 'https://api.etherscan.io/v2/api';
-
-// API key
-const ETHERSCAN_API_KEY = process.env.ETHERSCAN_API_KEY || 'E38NWXAGWBUSJIX8DHJNDU3HQZX2ZRKRAT';
 
 /**
  * Get the appropriate API configuration for a network
@@ -26,9 +24,13 @@ function getApiConfig(networkKey) {
     throw new Error(`Network ${networkKey} does not have a chain ID configured`);
   }
 
+  // Get API key from Ethereum network with custom settings applied
+  const ethereumNetworkWithSettings = getNetworkWithSettings('ETHEREUM');
+  const apiKey = ethereumNetworkWithSettings?.apiKey || '';
+
   return {
     baseUrl: ETHERSCAN_API,
-    apiKey: ETHERSCAN_API_KEY,
+    apiKey: apiKey, // Use API key from Ethereum network config with custom settings (shared for BSC too)
     chainId: chainId,
     explorer: getExplorerUrl(networkKey)
   };

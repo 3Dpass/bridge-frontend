@@ -30,9 +30,11 @@ export const SettingsProvider = ({ children }) => {
           const network = NETWORKS[networkKey];
           defaultSettings[networkKey] = {
             rpcUrl: network.rpcUrl,
+            apiKey: network.apiKey || '',
             contracts: { ...network.contracts },
             tokens: { ...network.tokens },
             customRpc: false,
+            customApiKey: false,
             customContracts: false,
             customTokens: false,
           };
@@ -52,12 +54,14 @@ export const SettingsProvider = ({ children }) => {
         const network = NETWORKS[networkKey];
         defaultSettings[networkKey] = {
           rpcUrl: network.rpcUrl,
+          apiKey: network.apiKey || '',
           contracts: { ...network.contracts },
           tokens: { ...network.tokens },
           isEVM: network.isEVM,
           oracles: { ...network.oracles },
           createdAt: network.createdAt,
           customRpc: false,
+          customApiKey: false,
           customContracts: false,
           customTokens: false,
           customIsEVM: false,

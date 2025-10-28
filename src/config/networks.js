@@ -29,6 +29,7 @@ export const NETWORKS = {
     symbol: 'ETH',
     rpcUrl: 'https://mainnet.infura.io/v3/a68b71d194e7493db5231530985b00b7',
     explorer: 'https://etherscan.io',
+    apiKey: process.env.ETHERSCAN_API_KEY || 'E38NWXAGWBUSJIX8DHJNDU3HQZX2ZRKRAT',
     erc20Precompile: false,
     isHybrid: false,
     isEVM: true,

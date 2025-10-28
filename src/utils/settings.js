@@ -1,4 +1,4 @@
-import { NETWORKS, getBridgeInstances, getAssistantContracts, P3D_PRECOMPILE_ADDRESS } from '../config/networks';
+import { NETWORKS, getBridgeInstances, getAssistantContracts, P3D_PRECOMPILE_ADDRESS } from '../config/networks.js';
 
 /**
  * Load settings from localStorage
@@ -52,6 +52,11 @@ export const getNetworkWithSettings = (networkKey) => {
   // Apply custom RPC URL if enabled
   if (networkSettings.customRpc && networkSettings.rpcUrl) {
     customNetwork.rpcUrl = networkSettings.rpcUrl;
+  }
+
+  // Apply custom API key if enabled
+  if (networkSettings.customApiKey && networkSettings.apiKey) {
+    customNetwork.apiKey = networkSettings.apiKey;
   }
 
   // Apply custom contract addresses if enabled
