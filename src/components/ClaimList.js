@@ -2,6 +2,7 @@ import React, { useState, useEffect, useCallback } from 'react';
 import { ethers } from 'ethers';
 import { useWeb3 } from '../contexts/Web3Context';
 import { useSettings } from '../contexts/SettingsContext';
+import { useNetworkSwitcher } from '../hooks/useNetworkSwitcher';
 import { NETWORKS } from '../config/networks';
 import { fetchClaimsFromAllNetworks } from '../utils/fetch-claims';
 import { fetchLastTransfers } from '../utils/fetch-last-transfers';
@@ -249,6 +250,11 @@ const getFieldMatchStatus = (claim, field) => {
 const ClaimList = () => {
   const { account, network, getNetworkWithSettings } = useWeb3();
   const { getBridgeInstancesWithSettings, getHistorySearchDepth, getClaimSearchDepth, getTokenDecimalsDisplayMultiplier } = useSettings();
+  const {
+    getRequiredNetworkForTransfer,
+    getRequiredNetworkForClaim,
+    checkAndSwitchNetwork
+  } = useNetworkSwitcher();
   const [claims, setClaims] = useState([]);
   const [aggregatedData, setAggregatedData] = useState(null);
   const [loading, setLoading] = useState(false);
@@ -289,79 +295,6 @@ const ClaimList = () => {
     updatingClaims: new Set() // Track which specific claims are being updated
   });
   // Cache stats removed from UI - cache still works internally for performance
-
-  // Network switching functions
-  const getRequiredNetwork = useCallback((transfer) => {
-    // For transfers, we need to determine which network the claim should be created on
-    // Import transfers (NewRepatriation) create claims on the foreign network (Ethereum)
-    // Export transfers (NewExpatriation) create claims on the home network (3DPass)
-    
-    console.log('🔍 getRequiredNetwork called with transfer:', {
-      eventType: transfer.eventType,
-      fromNetwork: transfer.fromNetwork,
-      toNetwork: transfer.toNetwork,
-      fullTransfer: transfer
-    });
-    
-    console.log('🔍 Available networks:', Object.values(NETWORKS).map(n => ({
-      name: n.name,
-      id: n.id,
-      symbol: n.symbol
-    })));
-    
-    if (transfer.eventType === 'NewRepatriation') {
-      // Import transfer: claim should be created on foreign network (Ethereum)
-      const network = Object.values(NETWORKS).find(network => 
-        network.name === transfer.toNetwork
-      );
-      console.log('🔍 NewRepatriation - looking for network:', transfer.toNetwork, 'found:', network?.name);
-      return network;
-    } else if (transfer.eventType === 'NewExpatriation') {
-      // Export transfer: claim should be created on destination network (3DPass)
-      const network = Object.values(NETWORKS).find(network => 
-        network.name === transfer.toNetwork
-      );
-      console.log('🔍 NewExpatriation - looking for network:', transfer.toNetwork, 'found:', network?.name);
-      return network;
-    }
-    
-    console.log('🔍 No matching event type found');
-    return null;
-  }, []);
-
-  const getRequiredNetworkForClaim = useCallback((claim) => {
-    // For claims, we need to determine which network the claim exists on
-    // This is the network where the bridge contract is deployed
-    
-    console.log('🔍 getRequiredNetworkForClaim called with claim:', {
-      bridgeAddress: claim.bridgeAddress,
-      networkName: claim.networkName,
-      bridgeType: claim.bridgeType
-    });
-    
-    // Find the network that contains this bridge address
-    const networksWithSettings = getNetworkWithSettings ? Object.values(NETWORKS) : [];
-    
-    for (const networkConfig of networksWithSettings) {
-      if (networkConfig && networkConfig.bridges) {
-        for (const bridgeKey in networkConfig.bridges) {
-          const bridge = networkConfig.bridges[bridgeKey];
-          if (bridge.address === claim.bridgeAddress) {
-            const result = {
-              ...networkConfig,
-              chainId: networkConfig.id,
-              bridgeAddress: bridge.address
-            };
-            console.log('✅ Found required network for claim:', result);
-            return result;
-          }
-        }
-      }
-    }
-    
-    console.log('❌ No required network found for claim:', claim.bridgeAddress);
-    return null;
-  }, [getNetworkWithSettings]);
 
   // Helper function to get the correct ABI based on bridge type
   const getBridgeABI = useCallback((bridgeType) => {
@@ -476,115 +409,19 @@ const ClaimList = () => {
     }
   }, [contractSettings, currentBlock]);
 
-  const checkNetwork = useCallback(async () => {
-    try {
-      const currentChainId = await window.ethereum.request({ method: 'eth_chainId' });
-      const currentChainIdNumber = parseInt(currentChainId, 16);
-      console.log('🔍 Current chain ID:', currentChainIdNumber);
-      return currentChainIdNumber;
-    } catch (error) {
-      console.error('Error checking network:', error);
-      return null;
-    }
-  }, []);
-
-  const switchToRequiredNetwork = useCallback(async (requiredNetwork) => {
-    try {
-      console.log('🔄 switchToRequiredNetwork called with:', requiredNetwork);
-      console.log('🔄 Switching to network:', requiredNetwork.name, 'Chain ID:', requiredNetwork.chainId || requiredNetwork.id);
-      
-      // Check if wallet is available
-      if (!window.ethereum) {
-        console.error('❌ No wallet detected');
-        return false;
-      }
-      
-      // Use chainId if available, otherwise use id
-      const chainId = requiredNetwork.chainId || requiredNetwork.id;
-      if (!chainId) {
-        console.error('❌ No chain ID found in network configuration');
-        return false;
-      }
-      
-      const chainIdHex = `0x${chainId.toString(16)}`;
-      console.log('🔄 Chain ID hex:', chainIdHex);
-      
-      try {
-        console.log('🔄 Attempting to switch to existing network...');
-        const result = await window.ethereum.request({
-          method: 'wallet_switchEthereumChain',
-          params: [{ chainId: chainIdHex }],
-        });
-        console.log('🔄 Switch request result:', result);
-        console.log('✅ Network switched successfully');
-        return true;
-      } catch (switchError) {
-        console.log('⚠️ Network switch failed:', switchError);
-        console.log('⚠️ Error code:', switchError.code);
-        console.log('⚠️ Error message:', switchError.message);
-        console.log('⚠️ Network not added, attempting to add it...');
-        
-        if (switchError.code === 4902) {
-          try {
-            console.log('🔄 Adding new network...');
-            const addResult = await window.ethereum.request({
-              method: 'wallet_addEthereumChain',
-              params: [{
-                chainId: chainIdHex,
-                chainName: requiredNetwork.name,
-                nativeCurrency: requiredNetwork.nativeCurrency,
-                rpcUrls: [requiredNetwork.rpcUrl],
-                blockExplorerUrls: [requiredNetwork.explorer],
-              }],
-            });
-            console.log('🔄 Add network result:', addResult);
-            console.log('✅ Network added and switched successfully');
-            return true;
-          } catch (addError) {
-            console.error('❌ Failed to add network:', addError);
-            console.error('❌ Add error code:', addError.code);
-            console.error('❌ Add error message:', addError.message);
-            return false;
-          }
-        } else {
-          console.error('❌ Failed to switch network:', switchError);
-          return false;
-        }
-      }
-    } catch (error) {
-      console.error('❌ Network switching error:', error);
-      return false;
-    }
-  }, []);
-
   const handleChallenge = useCallback(async (claim) => {
     console.log('🔘 Challenge button clicked for claim:', claim.actualClaimNum || claim.claimNum);
-    
-    // Check if we need to switch networks first
+
     const requiredNetwork = getRequiredNetworkForClaim(claim);
-    if (!requiredNetwork) {
-      toast.error('Could not determine required network for this claim');
+    const switchSuccess = await checkAndSwitchNetwork(requiredNetwork);
+
+    if (!switchSuccess) {
       return;
     }
-    
-    const currentChainId = await checkNetwork();
-    if (currentChainId !== requiredNetwork.chainId) {
-      console.log('🚨 NETWORK SWITCHING WILL BE TRIGGERED NOW!');
-      console.log('🔄 Wrong network detected, switching automatically...');
-      toast(`Switching to ${requiredNetwork.name} network...`);
-      const switchSuccess = await switchToRequiredNetwork(requiredNetwork);
-      console.log('🔍 Network switch result:', switchSuccess);
-      if (!switchSuccess) {
-        toast.error('Failed to switch to the required network');
-        return;
-      }
-      // Wait a moment for the network to settle
-      await new Promise(resolve => setTimeout(resolve, 1000));
-    }
-    
+
     setSelectedClaim(claim);
     setShowChallengeModal(true);
-  }, [getRequiredNetworkForClaim, checkNetwork, switchToRequiredNetwork]);
+  }, [getRequiredNetworkForClaim, checkAndSwitchNetwork]);
 
 
 
@@ -1104,32 +941,17 @@ const ClaimList = () => {
 
   const handleWithdraw = useCallback(async (claim) => {
     console.log('🔘 Withdraw button clicked for claim:', claim.actualClaimNum || claim.claimNum);
-    
-    // Check if we need to switch networks first
+
     const requiredNetwork = getRequiredNetworkForClaim(claim);
-    if (!requiredNetwork) {
-      toast.error('Could not determine required network for this claim');
+    const switchSuccess = await checkAndSwitchNetwork(requiredNetwork);
+
+    if (!switchSuccess) {
       return;
     }
-    
-    const currentChainId = await checkNetwork();
-    if (currentChainId !== requiredNetwork.chainId) {
-      console.log('🚨 NETWORK SWITCHING WILL BE TRIGGERED NOW!');
-      console.log('🔄 Wrong network detected, switching automatically...');
-      toast(`Switching to ${requiredNetwork.name} network...`);
-      const switchSuccess = await switchToRequiredNetwork(requiredNetwork);
-      console.log('🔍 Network switch result:', switchSuccess);
-      if (!switchSuccess) {
-        toast.error('Failed to switch to the required network');
-        return;
-      }
-      // Wait a moment for the network to settle
-      await new Promise(resolve => setTimeout(resolve, 1000));
-    }
-    
+
     setSelectedClaim(prepareClaimForWithdraw(claim));
     setShowWithdrawModal(true);
-  }, [getRequiredNetworkForClaim, checkNetwork, switchToRequiredNetwork, prepareClaimForWithdraw]);
+  }, [getRequiredNetworkForClaim, checkAndSwitchNetwork, prepareClaimForWithdraw]);
 
   // Load cached data from browser storage
   const loadCachedData = useCallback(async () => {
@@ -3163,27 +2985,13 @@ const ClaimList = () => {
                               }
                               
                               try {
-                                // Determine the required network for this transfer
-                                const requiredNetwork = getRequiredNetwork(claim);
-                                console.log('🔍 Required network result:', requiredNetwork);
-                                
-                                if (!requiredNetwork) {
-                                  toast.error('Could not determine the required network for this transfer');
+                                const requiredNetwork = getRequiredNetworkForTransfer(claim);
+                                const switchSuccess = await checkAndSwitchNetwork(requiredNetwork);
+
+                                if (!switchSuccess) {
                                   return;
                                 }
-                                
-                                // Switch to the required network before opening the dialog
-                                console.log('🔄 Starting network switch to:', requiredNetwork.name);
-                                toast(`Switching to ${requiredNetwork.name} network...`);
-                                const switchResult = await switchToRequiredNetwork(requiredNetwork);
-                                console.log('🔄 Network switch result:', switchResult);
-                                
-                                if (!switchResult) {
-                                  toast.error('Failed to switch to the required network');
-                                  return;
-                                }
-                                
-                                // Set the transfer data and open the NewClaim dialog
+
                                 setSelectedTransfer(claim);
                                 setShowNewClaim(true);
                               } catch (error) {
