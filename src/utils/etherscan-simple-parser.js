@@ -1,5 +1,5 @@
 /**
- * BSCScan Simple Parser - Extracts block numbers from Etherscan transactions page
+ * Etherscan Simple Parser - Extracts block numbers from Etherscan transactions page
  * Targets: https://etherscan.io/txs?a=0x3a96AC42A28D5610Aca2A79AE782988110108eDe
  * Simple approach that works with the basic HTML content
  */
@@ -7,12 +7,12 @@
 import { wait } from './utils.js';
 
 /**
- * Parse BSCScan transactions page to extract block numbers
+ * Parse Etherscan transactions page to extract block numbers
  * @param {string} bridgeAddress - Bridge contract address
  * @param {Object} options - Parsing options
  * @returns {Promise<Object>} Parsed result with block numbers
  */
-async function parseBSCScanBlockNumbers(bridgeAddress, options = {}) {
+async function parseEtherscanBlockNumbers(bridgeAddress, options = {}) {
   const {
     delay = 2000,
     retries = 3
@@ -21,13 +21,13 @@ async function parseBSCScanBlockNumbers(bridgeAddress, options = {}) {
   const baseUrl = 'https://etherscan.io/';
   const targetUrl = `${baseUrl}txs?a=${bridgeAddress}`;
   
-  console.log(`🔍 Parsing BSCScan for block numbers: ${targetUrl}`);
+  console.log(`🔍 Parsing Etherscan for block numbers: ${targetUrl}`);
   
   try {
-    const result = await fetchBSCScanPage(targetUrl, { retries, delay });
+    const result = await fetchEtherscanPage(targetUrl, { retries, delay });
     
     if (result.success) {
-      console.log(`✅ Successfully parsed BSCScan page`);
+      console.log(`✅ Successfully parsed Etherscan page`);
       console.log(`Found ${result.blockNumbers.length} block numbers`);
       return {
         success: true,
@@ -38,12 +38,12 @@ async function parseBSCScanBlockNumbers(bridgeAddress, options = {}) {
       return {
         success: false,
         blockNumbers: [],
-        error: result.error || 'Failed to parse BSCScan page'
+        error: result.error || 'Failed to parse Etherscan page'
       };
     }
     
   } catch (error) {
-    console.error('❌ Error parsing BSCScan:', error);
+    console.error('❌ Error parsing Etherscan:', error);
     return {
       success: false,
       blockNumbers: [],
@@ -53,12 +53,12 @@ async function parseBSCScanBlockNumbers(bridgeAddress, options = {}) {
 }
 
 /**
- * Fetch BSCScan page and extract block numbers
+ * Fetch Etherscan page and extract block numbers
  * @param {string} url - URL to fetch
  * @param {Object} options - Fetch options
  * @returns {Promise<Object>} Parsed page result
  */
-async function fetchBSCScanPage(url, options = {}) {
+async function fetchEtherscanPage(url, options = {}) {
   const { retries = 3, delay = 1000 } = options;
   
   for (let attempt = 1; attempt <= retries; attempt++) {
@@ -139,7 +139,7 @@ function extractBlockNumbers(html) {
   
   blockMatches.forEach(match => {
     const blockNumber = parseInt(match[1], 10);
-    if (blockNumber > 0 && blockNumber > 100000) { // BSC blocks are typically > 100000
+    if (blockNumber > 0 && blockNumber > 100000) { // Ethereum blocks are typically > 100000
       blockNumbers.push(blockNumber);
     }
   });
@@ -160,11 +160,11 @@ function extractBlockNumbers(html) {
  * @param {string} bridgeAddress - Bridge contract address to test
  * @returns {Promise<Object>} Test result
  */
-async function testBSCScanSimpleParser(bridgeAddress = '0x3a96AC42A28D5610Aca2A79AE782988110108eDe') {
-  console.log(`🧪 Testing BSCScan Simple Parser`);
+async function testEtherscanSimpleParser(bridgeAddress = '0x3a96AC42A28D5610Aca2A79AE782988110108eDe') {
+  console.log(`🧪 Testing Etherscan Simple Parser`);
   
   try {
-    const result = await parseBSCScanBlockNumbers(bridgeAddress, {
+    const result = await parseEtherscanBlockNumbers(bridgeAddress, {
       delay: 2000,
       retries: 2
     });
@@ -195,8 +195,8 @@ async function testBSCScanSimpleParser(bridgeAddress = '0x3a96AC42A28D5610Aca2A7
 
 // Export functions
 export {
-  parseBSCScanBlockNumbers,
-  fetchBSCScanPage,
+  parseEtherscanBlockNumbers,
+  fetchEtherscanPage,
   extractBlockNumbers,
-  testBSCScanSimpleParser
+  testEtherscanSimpleParser
 };

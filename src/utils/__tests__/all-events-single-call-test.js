@@ -11,23 +11,23 @@ import { getEvmLogs } from '../3dpass-polkadot-provider.js';
 
 // Test configurations - one bridge per network
 const TEST_CONFIGS = [
-  // {
-  //   name: 'Ethereum',
-  //   bridgeAddress: '0x4f3a4e37701402C61146071309e45A15843025E1', // P3D Export Bridge on Ethereum
-  //   networkKey: 'ETHEREUM',
-  //   rpcUrl: NETWORKS.ETHEREUM.rpcUrl,
-  //   chainId: NETWORKS.ETHEREUM.id
-  // },
-  // {
-  //   name: 'BSC',
-  //   bridgeAddress: '0x078E7A2037b63846836E9d721cf2dabC08b94281', // P3D Import Bridge on BSC
-  //   networkKey: 'BSC',
-  //   rpcUrl: NETWORKS.BSC.rpcUrl,
-  //   chainId: NETWORKS.BSC.id
-  // },
+  {
+    name: 'Ethereum',
+    bridgeAddress: '0x4f3a4e37701402C61146071309e45A15843025E1', // P3D Export Bridge on Ethereum
+    networkKey: 'ETHEREUM',
+    rpcUrl: NETWORKS.ETHEREUM.rpcUrl,
+    chainId: NETWORKS.ETHEREUM.id
+  },
+  {
+    name: 'BSC',
+    bridgeAddress: '0x078E7A2037b63846836E9d721cf2dabC08b94281', // P3D Import Bridge on BSC
+    networkKey: 'BSC',
+    rpcUrl: NETWORKS.BSC.rpcUrl,
+    chainId: NETWORKS.BSC.id
+  },
   {
     name: '3DPass',
-    bridgeAddress: '0x50fcE1D58b41c3600C74de03238Eee71aFDfBf1F', // P3D Export Bridge on 3DPass
+    bridgeAddress: '0x00D5f00250434e76711e8127A37c6f84dBbDAA4C', //'0x50fcE1D58b41c3600C74de03238Eee71aFDfBf1F', // P3D Export Bridge on 3DPass
     networkKey: 'THREEDPASS',
     rpcUrl: NETWORKS.THREEDPASS.rpcUrl,
     chainId: NETWORKS.THREEDPASS.id
@@ -302,9 +302,9 @@ async function testBridgeAllEvents(config) {
             // For NewExpatriation events, check the decoded args for txid
             if (eventType === 'NewExpatriation' && event.args) {
               // NewExpatriation has: sender_address, amount, reward, foreign_address, data
-              // The txid might be in the data field or foreign_address field
-              hasTxid = !!(event.args.data && event.args.data !== '0x');
-              txidValue = (event.args.data && event.args.data !== '0x') ? event.args.data : event.transactionHash;
+              // There's no direct txid field in NewExpatriation, so we use the transaction hash
+              hasTxid = true;
+              txidValue = event.transactionHash;
             } else if (eventType === 'NewClaim' && event.args) {
               hasTxid = !!event.args.txid;
               txidValue = event.args.txid || 'N/A';

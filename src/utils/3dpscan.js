@@ -22,11 +22,11 @@ async function getAddressBlocks({ address, startblock, endblock, count = 0 }) {
 		const max_empty_pages = 2; // Stop after 2 consecutive pages with no relevant events
 		
 		while (true) {
-			// Rate limiting: 1 request per second
+			// Rate limiting: 300ms between requests
 			const passed = Date.now() - last_req_ts;
-			if (passed < 1000) {
-				console.log(`will wait for ${1000 - passed} ms between 3dpscan requests`);
-				await wait(1000 - passed);
+			if (passed < 300) {
+				console.log(`will wait for ${300 - passed} ms between 3dpscan requests`);
+				await wait(300 - passed);
 			}
 			
 			// Build URL for EVM events query
@@ -124,11 +124,11 @@ async function getAddressTransactionBlocks({ address, startblock, endblock, coun
 		const max_empty_pages = 3; // Stop after 3 consecutive pages with no relevant events
 		
 		while (true) {
-			// Rate limiting: 1 request per second
+			// Rate limiting: 300ms between requests
 			const passed = Date.now() - last_req_ts;
-			if (passed < 1000) {
-				console.log(`will wait for ${1000 - passed} ms between 3dpscan requests`);
-				await wait(1000 - passed);
+			if (passed < 300) {
+				console.log(`will wait for ${300 - passed} ms between 3dpscan requests`);
+				await wait(300 - passed);
 			}
 			
 			// Build URL for EVM transaction events query

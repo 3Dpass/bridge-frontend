@@ -6,6 +6,7 @@
 
 import { getAddressBlocks } from './3dpscan.js';
 import { parseBSCScanBlockNumbers } from './bscscan-simple-parser.js';
+import { parseEtherscanBlockNumbers } from './etherscan-simple-parser.js';
 
 // Event topic signatures
 const NEW_CLAIM_TOPIC = '0xb4096a3b39efa6fa23e55edafbb26c619699ce4eb0b8f8c0178b1a4919ac6736';
@@ -49,6 +50,47 @@ async function getNewClaimBlockNumbersBSCFallback(bridgeAddress, options = {}) {
     
   } catch (error) {
     console.error(`   ❌ Error with BSCScan parser fallback:`, error.message);
+    throw error;
+  }
+}
+
+/**
+ * Get block numbers using Etherscan simple parser as fallback
+ * @param {string} bridgeAddress - Bridge contract address on Ethereum
+ * @param {Object} options - Additional options
+ * @returns {Promise<Object>} Object with block numbers and event data
+ */
+async function getNewClaimBlockNumbersEthereumFallback(bridgeAddress, options = {}) {
+  console.log(`🔍 Getting block numbers using Etherscan parser fallback for Ethereum bridge ${bridgeAddress}`);
+  
+  try {
+    // Use the simple Etherscan parser to get block numbers
+    const result = await parseEtherscanBlockNumbers(bridgeAddress, {
+      delay: 2000,
+      retries: 2
+    });
+    
+    if (result.success && result.blockNumbers.length > 0) {
+      console.log(`   ✅ Etherscan parser found ${result.blockNumbers.length} block numbers`);
+      
+      return {
+        blockNumbers: result.blockNumbers,
+        eventCount: result.blockNumbers.length,
+        network: 'ETHEREUM',
+        source: 'etherscan.io',
+        events: result.blockNumbers.map(blockNum => ({
+          blockNumber: blockNum,
+          transactionHash: null, // Not available from simple parser
+          logIndex: null,
+          topics: null
+        }))
+      };
+    } else {
+      throw new Error(`Etherscan parser failed: ${result.error || 'No block numbers found'}`);
+    }
+    
+  } catch (error) {
+    console.error(`   ❌ Error with Etherscan parser fallback:`, error.message);
     throw error;
   }
 }
@@ -252,8 +294,13 @@ export async function getEventBlockNumbersUnified(networkKey, bridgeAddress, eve
     // Use 3dpscan.xyz for 3DPass network
     return await getNewClaimBlockNumbers3DPassWrapper(bridgeAddress, options);
   } else if (networkKey === 'ETHEREUM') {
-    // Use etherscan.js for Ethereum network
-    return await getEventBlockNumbersFromAPI(networkKey, bridgeAddress, eventType, options);
+    // Try API first, then fallback to Etherscan parser
+    try {
+      return await getEventBlockNumbersFromAPI(networkKey, bridgeAddress, eventType, options);
+    } catch (apiError) {
+      console.log(`⚠️ Ethereum API failed, trying Etherscan parser fallback: ${apiError.message}`);
+      return await getNewClaimBlockNumbersEthereumFallback(bridgeAddress, options);
+    }
   } else if (networkKey === 'BSC') {
     // Try API first, then fallback to BSCScan parser
     try {
@@ -322,8 +369,13 @@ export async function getAllEventBlockNumbersUnified(networkKey, bridgeAddress, 
     // Use 3dpscan.xyz for 3DPass network - get all EVM events and filter by topic
     return await getAllEventBlockNumbers3DPass(bridgeAddress, options);
   } else if (networkKey === 'ETHEREUM') {
-    // Use etherscan.js for Ethereum network - single call for all events
-    return await getAllEventBlockNumbersFromAPI(networkKey, bridgeAddress, options);
+    // Try API first, then fallback to Etherscan parser
+    try {
+      return await getAllEventBlockNumbersFromAPI(networkKey, bridgeAddress, options);
+    } catch (apiError) {
+      console.log(`⚠️ Ethereum API failed, trying Etherscan parser fallback: ${apiError.message}`);
+      return await getNewClaimBlockNumbersEthereumFallback(bridgeAddress, options);
+    }
   } else if (networkKey === 'BSC') {
     // Try API first, then fallback to BSCScan parser
     try {
@@ -423,8 +475,22 @@ export async function testNetworkConnection(networkKey) {
       return false;
     }
   } else if (networkKey === 'ETHEREUM') {
-    const { testExplorerConnection } = await import('./etherscan.js');
-    return await testExplorerConnection(networkKey);
+    // Test Ethereum with API first, then fallback to parser
+    try {
+      const { testExplorerConnection } = await import('./etherscan.js');
+      return await testExplorerConnection(networkKey);
+    } catch (apiError) {
+      console.log(`⚠️ Ethereum API test failed, trying Etherscan parser: ${apiError.message}`);
+      try {
+        const testAddress = '0x3a96AC42A28D5610Aca2A79AE782988110108eDe'; // Default test address
+        const result = await parseEtherscanBlockNumbers(testAddress, { delay: 1000, retries: 1 });
+        console.log(`✅ Etherscan parser connection successful (found ${result.blockNumbers.length} test blocks)`);
+        return result.success;
+      } catch (parserError) {
+        console.error(`❌ Etherscan parser connection failed:`, parserError.message);
+        return false;
+      }
+    }
   } else if (networkKey === 'BSC') {
     // Test BSC with API first, then fallback to parser
     try {
