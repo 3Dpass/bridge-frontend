@@ -99,14 +99,15 @@ describe('Retry with Fallback', () => {
   describe('ProviderHealthMonitor', () => {
     it('should track provider health correctly', () => {
       const monitor = new ProviderHealthMonitor();
-      
+
       // Record some requests
       monitor.recordRequest('ETHEREUM', null, true, 100);
       monitor.recordRequest('ETHEREUM', null, true, 200);
-      monitor.recordRequest('ETHEREUM', null, false, 300, new Error('429'));
-      
+      monitor.recordRequest('ETHEREUM', null, true, 150);
+      monitor.recordRequest('ETHEREUM', null, false, 300, new Error('Network error'));
+
       const health = monitor.getProviderHealth('ETHEREUM');
-      expect(health).toBe('degraded'); // 2/3 success rate
+      expect(health).toBe('degraded'); // 3/4 = 75% success rate
     });
 
     it('should detect rate limiting', () => {
