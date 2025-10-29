@@ -170,17 +170,10 @@ async function decodeEventsWithABI(networkKey, bridgeAddress, events, bridgeType
     }
   }
   
-    // Select the correct ABI based on bridge type
-    let abiToUse;
-    if (bridgeType === 'Export' || bridgeType === 'export' || bridgeType === 'export_wrapper') {
-      abiToUse = EXPORT_ABI;
-    } else if (bridgeType === 'Import' || bridgeType === 'import' || bridgeType === 'import_wrapper') {
-      abiToUse = IMPORT_ABI;
-    } else {
-      abiToUse = COUNTERSTAKE_ABI; // Fallback
-    }
-    
-    const contractInterface = new ethers.utils.Interface(abiToUse);
+    // Create interfaces for different event types
+    const exportInterface = new ethers.utils.Interface(EXPORT_ABI);
+    const importInterface = new ethers.utils.Interface(IMPORT_ABI);
+    const counterstakeInterface = new ethers.utils.Interface(COUNTERSTAKE_ABI);
 
     // Convert raw logs to ethers format and decode
     const decodedEvents = [];
@@ -199,7 +192,27 @@ async function decodeEventsWithABI(networkKey, bridgeAddress, events, bridgeType
           removed: event.removed || false
         };
 
-        // Decode using ABI
+        // Select the correct interface based on event type
+        let contractInterface;
+        if (event.eventType === 'NewExpatriation') {
+          contractInterface = exportInterface;
+        } else if (event.eventType === 'NewRepatriation') {
+          contractInterface = importInterface;
+        } else if (event.eventType === 'NewClaim') {
+          // For NewClaim, use the appropriate interface based on bridge type
+          if (bridgeType === 'Export' || bridgeType === 'export' || bridgeType === 'export_wrapper') {
+            contractInterface = exportInterface;
+          } else if (bridgeType === 'Import' || bridgeType === 'import' || bridgeType === 'import_wrapper') {
+            contractInterface = importInterface;
+          } else {
+            contractInterface = counterstakeInterface;
+          }
+        } else {
+          console.warn(`⚠️ Unknown event type: ${event.eventType}, skipping`);
+          continue;
+        }
+
+        // Decode using the correct ABI for this event type
         const decoded = contractInterface.parseLog(rawLog);
         if (decoded) {
           const decodedEvent = {

@@ -320,9 +320,13 @@ async function getEventLogsViaRPC(networkKey, bridgeAddress, eventType, options 
     let filteredEvents = categorizedEvents;
     if (eventType !== 'AllEvents') {
       filteredEvents = categorizedEvents.filter(event => event.eventType === eventType);
+    } else {
+      // For AllEvents, only return bridge events (exclude 'Other' events like ERC20 Transfer/Approval)
+      filteredEvents = categorizedEvents.filter(event => event.eventType !== 'Other');
     }
 
     console.log(`   📋 Event breakdown:`, eventBreakdown);
+    console.log(`   🔍 Filtered events: ${filteredEvents.length} (excluded ${eventBreakdown.Other} non-bridge events)`);
 
     return {
       blockNumbers: blockNumbers,

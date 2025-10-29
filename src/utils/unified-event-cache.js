@@ -9,6 +9,8 @@
 const STORAGE_KEYS = {
   CLAIMS: 'bridge_claims_cache',
   TRANSFERS: 'bridge_transfers_cache',
+  AGGREGATED: 'bridge_aggregated_cache', // Only completed transfers should ever be cached here
+  SETTINGS: 'bridge_cache_settings',
   TIMESTAMP: 'bridge_cache_timestamp'
 };
 
@@ -130,6 +132,22 @@ export const getCachedClaims = () => {
 };
 
 /**
+ * Get cached aggregated data (completed-only snapshot)
+ * @returns {Object|null} Aggregated data or null
+ */
+export const getCachedAggregated = () => {
+  return getCachedData(STORAGE_KEYS.AGGREGATED);
+};
+
+/**
+ * Get cached settings
+ * @returns {Object|null} Settings or null
+ */
+export const getCachedSettings = () => {
+  return getCachedData(STORAGE_KEYS.SETTINGS);
+};
+
+/**
  * Clear all cached events
  */
 export const clearAllCachedEvents = () => {
@@ -155,6 +173,20 @@ export const getCacheTimestamp = () => {
     console.warn('Failed to get cache timestamp:', error);
     return null;
   }
+};
+
+/**
+ * Load a unified snapshot of cached data in one call
+ * Returns claims, transfers, aggregated (completed-only), settings, and timestamp
+ * @returns {{claims:Array, transfers:Array, aggregated:Object|null, settings:Object|null, timestamp:number|null}}
+ */
+export const loadCachedBridgeData = () => {
+  const claims = getCachedClaims();
+  const transfers = getCachedTransfers();
+  const aggregated = getCachedAggregated();
+  const settings = getCachedSettings();
+  const timestamp = getCacheTimestamp();
+  return { claims, transfers, aggregated, settings, timestamp };
 };
 
 /**
@@ -337,5 +369,5 @@ export const createClaimEventData = (params) => {
   };
 };
 
-// Export storage keys for consistency
-export { STORAGE_KEYS };
+// Export storage keys and utility functions for consistency
+export { STORAGE_KEYS, setCachedData };

@@ -5,7 +5,7 @@ import { useSettings } from '../contexts/SettingsContext';
 import { NETWORKS, getBridgeDirections, getBridgeAddressesForDirection, getNetworksForDirection } from '../config/networks';
 import { discoverAllBridgeEvents } from '../utils/parallel-bridge-discovery';
 import { aggregateClaimsAndTransfers } from '../utils/aggregate-claims-transfers';
-import { clearAllCachedEvents, getCachedTransfers, getCachedClaims } from '../utils/unified-event-cache';
+import { clearAllCachedEvents, getCachedTransfers, getCachedClaims, getCachedAggregated, getCachedSettings, getCacheTimestamp, setCachedData, STORAGE_KEYS } from '../utils/unified-event-cache';
 import { 
   COUNTERSTAKE_ABI,
   EXPORT_ABI,
@@ -32,33 +32,7 @@ import NewClaim from './NewClaim';
 import WithdrawClaim from './WithdrawClaim';
 import Challenge from './Challenge';
 
-// Browser storage utilities for claims and transfers
-const STORAGE_KEYS = {
-  CLAIMS: 'bridge_claims_cache',
-  TRANSFERS: 'bridge_transfers_cache',
-  AGGREGATED: 'bridge_aggregated_cache',
-  TIMESTAMP: 'bridge_cache_timestamp',
-  SETTINGS: 'bridge_cache_settings'
-};
-
-const getCachedData = (key) => {
-  try {
-    const cached = localStorage.getItem(key);
-    return cached ? JSON.parse(cached) : null;
-  } catch (error) {
-    console.warn('Failed to parse cached data:', error);
-    return null;
-  }
-};
-
-const setCachedData = (key, data) => {
-  try {
-    localStorage.setItem(key, JSON.stringify(data));
-    localStorage.setItem(STORAGE_KEYS.TIMESTAMP, Date.now().toString());
-  } catch (error) {
-    console.warn('Failed to cache data:', error);
-  }
-};
+// Note: Cache helpers now imported from unified-event-cache
 
 const clearCachedData = () => {
   try {
@@ -70,40 +44,7 @@ const clearCachedData = () => {
   }
 };
 
-// Add new transfer event to browser storage
-const addTransferEventToStorage = (eventData) => {
-  try {
-    console.log('💾 Adding new transfer event to browser storage:', eventData);
-    
-    // Get existing transfers from storage
-    const existingTransfers = getCachedData(STORAGE_KEYS.TRANSFERS) || [];
-    
-    // Check if this transfer already exists (by transaction hash)
-    const existingIndex = existingTransfers.findIndex(t => t.transactionHash === eventData.transactionHash);
-    
-    if (existingIndex >= 0) {
-      // Update existing transfer
-      existingTransfers[existingIndex] = { ...existingTransfers[existingIndex], ...eventData };
-      console.log('🔄 Updated existing transfer in storage');
-    } else {
-      // Add new transfer at the beginning (most recent first)
-      existingTransfers.unshift(eventData);
-      console.log('➕ Added new transfer to storage');
-    }
-    
-    // Save back to storage
-    setCachedData(STORAGE_KEYS.TRANSFERS, existingTransfers);
-    
-    // Update timestamp to indicate fresh data
-    localStorage.setItem(STORAGE_KEYS.TIMESTAMP, Date.now().toString());
-    
-    console.log('✅ Transfer event successfully added to browser storage');
-    return true;
-  } catch (error) {
-    console.error('❌ Failed to add transfer event to storage:', error);
-    return false;
-  }
-};
+// Note: addTransferEventToStorage now imported from unified-event-cache
 
 // Helper functions for match/mismatch indicators
 const getMatchStatus = (claim) => {
@@ -1138,8 +1079,8 @@ const ClaimList = () => {
       
       const cachedClaims = getCachedClaims();
       const cachedTransfers = getCachedTransfers();
-      const cachedAggregated = getCachedData(STORAGE_KEYS.AGGREGATED);
-      const cachedSettings = getCachedData(STORAGE_KEYS.SETTINGS);
+      const cachedAggregated = getCachedAggregated();
+      const cachedSettings = getCachedSettings();
       
       if (cachedClaims || cachedTransfers || cachedAggregated) {
         console.log('✅ Found cached data:', {
@@ -1316,7 +1257,7 @@ const ClaimList = () => {
         if (cachedSettings) setContractSettings(cachedSettings);
         
         // Update cache status
-        const timestamp = localStorage.getItem(STORAGE_KEYS.TIMESTAMP);
+        const timestamp = getCacheTimestamp();
         const lastUpdated = timestamp ? new Date(parseInt(timestamp)) : null;
         const cacheAge = timestamp ? Date.now() - parseInt(timestamp) : null;
         
@@ -3265,5 +3206,4 @@ const ClaimList = () => {
 };
 
 export default ClaimList;
-export { addTransferEventToStorage };
 
