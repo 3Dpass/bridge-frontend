@@ -1,154 +1,138 @@
 /**
  * Unified block number fetcher that works across all networks
- * Integrates 3DPass, Ethereum, and BSC network scanners
+ * Uses eth_getLogs as the only source for all networks
+ * Tests RPC connectivity and event fetching capabilities
  * Handles both NewClaim events and transfer events (NewExpatriation, NewRepatriation)
  */
 
-import { getAddressBlocks } from './3dpscan.js';
-import { parseBSCScanBlockNumbers } from './bscscan-simple-parser.js';
-import { parseEtherscanBlockNumbers } from './etherscan-simple-parser.js';
+import { NETWORKS } from '../config/networks.js';
+import { estimateBlocksFromHours, getBlockTime } from './block-estimator.js';
 
 // Event topic signatures
 const NEW_CLAIM_TOPIC = '0xb4096a3b39efa6fa23e55edafbb26c619699ce4eb0b8f8c0178b1a4919ac6736';
 const NEW_EXPATRIATION_TOPIC = '0xe7fa22cb6a93e7faaadf534496eb2c5401ff2468cbf95117e89ea148af253e0d';
 const NEW_REPATRIATION_TOPIC = '0x4769528a977394d0b1b9c3ad55e7701566261bb71bb5d57c1af58bcb84db30cc';
 
-/**
- * Get block numbers using BSCScan simple parser as fallback
- * @param {string} bridgeAddress - Bridge contract address on BSC
- * @param {Object} options - Additional options
- * @returns {Promise<Object>} Object with block numbers and event data
- */
-async function getNewClaimBlockNumbersBSCFallback(bridgeAddress, options = {}) {
-  console.log(`🔍 Getting block numbers using BSCScan parser fallback for BSC bridge ${bridgeAddress}`);
-  
-  try {
-    // Use the simple BSCScan parser to get block numbers
-    const result = await parseBSCScanBlockNumbers(bridgeAddress, {
-      delay: 2000,
-      retries: 2
-    });
-    
-    if (result.success && result.blockNumbers.length > 0) {
-      console.log(`   ✅ BSCScan parser found ${result.blockNumbers.length} block numbers`);
-      
-      return {
-        blockNumbers: result.blockNumbers,
-        eventCount: result.blockNumbers.length,
-        network: 'BSC',
-        source: 'bscscan.com',
-        events: result.blockNumbers.map(blockNum => ({
-          blockNumber: blockNum,
-          transactionHash: null, // Not available from simple parser
-          logIndex: null,
-          topics: null
-        }))
-      };
-    } else {
-      throw new Error(`BSCScan parser failed: ${result.error || 'No block numbers found'}`);
-    }
-    
-  } catch (error) {
-    console.error(`   ❌ Error with BSCScan parser fallback:`, error.message);
-    throw error;
-  }
-}
+// Network-specific RPC limits (in blocks)
+const RPC_LIMITS = {
+  ETHEREUM: null, // No limit
+  BSC: 100000, // 100k blocks (~83 hours)
+  THREEDPASS: 10000 // 10k blocks (~167 hours due to 60s block time)
+};
 
 /**
- * Get block numbers using Etherscan simple parser as fallback
- * @param {string} bridgeAddress - Bridge contract address on Ethereum
- * @param {Object} options - Additional options
- * @returns {Promise<Object>} Object with block numbers and event data
+ * Calculate optimal block range for a network based on RPC limits and block time
+ * @param {string} networkKey - Network key
+ * @param {number} latestBlock - Latest block number
+ * @param {number} targetHours - Target hours of history (default: 72 hours)
+ * @returns {Object} Block range configuration
  */
-async function getNewClaimBlockNumbersEthereumFallback(bridgeAddress, options = {}) {
-  console.log(`🔍 Getting block numbers using Etherscan parser fallback for Ethereum bridge ${bridgeAddress}`);
+function calculateOptimalBlockRange(networkKey, latestBlock, targetHours = 72) {
+  const blockTime = getBlockTime(networkKey);
+  const rpcLimit = RPC_LIMITS[networkKey];
   
-  try {
-    // Use the simple Etherscan parser to get block numbers
-    const result = await parseEtherscanBlockNumbers(bridgeAddress, {
-      delay: 2000,
-      retries: 2
-    });
-    
-    if (result.success && result.blockNumbers.length > 0) {
-      console.log(`   ✅ Etherscan parser found ${result.blockNumbers.length} block numbers`);
-      
-      return {
-        blockNumbers: result.blockNumbers,
-        eventCount: result.blockNumbers.length,
-        network: 'ETHEREUM',
-        source: 'etherscan.io',
-        events: result.blockNumbers.map(blockNum => ({
-          blockNumber: blockNum,
-          transactionHash: null, // Not available from simple parser
-          logIndex: null,
-          topics: null
-        }))
-      };
+  // Calculate desired blocks for target hours
+  const desiredBlocks = estimateBlocksFromHours(targetHours, networkKey);
+  
+  let startBlock;
+  let actualHours;
+  
+  if (rpcLimit && desiredBlocks > rpcLimit) {
+    // Use RPC limit if desired blocks exceed it
+    startBlock = Math.max(0, latestBlock - rpcLimit);
+    actualHours = (rpcLimit * blockTime) / 3600; // Convert to hours
+    console.log(`   📊 ${networkKey}: Using RPC limit of ${rpcLimit} blocks (${actualHours.toFixed(1)} hours)`);
     } else {
-      throw new Error(`Etherscan parser failed: ${result.error || 'No block numbers found'}`);
-    }
-    
-  } catch (error) {
-    console.error(`   ❌ Error with Etherscan parser fallback:`, error.message);
-    throw error;
+    // Use desired blocks
+    startBlock = Math.max(0, latestBlock - desiredBlocks);
+    actualHours = targetHours;
+    console.log(`   📊 ${networkKey}: Using ${desiredBlocks} blocks (${actualHours} hours)`);
   }
-}
-
-/**
- * Get block numbers where NewClaim events occurred on 3DPass network
- * @param {string} bridgeAddress - Bridge contract address on 3DPass
- * @param {Object} options - Additional options
- * @returns {Promise<Object>} Object with block numbers and event data
- */
-async function getNewClaimBlockNumbers3DPassWrapper(bridgeAddress, options = {}) {
-  console.log(`🔍 Getting NewClaim block numbers for 3DPass bridge ${bridgeAddress}`);
-  
-  try {
-    // Use the fixed 3dpscan.js to get blocks with EVM events
-    const blockNumbers = await getAddressBlocks({
-      address: bridgeAddress,
-      startblock: options.startblock || 0,
-      endblock: options.endblock,
-      count: options.count || 0
-    });
-    
-    console.log(`   ✅ Found ${blockNumbers.length} blocks with EVM events for address ${bridgeAddress}`);
     
     return {
-      blockNumbers,
-      eventCount: blockNumbers.length,
-      network: 'THREEDPASS',
-      source: '3dpscan.xyz',
-      events: blockNumbers.map(blockNum => ({
-        blockNumber: blockNum,
-        transactionHash: null, // Not available from 3dpscan
-        logIndex: null,
-        topics: null
-      }))
-    };
-    
-  } catch (error) {
-    console.error(`   ❌ Error getting 3DPass block numbers:`, error.message);
-    throw error;
-  }
+    fromBlock: `0x${startBlock.toString(16)}`,
+    toBlock: 'latest',
+    blockCount: latestBlock - startBlock,
+    actualHours: actualHours,
+    blockTime: blockTime
+  };
 }
 
 /**
- * Get block numbers for specific event types using Etherscan-like APIs
- * @param {string} networkKey - Network key (ETHEREUM, BSC)
+ * Calculate chunked block ranges for ranges wider than 48 hours
+ * @param {string} networkKey - Network key
+ * @param {number} latestBlock - Latest block number
+ * @param {number} targetHours - Target hours of history
+ * @returns {Array} Array of block range configurations
+ */
+function calculateChunkedBlockRanges(networkKey, latestBlock, targetHours) {
+  const blockTime = getBlockTime(networkKey);
+  const maxChunkHours = 48; // Maximum hours per chunk
+  
+  const ranges = [];
+  let currentToBlock = latestBlock;
+  let remainingHours = targetHours;
+  
+  console.log(`   📊 ${networkKey}: Splitting ${targetHours}h range into ${maxChunkHours}h chunks`);
+  
+  while (remainingHours > 0) {
+    const chunkHours = Math.min(remainingHours, maxChunkHours);
+    const chunkBlocks = estimateBlocksFromHours(chunkHours, networkKey);
+    
+    const fromBlock = Math.max(0, currentToBlock - chunkBlocks);
+    const toBlock = currentToBlock;
+    
+    // Safety check to prevent invalid ranges
+    if (fromBlock >= toBlock || fromBlock < 0) {
+      console.log(`   ⚠️ ${networkKey}: Invalid chunk range (${fromBlock} to ${toBlock}), stopping chunking`);
+      break;
+    }
+    
+    ranges.push({
+      fromBlock: `0x${fromBlock.toString(16)}`,
+      toBlock: `0x${toBlock.toString(16)}`,
+      blockCount: toBlock - fromBlock,
+      actualHours: chunkHours,
+      blockTime: blockTime
+    });
+    
+    console.log(`   📊 ${networkKey}: Chunk ${ranges.length} - ${chunkHours}h (${chunkBlocks} blocks) from ${fromBlock} to ${toBlock}`);
+    
+    // Move to next chunk (with 1 block overlap to avoid gaps)
+    currentToBlock = fromBlock - 1;
+    remainingHours -= chunkHours;
+    
+    // Safety check to prevent infinite loops
+    if (fromBlock <= 0 || remainingHours <= 0) {
+      break;
+    }
+  }
+  
+  return ranges.reverse(); // Return in chronological order (oldest first)
+}
+
+/**
+ * Get event logs using eth_getLogs RPC method
+ * @param {string} networkKey - Network key (ETHEREUM, BSC, THREEDPASS)
  * @param {string} bridgeAddress - Bridge contract address
- * @param {string} eventType - Event type ('NewClaim', 'NewExpatriation', 'NewRepatriation')
+ * @param {string} eventType - Event type ('NewClaim', 'NewExpatriation', 'NewRepatriation', 'AllEvents')
  * @param {Object} options - Additional options
+ * @param {number} options.rangeHours - Hours of history to scan (default: 48)
  * @returns {Promise<Object>} Object with block numbers and event data
  */
-async function getEventBlockNumbersFromAPI(networkKey, bridgeAddress, eventType, options = {}) {
-  console.log(`🔍 Getting ${eventType} block numbers from API for ${networkKey} bridge ${bridgeAddress}`);
+async function getEventLogsViaRPC(networkKey, bridgeAddress, eventType, options = {}) {
+  console.log(`🔍 Getting ${eventType} events via eth_getLogs for ${networkKey} bridge ${bridgeAddress}`);
   
   try {
-    const { getEventLogs } = await import('./etherscan.js');
-    
-    // Determine the topic based on event type
+    // Get network configuration
+    const networkConfig = NETWORKS[networkKey];
+    if (!networkConfig) {
+      throw new Error(`Network configuration not found for ${networkKey}`);
+    }
+
+    // Determine topic filter based on event type
+    let topics = [];
+    if (eventType !== 'AllEvents') {
     let topic0;
     switch (eventType) {
       case 'NewClaim':
@@ -163,108 +147,210 @@ async function getEventBlockNumbersFromAPI(networkKey, bridgeAddress, eventType,
       default:
         throw new Error(`Unsupported event type: ${eventType}`);
     }
+      topics = [topic0];
+    }
+
+    // Calculate optimal block range using block estimator
+    let fromBlock = options.fromBlock || '0x0';
+    let toBlock = options.toBlock || 'latest';
+    let useChunking = false;
+    let chunkRanges = [];
     
-    // Get event logs from the explorer API
-    const logs = await getEventLogs(networkKey, bridgeAddress, {
-      topic0,
-      fromBlock: options.fromBlock || 0,
-      toBlock: options.toBlock || 'latest',
-      page: options.page || 1,
-      offset: options.offset || 10000
-    });
+    if (fromBlock === '0x0') {
+      // Get latest block number first
+      const latestBlockResponse = await fetch(networkConfig.rpcUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          jsonrpc: "2.0",
+          method: "eth_blockNumber",
+          params: [],
+          id: 1
+        })
+      });
+      
+      const latestBlockResult = await latestBlockResponse.json();
+      const latestBlock = parseInt(latestBlockResult.result, 16);
+      
+      // Use rangeHours parameter (default: 24 hours)
+      const rangeHours = options.rangeHours || 24;
+      
+      // Check if we need to use chunking for ranges wider than 48 hours
+      if (rangeHours > 48) {
+        useChunking = true;
+        chunkRanges = calculateChunkedBlockRanges(networkKey, latestBlock, rangeHours);
+        console.log(`   📊 ${networkKey}: Using chunking for ${rangeHours}h range (${chunkRanges.length} chunks)`);
+      } else {
+        const rangeConfig = calculateOptimalBlockRange(networkKey, latestBlock, rangeHours);
+        fromBlock = rangeConfig.fromBlock;
+        toBlock = rangeConfig.toBlock;
+      }
+    }
+
+    let allLogs = [];
+    
+    if (useChunking) {
+      // Process each chunk sequentially to avoid overwhelming the RPC
+      console.log(`   🔄 Processing ${chunkRanges.length} chunks for ${networkKey}...`);
+      
+      for (let i = 0; i < chunkRanges.length; i++) {
+        const chunk = chunkRanges[i];
+        console.log(`   📦 Processing chunk ${i + 1}/${chunkRanges.length} (${chunk.actualHours}h, ${chunk.blockCount} blocks)`);
+        
+        const requestPayload = {
+          jsonrpc: "2.0",
+          method: "eth_getLogs",
+          params: [
+            {
+              fromBlock: chunk.fromBlock,
+              toBlock: chunk.toBlock,
+              address: bridgeAddress,
+              topics: topics
+            }
+          ],
+          id: 1
+        };
+
+        try {
+          const response = await fetch(networkConfig.rpcUrl, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify(requestPayload)
+          });
+
+          if (!response.ok) {
+            throw new Error(`HTTP error! status: ${response.status}`);
+          }
+
+          const result = await response.json();
+          
+          if (result.error) {
+            throw new Error(`RPC error: ${result.error.message} (code: ${result.error.code})`);
+          }
+
+          const chunkLogs = result.result || [];
+          console.log(`   ✅ Chunk ${i + 1}: Found ${chunkLogs.length} events`);
+          allLogs.push(...chunkLogs);
+          
+          // 1 second delay between chunks to avoid rate limiting
+          if (i < chunkRanges.length - 1) {
+            console.log(`   ⏳ Waiting 1 second before next chunk...`);
+            await new Promise(resolve => setTimeout(resolve, 1000));
+          }
+    
+  } catch (error) {
+          console.warn(`   ⚠️ Chunk ${i + 1} failed: ${error.message}`);
+          // Continue with other chunks even if one fails
+        }
+      }
+      
+      console.log(`   ✅ Found ${allLogs.length} total events across ${chunkRanges.length} chunks`);
+    } else {
+      // Single request for ranges <= 48 hours
+      const requestPayload = {
+        jsonrpc: "2.0",
+        method: "eth_getLogs",
+        params: [
+          {
+            fromBlock: fromBlock,
+            toBlock: toBlock,
+            address: bridgeAddress,
+            topics: topics
+          }
+        ],
+        id: 1
+      };
+
+      const response = await fetch(networkConfig.rpcUrl, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(requestPayload)
+      });
+
+      if (!response.ok) {
+        throw new Error(`HTTP error! status: ${response.status}`);
+      }
+
+      const result = await response.json();
+      
+      if (result.error) {
+        throw new Error(`RPC error: ${result.error.message} (code: ${result.error.code})`);
+      }
+
+      allLogs = result.result || [];
+      console.log(`   ✅ Found ${allLogs.length} events via eth_getLogs`);
+    }
     
     // Extract unique block numbers
-    const blockNumbers = [...new Set(logs.map(log => parseInt(log.blockNumber, 16)))].sort((a, b) => b - a);
+    const blockNumbers = [...new Set(allLogs.map(log => parseInt(log.blockNumber, 16)))].sort((a, b) => b - a);
     
-    console.log(`   ✅ Found ${blockNumbers.length} blocks with ${eventType} events`);
+    // Categorize events by type
+    const eventBreakdown = {
+      NewClaim: 0,
+      NewExpatriation: 0,
+      NewRepatriation: 0,
+      Other: 0
+    };
+
+    const categorizedEvents = allLogs.map(log => {
+      const eventType = getEventTypeFromTopic(log.topics?.[0]);
+      eventBreakdown[eventType]++;
     
     return {
-      blockNumbers,
-      eventCount: logs.length,
-      network: networkKey,
-      source: 'etherscan',
-      eventType,
-      events: logs.map(log => ({
         blockNumber: parseInt(log.blockNumber, 16),
         transactionHash: log.transactionHash,
         logIndex: parseInt(log.logIndex, 16),
-        topics: log.topics
-      }))
+        topics: log.topics,
+        data: log.data,
+        address: log.address,
+        blockHash: log.blockHash,
+        transactionIndex: log.transactionIndex,
+        removed: log.removed,
+        eventType: eventType,
+        // Include raw log for full ABI decoding
+        rawLog: log
+      };
+    });
+
+    // Filter events if specific event type was requested
+    let filteredEvents = categorizedEvents;
+    if (eventType !== 'AllEvents') {
+      filteredEvents = categorizedEvents.filter(event => event.eventType === eventType);
+    }
+
+    console.log(`   📋 Event breakdown:`, eventBreakdown);
+
+    return {
+      blockNumbers: blockNumbers,
+      eventCount: filteredEvents.length,
+      network: networkKey,
+      source: 'eth_getLogs',
+      eventType: eventType,
+      events: filteredEvents,
+      eventBreakdown: eventBreakdown
     };
     
   } catch (error) {
-    console.error(`   ❌ Error getting ${eventType} block numbers from API:`, error.message);
+    console.error(`   ❌ Error getting events via eth_getLogs:`, error.message);
     throw error;
   }
 }
 
 /**
- * Get block numbers for ALL event types using Etherscan-like APIs in a single call
- * @param {string} networkKey - Network key (ETHEREUM, BSC)
+ * Get all event types using eth_getLogs RPC method
+ * @param {string} networkKey - Network key (ETHEREUM, BSC, THREEDPASS)
  * @param {string} bridgeAddress - Bridge contract address
  * @param {Object} options - Additional options
- * @returns {Promise<Object>} Object with block numbers and event data for all event types
+ * @returns {Promise<Object>} Object with all event block numbers
  */
-async function getAllEventBlockNumbersFromAPI(networkKey, bridgeAddress, options = {}) {
-  console.log(`🔍 Getting ALL event types block numbers from API for ${networkKey} bridge ${bridgeAddress}`);
-  
-  try {
-    const { getEventLogs } = await import('./etherscan.js');
-    
-    // Get event logs from the explorer API without topic0 filter to get ALL events
-    const logs = await getEventLogs(networkKey, bridgeAddress, {
-      fromBlock: options.fromBlock || 0,
-      toBlock: options.toBlock || 'latest',
-      page: options.page || 1,
-      offset: options.offset || 10000
-    });
-    
-    console.log(`   📊 Found ${logs.length} total events from API`);
-    
-    // Filter events by topic to categorize them
-    const claimEvents = logs.filter(log => log.topics && log.topics[0] === NEW_CLAIM_TOPIC);
-    const expatriationEvents = logs.filter(log => log.topics && log.topics[0] === NEW_EXPATRIATION_TOPIC);
-    const repatriationEvents = logs.filter(log => log.topics && log.topics[0] === NEW_REPATRIATION_TOPIC);
-    
-    console.log(`   📋 Event breakdown:`);
-    console.log(`     NewClaim: ${claimEvents.length}`);
-    console.log(`     NewExpatriation: ${expatriationEvents.length}`);
-    console.log(`     NewRepatriation: ${repatriationEvents.length}`);
-    
-    // Filter to only include events we care about (NewClaim, NewExpatriation, NewRepatriation)
-    const relevantEvents = [...claimEvents, ...expatriationEvents, ...repatriationEvents];
-    console.log(`   🎯 Relevant events (filtered): ${relevantEvents.length} out of ${logs.length} total`);
-    
-    // Extract unique block numbers only from relevant events
-    const allBlockNumbers = [...new Set(relevantEvents.map(log => parseInt(log.blockNumber, 16)))].sort((a, b) => b - a);
-    
-    console.log(`   ✅ Found ${allBlockNumbers.length} unique blocks with events`);
-    
-    return {
-      blockNumbers: allBlockNumbers,
-      eventCount: relevantEvents.length, // Use filtered count instead of total
-      network: networkKey,
-      source: 'etherscan',
-      eventType: 'AllEvents',
-      events: relevantEvents.map(log => ({
-        blockNumber: parseInt(log.blockNumber, 16),
-        transactionHash: log.transactionHash,
-        logIndex: parseInt(log.logIndex, 16),
-        topics: log.topics,
-        eventType: getEventTypeFromTopic(log.topics?.[0])
-      })),
-      eventBreakdown: {
-        NewClaim: claimEvents.length,
-        NewExpatriation: expatriationEvents.length,
-        NewRepatriation: repatriationEvents.length
-      }
-    };
-    
-  } catch (error) {
-    console.error(`   ❌ Error getting all event block numbers from API:`, error.message);
-    throw error;
-  }
+async function getAllEventLogsViaRPC(networkKey, bridgeAddress, options = {}) {
+  return await getEventLogsViaRPC(networkKey, bridgeAddress, 'AllEvents', options);
 }
+
 
 /**
  * Determine event type from topic signature
@@ -281,112 +367,56 @@ function getEventTypeFromTopic(topic) {
 
 /**
  * Unified block number fetcher that works across all networks
+ * Uses eth_getLogs as the only source for all networks
+ * 
  * @param {string} networkKey - Network key (ETHEREUM, BSC, THREEDPASS)
  * @param {string} bridgeAddress - Bridge contract address
  * @param {string} eventType - Event type ('NewClaim', 'NewExpatriation', 'NewRepatriation')
  * @param {Object} options - Additional options
+ * @param {number} options.rangeHours - Hours of history to scan (1-168, default: 24)
  * @returns {Promise<Object>} Object with block numbers and event data
+ * 
+ * @example
+ * // Get events from the last 24 hours
+ * const result = await getEventBlockNumbersUnified('ETHEREUM', bridgeAddress, 'NewClaim', { rangeHours: 24 });
+ * 
+ * @example
+ * // Get events from the last 2 hours (default if no options provided)
+ * const result = await getEventBlockNumbersUnified('BSC', bridgeAddress, 'AllEvents', { rangeHours: 2 });
  */
 export async function getEventBlockNumbersUnified(networkKey, bridgeAddress, eventType, options = {}) {
-  console.log(`🌐 Getting ${eventType} block numbers for ${networkKey} bridge ${bridgeAddress}`);
+  const rangeHours = options.rangeHours || 24;
+  console.log(`🌐 Getting ${eventType} block numbers for ${networkKey} bridge ${bridgeAddress} via eth_getLogs (${rangeHours}h range)`);
   
-  if (networkKey === 'THREEDPASS') {
-    // Use 3dpscan.xyz for 3DPass network
-    return await getNewClaimBlockNumbers3DPassWrapper(bridgeAddress, options);
-  } else if (networkKey === 'ETHEREUM') {
-    // Try API first, then fallback to Etherscan parser
-    try {
-      return await getEventBlockNumbersFromAPI(networkKey, bridgeAddress, eventType, options);
-    } catch (apiError) {
-      console.log(`⚠️ Ethereum API failed, trying Etherscan parser fallback: ${apiError.message}`);
-      return await getNewClaimBlockNumbersEthereumFallback(bridgeAddress, options);
-    }
-  } else if (networkKey === 'BSC') {
-    // Try API first, then fallback to BSCScan parser
-    try {
-      return await getEventBlockNumbersFromAPI(networkKey, bridgeAddress, eventType, options);
-    } catch (apiError) {
-      console.log(`⚠️ BSC API failed, trying BSCScan parser fallback: ${apiError.message}`);
-      return await getNewClaimBlockNumbersBSCFallback(bridgeAddress, options);
-    }
-  } else {
-    throw new Error(`Unsupported network: ${networkKey}`);
-  }
+  // Use eth_getLogs for all networks
+  return await getEventLogsViaRPC(networkKey, bridgeAddress, eventType, options);
 }
 
-/**
- * Get all event block numbers for 3DPass network
- * @param {string} bridgeAddress - Bridge contract address
- * @param {Object} options - Options object
- * @returns {Promise<Object>} Object with all event block numbers
- */
-async function getAllEventBlockNumbers3DPass(bridgeAddress, options = {}) {
-  console.log(`🔍 Getting ALL event types block numbers for 3DPass bridge ${bridgeAddress}`);
-  
-  try {
-    const { getAddressBlocks } = await import('./3dpscan.js');
-    
-    // Get all EVM events for this bridge
-    const blockNumbers = await getAddressBlocks({
-      address: bridgeAddress,
-      startblock: options.fromBlock || 0,
-      endblock: options.toBlock
-    });
-    
-    console.log(`   ✅ Found ${blockNumbers.length} blocks with EVM events`);
-    
-    return {
-      blockNumbers: blockNumbers.sort((a, b) => b - a), // Sort descending
-      eventCount: blockNumbers.length,
-      network: 'THREEDPASS',
-      source: '3dpscan.xyz',
-      eventType: 'AllEvents',
-      events: [], // 3DPass doesn't provide detailed event info in the block fetcher
-      eventBreakdown: {
-        NewClaim: 'unknown', // Would need to query individual blocks to determine
-        NewExpatriation: 'unknown',
-        NewRepatriation: 'unknown'
-      }
-    };
-    
-  } catch (error) {
-    console.error(`   ❌ Error getting all event block numbers for 3DPass:`, error.message);
-    throw error;
-  }
-}
 
 /**
  * Get ALL event types block numbers for any network in a single call
+ * Uses eth_getLogs as the only source for all networks
+ * 
  * @param {string} networkKey - Network key (ETHEREUM, BSC, THREEDPASS)
  * @param {string} bridgeAddress - Bridge contract address
  * @param {Object} options - Additional options
+ * @param {number} options.rangeHours - Hours of history to scan (1-168, default: 24)
  * @returns {Promise<Object>} Object with all event block numbers
+ * 
+ * @example
+ * // Get all events from the last 12 hours
+ * const result = await getAllEventBlockNumbersUnified('BSC', bridgeAddress, { rangeHours: 12 });
+ * 
+ * @example
+ * // Get all events from the last week
+ * const result = await getAllEventBlockNumbersUnified('ETHEREUM', bridgeAddress, { rangeHours: 168 });
  */
 export async function getAllEventBlockNumbersUnified(networkKey, bridgeAddress, options = {}) {
-  console.log(`🌐 Getting ALL event types block numbers for ${networkKey} bridge ${bridgeAddress}`);
+  const rangeHours = options.rangeHours || 24;
+  console.log(`🌐 Getting ALL event types block numbers for ${networkKey} bridge ${bridgeAddress} via eth_getLogs (${rangeHours}h range)`);
   
-  if (networkKey === 'THREEDPASS') {
-    // Use 3dpscan.xyz for 3DPass network - get all EVM events and filter by topic
-    return await getAllEventBlockNumbers3DPass(bridgeAddress, options);
-  } else if (networkKey === 'ETHEREUM') {
-    // Try API first, then fallback to Etherscan parser
-    try {
-      return await getAllEventBlockNumbersFromAPI(networkKey, bridgeAddress, options);
-    } catch (apiError) {
-      console.log(`⚠️ Ethereum API failed, trying Etherscan parser fallback: ${apiError.message}`);
-      return await getNewClaimBlockNumbersEthereumFallback(bridgeAddress, options);
-    }
-  } else if (networkKey === 'BSC') {
-    // Try API first, then fallback to BSCScan parser
-    try {
-      return await getAllEventBlockNumbersFromAPI(networkKey, bridgeAddress, options);
-    } catch (apiError) {
-      console.log(`⚠️ BSC API failed, trying BSCScan parser fallback: ${apiError.message}`);
-      return await getNewClaimBlockNumbersBSCFallback(bridgeAddress, options);
-    }
-  } else {
-    throw new Error(`Unsupported network: ${networkKey}`);
-  }
+  // Use eth_getLogs for all networks
+  return await getAllEventLogsViaRPC(networkKey, bridgeAddress, options);
 }
 
 /**
@@ -455,61 +485,38 @@ export async function getAllTransferBlockNumbersUnified(networkKey, bridgeAddres
 }
 
 /**
- * Test connection for all supported networks
+ * Test connection for all supported networks using eth_getLogs
  * @param {string} networkKey - Network key to test
  * @returns {Promise<boolean>} True if connection successful
  */
 export async function testNetworkConnection(networkKey) {
-  if (networkKey === 'THREEDPASS') {
-    // Test 3DPass connection by trying to get blocks for a known address
-    try {
-      const testBlocks = await getAddressBlocks({
-        address: '0x50fcE1D58b41c3600C74de03238Eee71aFDfBf1F', // P3D Export Bridge
-        startblock: 0,
-        endblock: 1000000
-      });
-      console.log(`✅ 3DPass connection successful (found ${testBlocks.length} test blocks)`);
-      return true;
-    } catch (error) {
-      console.error(`❌ 3DPass connection failed:`, error.message);
-      return false;
-    }
-  } else if (networkKey === 'ETHEREUM') {
-    // Test Ethereum with API first, then fallback to parser
-    try {
-      const { testExplorerConnection } = await import('./etherscan.js');
-      return await testExplorerConnection(networkKey);
-    } catch (apiError) {
-      console.log(`⚠️ Ethereum API test failed, trying Etherscan parser: ${apiError.message}`);
-      try {
-        const testAddress = '0x3a96AC42A28D5610Aca2A79AE782988110108eDe'; // Default test address
-        const result = await parseEtherscanBlockNumbers(testAddress, { delay: 1000, retries: 1 });
-        console.log(`✅ Etherscan parser connection successful (found ${result.blockNumbers.length} test blocks)`);
-        return result.success;
-      } catch (parserError) {
-        console.error(`❌ Etherscan parser connection failed:`, parserError.message);
-        return false;
-      }
-    }
-  } else if (networkKey === 'BSC') {
-    // Test BSC with API first, then fallback to parser
-    try {
-      const { testExplorerConnection } = await import('./etherscan.js');
-      return await testExplorerConnection(networkKey);
-    } catch (apiError) {
-      console.log(`⚠️ BSC API test failed, trying BSCScan parser: ${apiError.message}`);
-      try {
-        const testAddress = '0x078E7A2037b63846836E9d721cf2dabC08b94281'; // Default test address
-        const result = await parseBSCScanBlockNumbers(testAddress, { delay: 1000, retries: 1 });
-        console.log(`✅ BSCScan parser connection successful (found ${result.blockNumbers.length} test blocks)`);
-        return result.success;
-      } catch (parserError) {
-        console.error(`❌ BSCScan parser connection failed:`, parserError.message);
-        return false;
-      }
-    }
-  } else {
+  console.log(`🧪 Testing ${networkKey} network connection using eth_getLogs`);
+  
+  // Test addresses for each network
+  const testAddresses = {
+    'ETHEREUM': '0x4f3a4e37701402C61146071309e45A15843025E1', // P3D Import Bridge
+    'BSC': '0x078E7A2037b63846836E9d721cf2dabC08b94281', // P3D Import Bridge
+    'THREEDPASS': '0x65101a5889F33E303b3753aa7311161F6C708F27' // P3D Export Bridge
+  };
+  
+  const testAddress = testAddresses[networkKey];
+  if (!testAddress) {
     throw new Error(`Unsupported network: ${networkKey}`);
+  }
+  
+  try {
+    // Test with a small block range to avoid timeouts
+    const result = await getEventLogsViaRPC(networkKey, testAddress, 'AllEvents', {
+      fromBlock: '0x0',
+      toBlock: 'latest'
+    });
+    
+    console.log(`✅ ${networkKey} connection successful via eth_getLogs (found ${result.eventCount} events)`);
+    return true;
+    
+  } catch (rpcError) {
+    console.error(`❌ ${networkKey} connection failed via eth_getLogs: ${rpcError.message}`);
+    return false;
   }
 }
 

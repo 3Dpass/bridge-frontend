@@ -3,7 +3,7 @@ import { ethers } from 'ethers';
 import { useWeb3 } from '../contexts/Web3Context';
 import { useSettings } from '../contexts/SettingsContext';
 import { NETWORKS, getBridgeDirections, getBridgeAddressesForDirection, getNetworksForDirection } from '../config/networks';
-import { discoverAllBridgeEvents, loadClaimDataWithUpdates } from '../utils/parallel-bridge-discovery';
+import { discoverAllBridgeEvents } from '../utils/parallel-bridge-discovery';
 import { aggregateClaimsAndTransfers } from '../utils/aggregate-claims-transfers';
 import { clearAllCachedEvents } from '../utils/event-cache';
 import { 
@@ -256,6 +256,7 @@ const ClaimList = () => {
     return 'all';
   }); // 'all', 'my', 'suspicious', 'pending', 'active'
   const [bridgeDirection, setBridgeDirection] = useState('all'); // 'all' or specific direction ID
+  const [rangeHours, setRangeHours] = useState(24); // Hours of history to scan (default: 24)
   const [isSearching, setIsSearching] = useState(false); // Track if search is in progress
   const [currentBlock, setCurrentBlock] = useState(null);
   const [showNewClaim, setShowNewClaim] = useState(false);
@@ -1385,16 +1386,26 @@ const ClaimList = () => {
           return true;
         })
         .map(bridge => {
-          // Map network names to network keys
-          const networkKeyMap = {
-            'Ethereum': 'ETHEREUM',
-            'BSC': 'BSC', 
-            '3dpass': 'THREEDPASS'
-          };
+          // Determine the correct network key based on which network section the bridge belongs to
+          // We need to find which network section contains this bridge address
+          let networkKey = bridge.homeNetwork; // fallback
+          
+          // Check which network section this bridge belongs to
+          for (const [networkKeyName, networkConfig] of Object.entries(NETWORKS)) {
+            if (networkConfig.bridges) {
+              for (const [, bridgeConfig] of Object.entries(networkConfig.bridges)) {
+                if (bridgeConfig.address === bridge.address) {
+                  networkKey = networkKeyName;
+                  break;
+                }
+              }
+              if (networkKey !== bridge.homeNetwork) break;
+            }
+          }
           
           return {
             bridgeAddress: bridge.address,
-            networkKey: networkKeyMap[bridge.homeNetwork] || bridge.homeNetwork,
+            networkKey: networkKey,
             bridgeType: bridge.type,
             homeNetwork: bridge.homeNetwork,
             foreignNetwork: bridge.foreignNetwork
@@ -1406,77 +1417,63 @@ const ClaimList = () => {
       // Step 2: Discover all bridge events in parallel
       const discoveryResults = await discoverAllBridgeEvents(bridgeConfigs, {
         limit: 50,
-        includeClaimData: false // We'll load claim data separately
+        includeClaimData: false, // We'll load claim data separately
+        rangeHours: rangeHours // Use the selected range
       });
       
       console.log('✅ Parallel discovery completed:', discoveryResults.stats);
       
-      // Step 3: Categorize results
-      const completedTransfers = discoveryResults.allMatchedTransfers.filter(t => t.isComplete);
-      const pendingTransfers = discoveryResults.allMatchedTransfers.filter(t => !t.isComplete);
-      
-      // Update discovery state
+      // Step 3: Update discovery state with raw results
       setDiscoveryState(prev => ({
         ...prev,
         bridgeResults: discoveryResults.bridgeResults,
-        matchedTransfers: discoveryResults.allMatchedTransfers,
-        completedTransfers,
-        pendingTransfers,
         discoveryProgress: {
           bridgesCompleted: discoveryResults.stats.successfulBridges,
           totalBridges: discoveryResults.stats.totalBridges,
+          eventsFound: discoveryResults.stats.totalEvents,
+          transfersFound: discoveryResults.stats.totalTransfers,
+          claimsFound: discoveryResults.stats.totalClaims,
           claimDataLoaded: 0,
           totalClaims: discoveryResults.stats.totalClaims
         }
       }));
       
-      // Step 4: Load claim data in parallel with real-time updates
-      if (discoveryResults.allMatchedTransfers.length > 0) {
-        console.log('🔄 Loading claim data in parallel with real-time updates...');
-        
-        await loadClaimDataWithUpdates(
-          discoveryResults.allMatchedTransfers,
-          (updatedTransfers) => {
-            // Real-time UI update callback
-            const completed = updatedTransfers.filter(t => t.isComplete);
-            const pending = updatedTransfers.filter(t => !t.isComplete);
-            
-            setDiscoveryState(prev => ({
-              ...prev,
-              matchedTransfers: updatedTransfers,
-              completedTransfers: completed,
-              pendingTransfers: pending,
-              discoveryProgress: {
-                ...prev.discoveryProgress,
-                claimDataLoaded: completed.length
-              }
-            }));
-          }
-        );
-        
-        console.log('✅ Claim data loading completed');
-      }
+      // Step 4: Aggregate transfers and claims using the aggregation utility
+      console.log('🔄 Aggregating transfers and claims...');
       
-      // Step 5: Create aggregated data structure
-      const aggregated = {
-        completedTransfers: discoveryResults.allMatchedTransfers.filter(t => t.isComplete),
-        suspiciousClaims: [], // Would be populated by fraud detection
-        pendingTransfers: discoveryResults.allMatchedTransfers.filter(t => !t.isComplete),
-        fraudDetected: false,
-          stats: {
+      const aggregated = aggregateClaimsAndTransfers(discoveryResults.allClaims, discoveryResults.allTransfers);
+      
+      // Update state with aggregated results
+      setDiscoveryState(prev => ({
+        ...prev,
+        matchedTransfers: [...aggregated.completedTransfers, ...aggregated.suspiciousClaims],
+        completedTransfers: aggregated.completedTransfers,
+        pendingTransfers: aggregated.pendingTransfers,
+        suspiciousClaims: aggregated.suspiciousClaims,
+        discoveryProgress: {
+          ...prev.discoveryProgress,
+          claimDataLoaded: aggregated.completedTransfers.length
+        }
+      }));
+      
+      console.log('✅ Aggregation completed');
+      
+      // Step 5: Set aggregated data structure
+      setAggregatedData({
+        ...aggregated,
+        fraudDetected: aggregated.suspiciousClaims.length > 0,
+        stats: {
           totalClaims: discoveryResults.stats.totalClaims,
           totalTransfers: discoveryResults.stats.totalTransfers,
-          completedTransfers: discoveryResults.allMatchedTransfers.filter(t => t.isComplete).length,
-          suspiciousClaims: 0,
-          pendingTransfers: discoveryResults.allMatchedTransfers.filter(t => !t.isComplete).length
+          completedTransfers: aggregated.completedTransfers.length,
+          suspiciousClaims: aggregated.suspiciousClaims.length,
+          pendingTransfers: aggregated.pendingTransfers.length
         }
-      };
-      
-      setAggregatedData(aggregated);
+      });
       
       // Step 6: Load stake information for completed claims
-      const completedClaims = discoveryResults.allMatchedTransfers
-        .filter(t => t.isComplete && t.claim)
+      const completedClaims = aggregated.completedTransfers
+        .filter(t => t.claim)
         .map(t => t.claim);
       
       if (completedClaims.length > 0) {
@@ -1493,7 +1490,7 @@ const ClaimList = () => {
       setLoading(false);
       setDiscoveryState(prev => ({ ...prev, isDiscovering: false }));
       }
-  }, [bridgeDirection, getBridgeInstancesWithSettings, loading, isSearching, discoveryState.isDiscovering, isInitialLoad, loadCachedData, loadStakeInformation]);
+  }, [bridgeDirection, rangeHours, getBridgeInstancesWithSettings, loading, isSearching, discoveryState.isDiscovering, isInitialLoad, loadCachedData, loadStakeInformation]);
 
   // Legacy discovery system removed - using only parallel discovery system
 
@@ -2048,6 +2045,22 @@ const ClaimList = () => {
                 </option>
               ))}
             </select>
+            
+            {/* Range Hours Selector */}
+            <select
+              value={rangeHours}
+              onChange={(e) => setRangeHours(parseInt(e.target.value))}
+              className="bg-dark-800 border border-dark-700 rounded-md px-3 py-2 text-sm text-white focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-transparent min-w-[140px]"
+              title="Select time range for data discovery"
+            >
+              <option value={6}>Last 6 hours</option>
+              <option value={12}>Last 12 hours</option>
+              <option value={24}>Last 24 hours</option>
+              <option value={48}>Last 48 hours</option>
+              <option value={72}>Last 72 hours</option>
+              <option value={168}>Last week</option>
+            </select>
+            
             <button
               onClick={searchSelectedDirection}
               disabled={isSearching}
@@ -2094,6 +2107,8 @@ const ClaimList = () => {
               ) : (
                 <span className="text-green-400">Fresh data loaded</span>
               )}
+              <span className="text-secondary-400">•</span>
+              <span className="text-blue-400">Range: {rangeHours}h</span>
             </div>
             <div className="flex items-center gap-2">
               {cacheStatus.isRefreshing ? (
@@ -2156,7 +2171,9 @@ const ClaimList = () => {
               <span className="text-secondary-400">•</span>
               <span className="text-green-400">
                 Claims: {discoveryState.discoveryProgress.claimDataLoaded}/{discoveryState.discoveryProgress.totalClaims}
-                </span>
+              </span>
+              <span className="text-secondary-400">•</span>
+              <span className="text-purple-400">Range: {rangeHours}h</span>
             </div>
             <div className="flex items-center gap-2">
               <div className="w-2 h-2 bg-blue-500 rounded-full animate-pulse"></div>

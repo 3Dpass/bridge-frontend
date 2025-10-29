@@ -5,47 +5,46 @@
 import { discoverAllBridgeEvents } from '../parallel-bridge-discovery.js';
 
 const TEST_BRIDGE_CONFIGS = [
+  // {
+  //   bridgeAddress: '0x4f3a4e37701402C61146071309e45A15843025E1', // P3D Export Bridge on Ethereum
+  //   networkKey: 'ETHEREUM',
+  //   bridgeType: 'export',
+  //   homeNetwork: 'ETHEREUM',
+  //   foreignNetwork: 'THREEDPASS'
+  // },
+  // {
+  //   bridgeAddress: '0x078E7A2037b63846836E9d721cf2dabC08b94281', // P3D Import Bridge on BSC
+  //   networkKey: 'BSC',
+  //   bridgeType: 'import',
+  //   homeNetwork: 'BSC',
+  //   foreignNetwork: 'ETHEREUM'
+  // },
   {
-    bridgeAddress: '0x4f3a4e37701402C61146071309e45A15843025E1', // P3D Export Bridge on Ethereum
-    networkKey: 'ETHEREUM',
-    bridgeType: 'export',
-    homeNetwork: 'ETHEREUM',
-    foreignNetwork: 'THREEDPASS'
-  },
-  {
-    bridgeAddress: '0x078E7A2037b63846836E9d721cf2dabC08b94281', // P3D Import Bridge on BSC
-    networkKey: 'BSC',
-    bridgeType: 'import',
-    homeNetwork: 'BSC',
-    foreignNetwork: 'ETHEREUM'
-  },
-  {
-    bridgeAddress: '0x00D5f00250434e76711e8127A37c6f84dBbDAA4C', // P3D bridge on 3DPass
+    bridgeAddress: '0x65101a5889F33E303b3753aa7311161F6C708F27', // P3D Export Bridge on 3DPass
     networkKey: 'THREEDPASS',
     bridgeType: 'export',
     homeNetwork: 'THREEDPASS',
-    foreignNetwork: 'ETHEREUM'
+    foreignNetwork: 'BSC'
   }
 ];
 
 async function testParallelDiscovery() {
   console.log('🧪 Testing parallel bridge discovery system...');
-  console.log('Testing all three networks (Ethereum, BSC, 3DPass) in parallel');
+  console.log('Testing 3DPass network only');
   console.log('');
   
   try {
     const startTime = Date.now();
     
-    console.log('🚀 Starting parallel discovery for all networks...');
-    console.log(`  - Ethereum: ${TEST_BRIDGE_CONFIGS[0].bridgeAddress}`);
-    console.log(`  - BSC: ${TEST_BRIDGE_CONFIGS[1].bridgeAddress}`);
-    console.log(`  - 3DPass: ${TEST_BRIDGE_CONFIGS[2].bridgeAddress}`);
+    console.log('🚀 Starting parallel discovery for 3DPass network...');
+    console.log(`  - 3DPass: ${TEST_BRIDGE_CONFIGS[0].bridgeAddress}`);
     console.log('');
     
     // Test parallel discovery with all three networks
     const results = await discoverAllBridgeEvents(TEST_BRIDGE_CONFIGS, {
       limit: 20, // Increased limit to get more comprehensive results
-      includeClaimData: false
+      includeClaimData: false,
+      rangeHours: 48 // Test with 48-hour range
     });
     
     const endTime = Date.now();
