@@ -1379,10 +1379,6 @@ const ClaimList = () => {
           if (bridgeAddresses && !bridgeAddresses.map(addr => addr.toLowerCase()).includes(bridge.address.toLowerCase())) {
             return false;
           }
-          // Filter by network if specified - check both home and foreign networks
-          if (targetNetworks && !targetNetworks.includes(bridge.homeNetwork) && !targetNetworks.includes(bridge.foreignNetwork)) {
-            return false;
-          }
           return true;
         })
         .map(bridge => {
@@ -1408,7 +1404,9 @@ const ClaimList = () => {
             networkKey: networkKey,
             bridgeType: bridge.type,
             homeNetwork: bridge.homeNetwork,
-            foreignNetwork: bridge.foreignNetwork
+            foreignNetwork: bridge.foreignNetwork,
+            homeTokenSymbol: bridge.homeTokenSymbol,
+            foreignTokenSymbol: bridge.foreignTokenSymbol
           };
         });
       
@@ -2058,7 +2056,11 @@ const ClaimList = () => {
               <option value={24}>Last 24 hours</option>
               <option value={48}>Last 48 hours</option>
               <option value={72}>Last 72 hours</option>
+              <option value={96}>Last 4 days</option>
+              <option value={120}>Last 5 days</option>
               <option value={168}>Last week</option>
+              <option value={240}>Last 10 days</option>
+              <option value={336}>Last 2 weeks</option>
             </select>
             
             <button
@@ -2673,7 +2675,7 @@ const ClaimList = () => {
                             <div>
                               <span className="text-secondary-400">Timestamp:</span>
                               <span className="text-white ml-2">
-                                {claim.txts ? new Date(claim.txts * 1000).toLocaleString() : 'N/A'}
+                                {claim.timestamp ? new Date(claim.timestamp * 1000).toLocaleString() : 'N/A'}
                               </span>
                               {(() => {
                                 const matchStatus = getFieldMatchStatus(claim, 'timestamp');

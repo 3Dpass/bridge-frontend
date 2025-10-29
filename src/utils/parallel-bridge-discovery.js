@@ -12,6 +12,7 @@ import { ethers } from 'ethers';
 import { getAllEventBlockNumbersUnified } from './unified-block-fetcher.js';
 import { getNetworkWithSettings } from './settings.js';
 import { COUNTERSTAKE_ABI, EXPORT_ABI, IMPORT_ABI } from '../contracts/abi.js';
+import { getBlockTimestamp } from './bridge-contracts.js';
 import { wait } from './utils.js';
 
 // Rate limiting configuration
@@ -25,7 +26,7 @@ const RATE_LIMIT_MS = 1000; // 1 second between requests
  * @returns {Promise<Object>} Bridge events with matched transfers
  */
 async function discoverBridgeEvents(bridgeConfig, options = {}) {
-  const { bridgeAddress, networkKey, bridgeType, homeNetwork, foreignNetwork } = bridgeConfig;
+  const { bridgeAddress, networkKey, bridgeType, homeNetwork, foreignNetwork, homeTokenSymbol, foreignTokenSymbol } = bridgeConfig;
   const { rangeHours = 24 } = options;
   
   console.log(`🔍 Discovering events for ${networkKey} bridge ${bridgeAddress} (${bridgeType}) - ${rangeHours}h range`);
@@ -54,7 +55,7 @@ async function discoverBridgeEvents(bridgeConfig, options = {}) {
     }
     
     // Decode events using ABI
-    const decodedEvents = await decodeEventsWithABI(networkKey, bridgeAddress, eventResult.events || [], bridgeType);
+    const decodedEvents = await decodeEventsWithABI(networkKey, bridgeAddress, eventResult.events || [], bridgeType, homeNetwork, foreignNetwork, homeTokenSymbol, foreignTokenSymbol);
     
     // Categorize events by type
     const expatriations = decodedEvents.filter(e => e.eventType === 'NewExpatriation');
@@ -128,19 +129,44 @@ export { discoverBridgeEvents };
  * @param {string} bridgeAddress - Bridge address
  * @param {Array} events - Raw events from unified fetcher
  * @param {string} bridgeType - Bridge type (Export, Import)
+ * @param {string} homeNetwork - Home network name
+ * @param {string} foreignNetwork - Foreign network name
+ * @param {string} homeTokenSymbol - Home token symbol
+ * @param {string} foreignTokenSymbol - Foreign token symbol
  * @returns {Promise<Array>} Decoded events with full data
  */
-async function decodeEventsWithABI(networkKey, bridgeAddress, events, bridgeType) {
+async function decodeEventsWithABI(networkKey, bridgeAddress, events, bridgeType, homeNetwork, foreignNetwork, homeTokenSymbol, foreignTokenSymbol) {
   if (!events || events.length === 0) {
     return [];
   }
 
   console.log(`🔍 Decoding ${events.length} events using ABI for ${networkKey}`);
 
+  // For 3dpass, we need to fetch block timestamps for transfer events
+  let blockTimestamps = {};
+
   try {
   const networkConfig = getNetworkWithSettings(networkKey);
   if (!networkConfig?.rpcUrl) {
     throw new Error(`No RPC URL found for network ${networkKey}`);
+  }
+  
+  if (networkKey === 'THREEDPASS') {
+    const provider = new ethers.providers.JsonRpcProvider(networkConfig.rpcUrl);
+    const transferEvents = events.filter(e => e.eventType === 'NewExpatriation' || e.eventType === 'NewRepatriation');
+    const uniqueBlockNumbers = [...new Set(transferEvents.map(event => event.blockNumber))];
+    
+    console.log(`🔍 Fetching block timestamps for ${uniqueBlockNumbers.length} unique blocks on 3dpass`);
+    
+    for (const blockNumber of uniqueBlockNumbers) {
+      try {
+        const timestamp = await getBlockTimestamp(provider, blockNumber);
+        blockTimestamps[blockNumber] = timestamp;
+      } catch (error) {
+        console.warn(`⚠️ Could not get timestamp for 3dpass block ${blockNumber}:`, error.message);
+        blockTimestamps[blockNumber] = undefined;
+      }
+    }
   }
   
     // Select the correct ABI based on bridge type
@@ -197,15 +223,15 @@ async function decodeEventsWithABI(networkKey, bridgeAddress, events, bridgeType
               recipientAddress: decoded.args.foreign_address, // NewExpatriation uses foreign_address
               reward: decoded.args.reward,
               data: decoded.args.data,
-              timestamp: event.blockTimestamp || Math.floor(Date.now() / 1000), // Add timestamp
-              fromNetwork: 'THREEDPASS', // Export bridges send from 3DPass
-              toNetwork: 'BSC', // Export bridges send to BSC
-              homeNetwork: 'THREEDPASS',
-              foreignNetwork: 'BSC',
-              networkName: '3DPass',
-              tokenSymbol: 'P3D', // 3DPass token
-              homeTokenSymbol: 'P3D',
-              foreignTokenSymbol: 'wP3D'
+              timestamp: event.rawLog?.blockTimestamp ? parseInt(event.rawLog.blockTimestamp, 16) : (networkKey === 'THREEDPASS' ? blockTimestamps[event.blockNumber] : undefined), // Use rawLog for ETH/BSC, fetched timestamp for 3dpass
+              fromNetwork: homeNetwork, // Use actual bridge configuration
+              toNetwork: foreignNetwork, // Use actual bridge configuration
+              homeNetwork: homeNetwork,
+              foreignNetwork: foreignNetwork,
+              networkName: homeNetwork,
+              tokenSymbol: homeTokenSymbol, // Use actual token symbol from bridge config
+              homeTokenSymbol: homeTokenSymbol,
+              foreignTokenSymbol: foreignTokenSymbol
             }),
             ...(event.eventType === 'NewRepatriation' && {
               amount: decoded.args.amount,
@@ -213,15 +239,15 @@ async function decodeEventsWithABI(networkKey, bridgeAddress, events, bridgeType
               recipientAddress: decoded.args.home_address, // NewRepatriation uses home_address
               reward: decoded.args.reward,
               data: decoded.args.data,
-              timestamp: event.blockTimestamp || Math.floor(Date.now() / 1000), // Add timestamp
-              fromNetwork: 'BSC', // Import bridges send from BSC
-              toNetwork: 'THREEDPASS', // Import bridges send to 3DPass
-              homeNetwork: 'BSC',
-              foreignNetwork: 'THREEDPASS',
-              networkName: 'BSC',
-              tokenSymbol: 'wP3D', // BSC wrapped token
-              homeTokenSymbol: 'wP3D',
-              foreignTokenSymbol: 'P3D'
+              timestamp: event.rawLog?.blockTimestamp ? parseInt(event.rawLog.blockTimestamp, 16) : (networkKey === 'THREEDPASS' ? blockTimestamps[event.blockNumber] : undefined), // Use rawLog for ETH/BSC, fetched timestamp for 3dpass
+              fromNetwork: foreignNetwork, // Use actual bridge configuration
+              toNetwork: homeNetwork, // Use actual bridge configuration
+              homeNetwork: homeNetwork,
+              foreignNetwork: foreignNetwork,
+              networkName: homeNetwork,
+              tokenSymbol: homeTokenSymbol, // Use actual token symbol from bridge config
+              homeTokenSymbol: homeTokenSymbol,
+              foreignTokenSymbol: foreignTokenSymbol
             }),
             ...(event.eventType === 'NewClaim' && {
               claimNum: decoded.args.claim_num,
@@ -232,12 +258,16 @@ async function decodeEventsWithABI(networkKey, bridgeAddress, events, bridgeType
               reward: decoded.args.reward,
               data: decoded.args.data,
               txid: decoded.args.txid,
+              timestamp: Number(decoded.args.txts), // Use txts from event
               blockNumber: event.blockNumber,
               claimTransactionHash: event.transactionHash,
-              networkName: networkKey === 'BSC' ? 'BSC' : '3DPass',
-              tokenSymbol: networkKey === 'BSC' ? 'wP3D' : 'P3D',
-              homeTokenSymbol: networkKey === 'BSC' ? 'wP3D' : 'P3D',
-              foreignTokenSymbol: networkKey === 'BSC' ? 'P3D' : 'wP3D'
+              networkName: homeNetwork,
+              tokenSymbol: homeTokenSymbol, // Use actual token symbol from bridge config
+              homeTokenSymbol: homeTokenSymbol,
+              foreignTokenSymbol: foreignTokenSymbol,
+              // Add missing network fields for flow validation
+              homeNetwork: homeNetwork,
+              foreignNetwork: foreignNetwork
             })
           };
 
@@ -257,12 +287,13 @@ async function decodeEventsWithABI(networkKey, bridgeAddress, events, bridgeType
           networkKey: networkKey,
           bridgeType: bridgeType,
           bridgeAddress: bridgeAddress,
-          networkName: networkKey === 'BSC' ? 'BSC' : '3DPass',
-          tokenSymbol: networkKey === 'BSC' ? 'wP3D' : 'P3D',
-          homeTokenSymbol: networkKey === 'BSC' ? 'wP3D' : 'P3D',
-          foreignTokenSymbol: networkKey === 'BSC' ? 'P3D' : 'wP3D',
-          homeNetwork: networkKey === 'BSC' ? 'BSC' : 'THREEDPASS',
-          foreignNetwork: networkKey === 'BSC' ? 'THREEDPASS' : 'BSC'
+          networkName: homeNetwork,
+          tokenSymbol: homeTokenSymbol, // Use actual token symbol from bridge config
+          homeTokenSymbol: homeTokenSymbol,
+          foreignTokenSymbol: foreignTokenSymbol,
+          homeNetwork: homeNetwork,
+          foreignNetwork: foreignNetwork,
+          timestamp: event.rawLog?.blockTimestamp ? parseInt(event.rawLog.blockTimestamp, 16) : (networkKey === 'THREEDPASS' ? blockTimestamps[event.blockNumber] : undefined) // Use rawLog for ETH/BSC, fetched timestamp for 3dpass
         });
       }
     }
@@ -284,12 +315,13 @@ async function decodeEventsWithABI(networkKey, bridgeAddress, events, bridgeType
       networkKey: networkKey,
       bridgeType: bridgeType,
       bridgeAddress: bridgeAddress,
-      networkName: networkKey === 'BSC' ? 'BSC' : '3DPass',
-      tokenSymbol: networkKey === 'BSC' ? 'wP3D' : 'P3D',
-      homeTokenSymbol: networkKey === 'BSC' ? 'wP3D' : 'P3D',
-      foreignTokenSymbol: networkKey === 'BSC' ? 'P3D' : 'wP3D',
-      homeNetwork: networkKey === 'BSC' ? 'BSC' : 'THREEDPASS',
-      foreignNetwork: networkKey === 'BSC' ? 'THREEDPASS' : 'BSC'
+      networkName: homeNetwork,
+      tokenSymbol: homeTokenSymbol, // Use actual token symbol from bridge config
+      homeTokenSymbol: homeTokenSymbol,
+      foreignTokenSymbol: foreignTokenSymbol,
+      homeNetwork: homeNetwork,
+      foreignNetwork: foreignNetwork,
+      timestamp: event.rawLog?.blockTimestamp ? parseInt(event.rawLog.blockTimestamp, 16) : (networkKey === 'THREEDPASS' ? blockTimestamps[event.blockNumber] : undefined) // Use rawLog for ETH/BSC, fetched timestamp for 3dpass
     }));
   }
 }
