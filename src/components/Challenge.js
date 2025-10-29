@@ -34,10 +34,15 @@ const Challenge = ({ claim, onChallengeSuccess, onClose }) => {
   const [isRevoking, setIsRevoking] = useState(false);
 
   // Get actual claim number from the claim object (not the display number)
+  // Convert BigNumber objects to strings
   const actualClaimNum = claim.actualClaimNum || claim.claim_num || claim.debug_claim_num;
+  const actualClaimNumString = ethers.BigNumber.isBigNumber(actualClaimNum) ? actualClaimNum.toString() : String(actualClaimNum || 'Unknown');
   
   // For display, use the display number that matches what the user sees
-  const displayClaimNum = claim.claimNum;
+  // Ensure it's converted to string to avoid React rendering issues
+  const displayClaimNum = claim.claimNum ? 
+    (ethers.BigNumber.isBigNumber(claim.claimNum) ? claim.claimNum.toString() : String(claim.claimNum)) : 
+    'Unknown';
 
   // Get the required network and stake token information
   const getRequiredNetworkAndStakeToken = useCallback(() => {
@@ -510,7 +515,7 @@ const Challenge = ({ claim, onChallengeSuccess, onClose }) => {
       }
 
       // Now call the challenge function using explicit function signature for overloaded function
-      console.log(`Challenging claim ${actualClaimNum} with outcome ${selectedOutcome} and stake ${stakeAmount} ${stakeInfo.stakeTokenSymbol}`);
+      console.log(`Challenging claim ${actualClaimNumString} with outcome ${selectedOutcome} and stake ${stakeAmount} ${stakeInfo.stakeTokenSymbol}`);
       
       // Prepare transaction options
       const txOptions = {
@@ -530,7 +535,9 @@ const Challenge = ({ claim, onChallengeSuccess, onClose }) => {
       }
       
       try {
-      const challengeTx = await contract.functions['challenge(uint256,uint8,uint256)'](actualClaimNum, selectedOutcome, stakeAmountWei, txOptions);
+      // Convert actualClaimNum back to BigNumber for the contract call
+      const actualClaimNumBigNumber = ethers.BigNumber.isBigNumber(actualClaimNum) ? actualClaimNum : ethers.BigNumber.from(actualClaimNumString);
+      const challengeTx = await contract.functions['challenge(uint256,uint8,uint256)'](actualClaimNumBigNumber, selectedOutcome, stakeAmountWei, txOptions);
       
       const receipt = await challengeTx.wait();
       console.log('Challenge successful:', receipt);
@@ -566,7 +573,7 @@ const Challenge = ({ claim, onChallengeSuccess, onClose }) => {
       );
       
       if (onChallengeSuccess) {
-        onChallengeSuccess(actualClaimNum);
+        onChallengeSuccess(actualClaimNumString);
       }
       
       onClose();
@@ -688,7 +695,10 @@ const Challenge = ({ claim, onChallengeSuccess, onClose }) => {
     try {
       if (!amount) return '0';
       
-      const formatted = ethers.utils.formatUnits(amount, decimals);
+      // Convert BigNumber to string if needed
+      const amountString = ethers.BigNumber.isBigNumber(amount) ? amount.toString() : String(amount);
+      
+      const formatted = ethers.utils.formatUnits(amountString, decimals);
       const num = parseFloat(formatted);
       
       // Check if this is a P3D token and apply decimalsDisplayMultiplier
@@ -697,11 +707,6 @@ const Challenge = ({ claim, onChallengeSuccess, onClose }) => {
         if (decimalsDisplayMultiplier) {
           // Apply the multiplier: 0.000001 * 1000000 = 1.0
           const multipliedNumber = num * decimalsDisplayMultiplier;
-          console.log(`🔍 P3D multiplier applied in Challenge:`, {
-            originalNumber: num,
-            multiplier: decimalsDisplayMultiplier,
-            result: multipliedNumber
-          });
           return multipliedNumber.toFixed(6).replace(/\.?0+$/, '') || '0';
         }
       }
