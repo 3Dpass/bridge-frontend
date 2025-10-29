@@ -20,9 +20,15 @@ const WithdrawClaim = ({ claim, onWithdrawSuccess, onClose }) => {
   const isProcessingRef = useRef(false);
   const componentId = useRef(Math.random().toString(36).substr(2, 9));
 
+  // Convert BigNumber objects to strings for display
+  const displayClaimNum = claim.actualClaimNum || claim.claimNum;
+  const displayClaimNumString = ethers.BigNumber.isBigNumber(displayClaimNum) ? 
+    displayClaimNum.toString() : 
+    String(displayClaimNum || 'Unknown');
+
   const handleWithdraw = useCallback(async () => {
     const executionId = Math.random().toString(36).substr(2, 9);
-    const globalKey = `${componentId.current}-${claim.actualClaimNum || claim.claimNum}`;
+    const globalKey = `${componentId.current}-${displayClaimNumString}`;
     console.log(`🚀 WithdrawClaim handleWithdraw called! Execution ID: ${executionId}, Global Key: ${globalKey}`);
     
     // Global execution tracker - most aggressive protection
@@ -384,7 +390,7 @@ const WithdrawClaim = ({ claim, onWithdrawSuccess, onClose }) => {
       toast.success(
         <div>
           <h3 className="text-success-400 font-medium">Withdrawal Successful</h3>
-          <p className="text-success-300 text-sm mt-1">Successfully withdrew claim #{claim.actualClaimNum || claim.claimNum}!</p>
+          <p className="text-success-300 text-sm mt-1">Successfully withdrew claim #{displayClaimNumString}!</p>
         </div>,
         {
           duration: 6000,
@@ -400,7 +406,7 @@ const WithdrawClaim = ({ claim, onWithdrawSuccess, onClose }) => {
       
       // Call the success callback to refresh the claims list
       if (onWithdrawSuccess) {
-        onWithdrawSuccess(claim.actualClaimNum || claim.claimNum);
+        onWithdrawSuccess(displayClaimNumString);
       }
       
       // Reset guards after successful completion
@@ -454,7 +460,7 @@ const WithdrawClaim = ({ claim, onWithdrawSuccess, onClose }) => {
     } finally {
       console.log(`🏁 WithdrawClaim execution completed. Execution ID: ${executionId}, Global Key: ${globalKey}`);
     }
-  }, [signer, claim, lastClickTime, onWithdrawSuccess]);
+  }, [signer, claim, lastClickTime, onWithdrawSuccess, displayClaimNumString]);
 
   const getWithdrawStatus = () => {
     if (claim.withdrawn) {
@@ -536,7 +542,7 @@ const WithdrawClaim = ({ claim, onWithdrawSuccess, onClose }) => {
             <div className="space-y-2 text-sm">
               <div className="flex justify-between">
                 <span className="text-gray-400">Claim #:</span>
-                <span className="text-white font-mono">{claim.actualClaimNum || claim.claimNum}</span>
+                <span className="text-white font-mono">{displayClaimNumString}</span>
               </div>
               <div className="flex justify-between">
                 <span className="text-gray-400">Amount:</span>

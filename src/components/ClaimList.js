@@ -183,7 +183,7 @@ const getFieldMatchStatus = (claim, field) => {
 
 const ClaimList = ({ activeTab }) => {
   const { account, network, getNetworkWithSettings } = useWeb3();
-  const { getBridgeInstancesWithSettings, getTokenDecimalsDisplayMultiplier } = useSettings();
+  const { getBridgeInstancesWithSettings, getTokenDecimalsDisplayMultiplier, getAllNetworksWithSettings } = useSettings();
   const [claims, setClaims] = useState([]);
   const [aggregatedData, setAggregatedData] = useState(null);
   const [loading, setLoading] = useState(false);
@@ -752,57 +752,34 @@ const ClaimList = ({ activeTab }) => {
   const getTransferTokenAddress = useCallback((claim) => {
     // If we already have a tokenAddress stored, use it (for pending transfers)
     if (claim.tokenAddress) {
-      console.log('🔍 Using stored tokenAddress:', {
-        tokenAddress: claim.tokenAddress,
-        tokenSymbol: claim.tokenSymbol
-      });
       return claim.tokenAddress;
     }
     
     // Get transfer token symbol first
     const tokenSymbol = getTransferTokenSymbol(claim);
     
-    console.log('🔍 getTransferTokenAddress called:', {
-      tokenSymbol,
-      claimNetwork: claim.networkKey,
-      currentNetwork: network?.symbol,
-      claimType: claim.bridgeType
-    });
-    
     // Try to get address from current network tokens first
-    const networkConfig = getNetworkWithSettings(network?.symbol);
-    if (networkConfig && networkConfig.tokens) {
-      const token = networkConfig.tokens[tokenSymbol];
+    const currentNetworkConfig = getNetworkWithSettings(network?.symbol);
+    if (currentNetworkConfig && currentNetworkConfig.tokens) {
+      const token = currentNetworkConfig.tokens[tokenSymbol];
       if (token && token.address) {
-        console.log('🔍 Found token in current network:', {
-          tokenSymbol,
-          tokenAddress: token.address,
-          hasMultiplier: !!token.decimalsDisplayMultiplier
-        });
         return token.address;
       }
     }
     
-    // Try to get address from other networks
-    for (const networkKey of Object.keys(NETWORKS)) {
-      const network = NETWORKS[networkKey];
-      if (network.tokens && network.tokens[tokenSymbol]) {
-        const token = network.tokens[tokenSymbol];
+    // Try to get address from other networks using settings context
+    const allNetworks = getAllNetworksWithSettings();
+    for (const [, networkConfig] of Object.entries(allNetworks)) {
+      if (networkConfig && networkConfig.tokens && networkConfig.tokens[tokenSymbol]) {
+        const token = networkConfig.tokens[tokenSymbol];
         if (token && token.address) {
-          console.log('🔍 Found token in other network:', {
-            networkKey,
-            tokenSymbol,
-            tokenAddress: token.address,
-            hasMultiplier: !!token.decimalsDisplayMultiplier
-          });
           return token.address;
         }
       }
     }
     
-    console.log('🔍 Token address not found for symbol:', tokenSymbol);
     return null;
-  }, [network?.symbol, getNetworkWithSettings, getTransferTokenSymbol]);
+  }, [network?.symbol, getNetworkWithSettings, getAllNetworksWithSettings, getTransferTokenSymbol]);
 
   const getStakeTokenDecimals = useCallback((claim) => {
     // Get stake token symbol first
@@ -1863,7 +1840,8 @@ const ClaimList = ({ activeTab }) => {
     };
 
     runBulkUpdates();
-  }, [aggregatedData, updateSpecificClaim]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [aggregatedData]);
 
   const getClaimStatus = (claim) => {
     if (!currentBlock) {
