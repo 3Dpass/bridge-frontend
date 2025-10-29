@@ -8,6 +8,7 @@ import {
   getTokenSymbolFromPrecompile
 } from '../utils/threedpass';
 import { getBlockTimestamp } from '../utils/bridge-contracts';
+import { addClaimEventToStorage, createClaimEventData } from '../utils/unified-event-cache';
 import { 
   EXPORT_ABI,
   IMPORT_ABI,
@@ -260,43 +261,6 @@ const NewClaim = ({ isOpen, onClose, selectedToken = null, selectedTransfer = nu
   const { account, provider, network, signer } = useWeb3();
   const { getBridgeInstancesWithSettings, getNetworkWithSettings } = useSettings();
   
-  // Add claim event to storage (claims storage, not transfers)
-  const addClaimEventToStorage = useCallback(async (eventData) => {
-    try {
-      console.log('💾 Adding new claim event to browser storage:', eventData);
-      
-      // Use the claims storage key as ClaimList.js
-      const STORAGE_KEY = 'bridge_claims_cache';
-      
-      // Get existing claims from storage
-      const existingClaims = JSON.parse(localStorage.getItem(STORAGE_KEY) || '[]');
-      
-      // Check if this claim already exists (by transaction hash)
-      const existingIndex = existingClaims.findIndex(c => c.transactionHash === eventData.transactionHash);
-      
-      if (existingIndex >= 0) {
-        // Update existing claim
-        existingClaims[existingIndex] = { ...existingClaims[existingIndex], ...eventData };
-        console.log('🔄 Updated existing claim in storage');
-      } else {
-        // Add new claim at the beginning (most recent first)
-        existingClaims.unshift(eventData);
-        console.log('➕ Added new claim to storage');
-      }
-      
-      // Save back to storage
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(existingClaims));
-      
-      // Update timestamp to indicate fresh data
-      localStorage.setItem('bridge_claims_cache_timestamp', Date.now().toString());
-      
-      console.log('✅ Claim event successfully added to browser storage');
-      return true;
-    } catch (error) {
-      console.error('❌ Failed to add claim event to storage:', error);
-      return false;
-    }
-  }, []);
   
   // Form state
   const [formData, setFormData] = useState({
@@ -2811,105 +2775,58 @@ const NewClaim = ({ isOpen, onClose, selectedToken = null, selectedTransfer = nu
           // Continue with event data only if claim details fetch fails
         }
         
-        // Create the complete event data structure matching the normal flow exactly
-        const eventData = {
-          // CRITICAL: Core NewClaim event fields (exactly as emitted by contract)
-          eventType: 'NewClaim',
-          claim_num: claimNum,
-          author_address: parsedEvent.args.author_address,
-          sender_address: parsedEvent.args.sender_address,
-          recipient_address: parsedEvent.args.recipient_address,
-          txid: parsedEvent.args.txid,
-          txts: parsedEvent.args.txts, // Keep as BigNumber (like normal flow)
-          amount: parsedEvent.args.amount, // Keep as BigNumber (like normal flow)
-          reward: parsedEvent.args.reward, // Keep as BigNumber (like normal flow)
-          stake: parsedEvent.args.stake, // Keep as BigNumber (like normal flow)
-          data: parsedEvent.args.data,
-          expiry_ts: parsedEvent.args.expiry_ts, // Keep as BigNumber (like normal flow)
-          
-          // CRITICAL: Transform field names to match expected UI structure (like normal flow)
-          claimNum: claimNum, // Display number for UI
-          actualClaimNum: claimNum, // Actual blockchain claim number
+        // Create the complete event data structure using unified format
+        const eventData = createClaimEventData({
+          claimNum: claimNum,
+          authorAddress: parsedEvent.args.author_address,
           senderAddress: parsedEvent.args.sender_address,
           recipientAddress: parsedEvent.args.recipient_address,
-          expiryTs: parsedEvent.args.expiry_ts, // Keep as BigNumber
-          
-          // Event metadata (from transaction receipt)
+          txid: parsedEvent.args.txid,
+          txts: parsedEvent.args.txts,
+          amount: parsedEvent.args.amount,
+          reward: parsedEvent.args.reward,
+          stake: parsedEvent.args.stake,
+          data: parsedEvent.args.data,
+          expiryTs: parsedEvent.args.expiry_ts,
           blockNumber: receipt.blockNumber,
           transactionHash: receipt.transactionHash,
-          claimTransactionHash: receipt.transactionHash, // Store claim transaction hash for UI display
           logIndex: newClaimEvent.logIndex,
-          timestamp: await getBlockTimestamp(signer.provider, receipt.blockNumber), // Use block timestamp
-          
-          // CRITICAL: Add claim details from contract (like normal flow does)
-          ...(claimDetails ? {
-            // Claim details from contract (current state) - keep original field names
-            current_outcome: claimDetails.current_outcome,
-            yes_stake: claimDetails.yes_stake,
-            no_stake: claimDetails.no_stake,
-            finished: claimDetails.finished,
-            withdrawn: claimDetails.withdrawn,
-            claimant_address: claimDetails.claimant_address, // CRITICAL: For Assisted/Self-claimed badges
-            period_number: claimDetails.period_number, // CRITICAL: For Period display
-            // Additional claim details (UI compatibility) - transformed field names
-            currentOutcome: claimDetails.current_outcome,
-            yesStake: claimDetails.yes_stake,
-            noStake: claimDetails.no_stake
-          } : {
-            // Default values if claim details fetch failed
-            current_outcome: null,
-            yes_stake: null,
-            no_stake: null,
-            finished: false,
-            withdrawn: false,
-            claimant_address: null, // CRITICAL: For Assisted/Self-claimed badges
-            period_number: 0, // CRITICAL: For Period display (default to 0 for new claims)
-            currentOutcome: null,
-            yesStake: null,
-            noStake: null
-          }),
-          
-          // Bridge information (complete bridge instance data)
-          bridgeInstance: selectedBridge, // Full bridge instance object
+          timestamp: await getBlockTimestamp(signer.provider, receipt.blockNumber),
           bridgeAddress: selectedBridge.address,
           bridgeType: selectedBridge.type,
           homeNetwork: selectedBridge.homeNetwork,
           foreignNetwork: selectedBridge.foreignNetwork,
-          homeTokenAddress: selectedBridge.homeTokenAddress,
-          foreignTokenAddress: selectedBridge.foreignTokenAddress,
           homeTokenSymbol: selectedBridge.homeTokenSymbol,
           foreignTokenSymbol: selectedBridge.foreignTokenSymbol,
-          stakeTokenAddress: selectedBridge.stakeTokenAddress,
-          stakeTokenSymbol: selectedBridge.stakeTokenSymbol,
-          
-          // Network information
           networkKey: network?.id?.toString() || network?.name?.toLowerCase(),
-          networkName: network?.name || 'Unknown',
-          networkId: network?.id?.toString() || network?.name?.toLowerCase(),
-          
-          // Transfer direction (claim is always inbound to the current network)
-          direction: 'inbound', // Claim brings tokens to current network
-          fromNetwork: selectedBridge.type === 'export' ? selectedBridge.foreignNetwork : selectedBridge.homeNetwork,
-          toNetwork: network?.name || 'Current Network',
-          fromTokenSymbol: selectedBridge.type === 'export' ? selectedBridge.foreignTokenSymbol : selectedBridge.homeTokenSymbol,
-          toTokenSymbol: selectedBridge.type === 'export' ? selectedBridge.homeTokenSymbol : selectedBridge.foreignTokenSymbol,
-          
-          // Token information (for compatibility with UI)
-          tokenSymbol: tokenMetadata?.symbol || 'Unknown',
-          tokenAddress: formData.tokenAddress,
-          
-          // Claim-specific information (additional fields for UI)
-          claimerAddress: parsedEvent.args.author_address, // Same as author_address from event
-          originalTransferTxid: parsedEvent.args.txid, // The original transfer transaction ID from event
-          originalTransferTimestamp: parsedEvent.args.txts.toString(),
-          
-          // Status and outcome fields
-          status: 'active', // Claims start as active (pending challenge period)
-          
-          // Additional fields for aggregation compatibility
-          bridgeTokenAddress: formData.tokenAddress, // Token being claimed
-          bridgeTokenSymbol: tokenMetadata?.symbol || 'Unknown'
-        };
+          networkName: network?.name || 'Unknown'
+        });
+        
+        // Add claim details from contract if available
+        if (claimDetails) {
+          eventData.current_outcome = claimDetails.current_outcome;
+          eventData.yes_stake = claimDetails.yes_stake;
+          eventData.no_stake = claimDetails.no_stake;
+          eventData.finished = claimDetails.finished;
+          eventData.withdrawn = claimDetails.withdrawn;
+          eventData.claimant_address = claimDetails.claimant_address;
+          eventData.period_number = claimDetails.period_number;
+          eventData.currentOutcome = claimDetails.current_outcome;
+          eventData.yesStake = claimDetails.yes_stake;
+          eventData.noStake = claimDetails.no_stake;
+        } else {
+          // Default values if claim details fetch failed
+          eventData.current_outcome = null;
+          eventData.yes_stake = null;
+          eventData.no_stake = null;
+          eventData.finished = false;
+          eventData.withdrawn = false;
+          eventData.claimant_address = null;
+          eventData.period_number = 0;
+          eventData.currentOutcome = null;
+          eventData.yesStake = null;
+          eventData.noStake = null;
+        }
         
         console.log('💾 Adding NewClaim event to storage (from contract event):', eventData);
         console.log('🔍 Key fields for aggregation:', {

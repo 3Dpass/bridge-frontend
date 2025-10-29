@@ -14,6 +14,7 @@ import { getNetworkWithSettings } from './settings.js';
 import { COUNTERSTAKE_ABI, EXPORT_ABI, IMPORT_ABI } from '../contracts/abi.js';
 import { getBlockTimestamp } from './bridge-contracts.js';
 import { wait } from './utils.js';
+import { addTransferEventToStorage, addClaimEventToStorage } from './unified-event-cache.js';
 
 // Rate limiting configuration
 const RATE_LIMIT_MS = 1000; // 1 second between requests
@@ -273,6 +274,17 @@ async function decodeEventsWithABI(networkKey, bridgeAddress, events, bridgeType
           };
 
           decodedEvents.push(decodedEvent);
+          
+          // Save event to storage using unified cache system
+          try {
+            if (event.eventType === 'NewExpatriation' || event.eventType === 'NewRepatriation') {
+              addTransferEventToStorage(decodedEvent);
+            } else if (event.eventType === 'NewClaim') {
+              addClaimEventToStorage(decodedEvent);
+            }
+          } catch (storageError) {
+            console.warn('⚠️ Failed to add event to storage:', storageError);
+          }
         }
       } catch (error) {
         console.warn(`⚠️ Could not decode event: ${error.message}`);
@@ -401,4 +413,7 @@ export async function discoverAllBridgeEvents(bridgeConfigs, options = {}) {
     }
   };
 }
+
+// Re-export storage functions for convenience
+export { addTransferEventToStorage, addClaimEventToStorage };
 

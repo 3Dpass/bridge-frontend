@@ -5,7 +5,7 @@ import { useSettings } from '../contexts/SettingsContext';
 import { NETWORKS, getBridgeDirections, getBridgeAddressesForDirection, getNetworksForDirection } from '../config/networks';
 import { discoverAllBridgeEvents } from '../utils/parallel-bridge-discovery';
 import { aggregateClaimsAndTransfers } from '../utils/aggregate-claims-transfers';
-import { clearAllCachedEvents } from '../utils/event-cache';
+import { clearAllCachedEvents, getCachedTransfers, getCachedClaims } from '../utils/unified-event-cache';
 import { 
   COUNTERSTAKE_ABI,
   EXPORT_ABI,
@@ -23,7 +23,8 @@ import {
   AlertTriangle,
   Copy,
   X,
-  RefreshCw
+  RefreshCw,
+  Clock9
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import toast from 'react-hot-toast';
@@ -1135,8 +1136,8 @@ const ClaimList = () => {
     try {
       console.log('🔍 Loading cached data from browser storage...');
       
-      const cachedClaims = getCachedData(STORAGE_KEYS.CLAIMS);
-      const cachedTransfers = getCachedData(STORAGE_KEYS.TRANSFERS);
+      const cachedClaims = getCachedClaims();
+      const cachedTransfers = getCachedTransfers();
       const cachedAggregated = getCachedData(STORAGE_KEYS.AGGREGATED);
       const cachedSettings = getCachedData(STORAGE_KEYS.SETTINGS);
       
@@ -1220,7 +1221,36 @@ const ClaimList = () => {
           }
         }
         if (cachedAggregated) {
-          setAggregatedData(cachedAggregated);
+          // We have cached completed transfers, but need to process incomplete data fresh
+          console.log('🔍 Found cached completed transfers:', cachedAggregated.completedTransfers.length);
+          
+          // Process all raw data through fresh aggregation to get incomplete/suspicious cases
+          let freshAggregated = null;
+          if ((cachedClaims && cachedClaims.length > 0) || (cachedTransfers && cachedTransfers.length > 0)) {
+            console.log('🔍 Processing fresh aggregation for incomplete data...');
+            try {
+              freshAggregated = aggregateClaimsAndTransfers(cachedClaims || [], cachedTransfers || []);
+            } catch (error) {
+              console.error('❌ Error in fresh aggregation:', error);
+            }
+          }
+          
+          // Merge cached completed transfers with fresh aggregation results
+          const mergedAggregated = {
+            completedTransfers: cachedAggregated.completedTransfers, // Use cached completed transfers
+            suspiciousClaims: freshAggregated?.suspiciousClaims || [], // Use fresh suspicious claims
+            pendingTransfers: freshAggregated?.pendingTransfers || [], // Use fresh pending transfers
+            fraudDetected: (freshAggregated?.suspiciousClaims?.length || 0) > 0,
+            stats: {
+              totalClaims: (cachedClaims?.length || 0) + (freshAggregated?.claims?.length || 0),
+              totalTransfers: (cachedTransfers?.length || 0) + (freshAggregated?.transfers?.length || 0),
+              completedTransfers: cachedAggregated.completedTransfers.length,
+              suspiciousClaims: freshAggregated?.suspiciousClaims?.length || 0,
+              pendingTransfers: freshAggregated?.pendingTransfers?.length || 0
+            }
+          };
+          
+          setAggregatedData(mergedAggregated);
           
           // Load stake information for cached completed claims
           const completedClaims = cachedAggregated.completedTransfers
@@ -1241,50 +1271,34 @@ const ClaimList = () => {
           } catch (error) {
             console.error('❌ Error processing transfers through aggregation:', error);
             // Fallback: create a simple aggregated structure with proper token symbols
-            const fallbackAggregated = {
-              completedTransfers: [],
-              suspiciousClaims: [],
-              pendingTransfers: cachedTransfers.map(transfer => {
-                // Get bridge instance to extract proper token symbols
-                let homeTokenSymbol = transfer.tokenSymbol; // fallback to stored tokenSymbol
-                let foreignTokenSymbol = transfer.tokenSymbol; // fallback to stored tokenSymbol
-                
-                try {
-                  const bridgeInstances = getBridgeInstancesWithSettings();
-                  const bridgeInstance = bridgeInstances.find(bridge => 
-                    bridge.address.toLowerCase() === transfer.bridgeAddress?.toLowerCase()
-                  );
-                  
-                  if (bridgeInstance) {
-                    homeTokenSymbol = bridgeInstance.homeTokenSymbol || transfer.tokenSymbol;
-                    foreignTokenSymbol = bridgeInstance.foreignTokenSymbol || transfer.tokenSymbol;
-                  }
-                } catch (error) {
-                  console.warn('⚠️ Could not get bridge instance for token symbols:', error);
-                }
-                
-                return {
-                  ...transfer,
-                  status: 'pending',
-                  isFraudulent: false,
-                  reason: 'no_matching_claim',
-                  claim: null,
-                  // Add bridge-specific token symbols for proper display
-                  homeTokenSymbol,
-                  foreignTokenSymbol,
-                  bridgeTokenSymbol: transfer.tokenSymbol // Keep original tokenSymbol as bridgeTokenSymbol
-                };
-              }),
-              fraudDetected: false,
-              stats: {
-                totalClaims: 0,
-                totalTransfers: cachedTransfers.length,
-                completedTransfers: 0,
-                suspiciousClaims: 0,
-                pendingTransfers: cachedTransfers.length
-              }
-            };
+            // For fallback, we should NOT cache incomplete data
+            // Only process through aggregation but don't cache the result
+            console.log('🔍 Processing fallback aggregation (not caching incomplete data)...');
+            const fallbackAggregated = aggregateClaimsAndTransfers(cachedClaims || [], cachedTransfers || []);
             setAggregatedData(fallbackAggregated);
+            
+            // Only cache completed transfers from fallback aggregation
+            if (fallbackAggregated.completedTransfers.length > 0) {
+              const completedOnlyFallback = {
+                completedTransfers: fallbackAggregated.completedTransfers,
+                suspiciousClaims: [],
+                pendingTransfers: [],
+                fraudDetected: false,
+                stats: {
+                  totalClaims: fallbackAggregated.completedTransfers.length,
+                  totalTransfers: fallbackAggregated.completedTransfers.length,
+                  completedTransfers: fallbackAggregated.completedTransfers.length,
+                  suspiciousClaims: 0,
+                  pendingTransfers: 0
+                }
+              };
+              
+              console.log('💾 Caching completed transfers from fallback aggregation:', completedOnlyFallback.completedTransfers.length);
+              setCachedData(STORAGE_KEYS.AGGREGATED, completedOnlyFallback);
+            } else {
+              console.log('🔍 No completed transfers in fallback aggregation to cache');
+              localStorage.removeItem(STORAGE_KEYS.AGGREGATED);
+            }
             
             // Load stake information for fallback completed claims
             const completedClaims = fallbackAggregated.completedTransfers
@@ -1325,7 +1339,7 @@ const ClaimList = () => {
       setCacheStatus(prev => ({ ...prev, hasCachedData: false, isShowingCached: false }));
       return false;
     }
-  }, [currentBlock, getNetworkWithSettings, getBridgeInstancesWithSettings, loadStakeInformation]);
+  }, [currentBlock, getNetworkWithSettings, loadStakeInformation]);
 
   // updateIndividualClaims function removed - no longer needed since we don't do background updates
 
@@ -1457,6 +1471,31 @@ const ClaimList = () => {
           pendingTransfers: aggregated.pendingTransfers.length
         }
       });
+      
+      // Only cache COMPLETED transfers as aggregated data
+      // Incomplete and suspicious cases must go through fresh aggregation
+      if (aggregated.completedTransfers.length > 0) {
+        const completedOnlyAggregated = {
+          completedTransfers: aggregated.completedTransfers,
+          suspiciousClaims: [], // Never cache suspicious claims
+          pendingTransfers: [], // Never cache pending transfers
+          fraudDetected: false, // Only completed transfers, no fraud
+          stats: {
+            totalClaims: aggregated.completedTransfers.length,
+            totalTransfers: aggregated.completedTransfers.length,
+            completedTransfers: aggregated.completedTransfers.length,
+            suspiciousClaims: 0,
+            pendingTransfers: 0
+          }
+        };
+        
+        console.log('💾 Caching only completed transfers as aggregated data:', completedOnlyAggregated.completedTransfers.length);
+        setCachedData(STORAGE_KEYS.AGGREGATED, completedOnlyAggregated);
+      } else {
+        console.log('🔍 No completed transfers to cache as aggregated data');
+        // Clear any existing aggregated cache if no completed transfers
+        localStorage.removeItem(STORAGE_KEYS.AGGREGATED);
+      }
       
       // Step 6: Load stake information for completed claims
       const completedClaims = aggregated.completedTransfers
@@ -1885,7 +1924,7 @@ const ClaimList = () => {
   const getStatusIcon = (status) => {
     switch (status) {
       case 'active':
-        return <Clock className="w-5 h-5 text-warning-500" />;
+        return <Clock9 className="w-5 h-5 text-warning-500" />;
       case 'finished':
         return <CheckCircle className="w-5 h-5 text-success-500" />;
       case 'withdrawn':
@@ -2007,7 +2046,7 @@ const ClaimList = () => {
               }`}
             >
               <Users className="w-4 h-4" />
-              All
+        
             </button>
             <button
               onClick={() => setFilter('my')}
@@ -2018,7 +2057,7 @@ const ClaimList = () => {
               }`}
             >
               <User className="w-4 h-4" />
-              Mine
+             
             </button>
             <button
               onClick={() => setFilter('pending')}
@@ -2029,7 +2068,6 @@ const ClaimList = () => {
               }`}
             >
               <Clock className="w-4 h-4" />
-              Pending
             </button>
             <button
               onClick={() => setFilter('active')}
@@ -2039,8 +2077,7 @@ const ClaimList = () => {
                   : 'text-secondary-400 hover:text-white hover:bg-dark-700'
               }`}
             >
-              <Clock className="w-4 h-4" />
-              Active
+              <Clock9 className="w-4 h-4" />
             </button>
             <button
               onClick={() => setFilter('suspicious')}
@@ -2051,9 +2088,7 @@ const ClaimList = () => {
               }`}
             >
               <AlertTriangle className="w-4 h-4" />
-              Suspicious
             </button>
-            
           </div>
           
           {/* Bridge Direction Selector */}
@@ -2063,7 +2098,7 @@ const ClaimList = () => {
               onChange={(e) => setBridgeDirection(e.target.value)}
               className="bg-dark-800 border border-dark-700 rounded-md px-3 py-2 text-sm text-white focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-transparent min-w-[200px]"
             >
-              <option value="all">All Bridge Directions</option>
+              <option value="all">All Bridges</option>
               {getBridgeDirections().map((direction) => (
                 <option key={direction.id} value={direction.id}>
                   {direction.name}
@@ -2228,23 +2263,6 @@ const ClaimList = () => {
                 : 'Select a bridge direction and click Search to discover transactions'
               }
             </p>
-            {!aggregatedData && (
-              <div className="bg-dark-800 border border-dark-700 rounded-lg p-4 max-w-md mx-auto">
-                <p className="text-sm text-secondary-300 mb-3">
-                  To get started:
-                </p>
-                <ol className="text-sm text-secondary-400 text-left space-y-2">
-                  <li>1. Select a bridge direction from the dropdown above</li>
-                  <li>2. Click the "Search" button to discover transactions</li>
-                  <li>3. View claims and transfers for that specific bridge pair</li>
-                </ol>
-              </div>
-            )}
-            {!account && (
-              <p className="text-xs text-secondary-500 mt-4">
-                💡 You can view all claims and transfers without connecting your wallet. Connect only when you need to interact with them.
-              </p>
-            )}
           </div>
         </div>
       )}
@@ -2381,7 +2399,7 @@ const ClaimList = () => {
                       {isPending ? `Transfer #${index + 1}` : (isTransfer ? `Transfer #${index + 1}` : `Claim #${claim.actualClaimNum || claim.claimNum}`)}
                     </span>
                     {isSuspicious && status === 'withdrawn' && <CheckCircle className="w-4 h-4 text-green-500" />}
-                    {isSuspicious && status === 'active' && <Clock className="w-4 h-4 text-warning-500" />}
+                    {isSuspicious && status === 'active' && <Clock9 className="w-4 h-4 text-warning-500" />}
                     {isSuspicious && <AlertTriangle className="w-4 h-4 text-red-500" />}
                     {isPending && <Clock className="w-4 h-4 text-yellow-500" />}
                     {!isTransfer && !isSuspicious && !isPending && getStatusIcon(status)}

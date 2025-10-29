@@ -4,7 +4,7 @@ import { AlertCircle, CheckCircle, ArrowRight, Loader, RefreshCw } from 'lucide-
 import { motion } from 'framer-motion';
 import toast from 'react-hot-toast';
 import { parseAndValidateReward } from '../utils/safe-reward-handler';
-import { addTransferEventToStorage } from './ClaimList';
+import { addTransferEventToStorage, createTransferEventData } from '../utils/unified-event-cache';
 import { getBlockTimestamp } from '../utils/bridge-contracts';
 
 // Safely convert to EIP-55 checksum if it's an EVM address
@@ -739,52 +739,26 @@ const Expatriation = ({
       
       // Add NewExpatriation event to browser storage for immediate visibility
       try {
-        const eventData = {
-          // Event data
+        const eventData = createTransferEventData({
           eventType: 'NewExpatriation',
           senderAddress: await signer.getAddress(),
-          amount: amount.toString(),
-          reward: reward.toString(),
-          foreignAddress: foreignAddressChecksummed,
-          recipientAddress: foreignAddressChecksummed, // for UI compatibility
+          amount: amount,
+          reward: reward,
+          recipientAddress: foreignAddressChecksummed,
           data: data,
-          
-          // Event metadata
           blockNumber: receipt.blockNumber,
           transactionHash: receipt.transactionHash,
           logIndex: 0, // We don't have logIndex from receipt, use 0 as fallback
           timestamp: await getBlockTimestamp(signer.provider, receipt.blockNumber),
-          
-          // Bridge information
-          bridgeInstance: bridgeInstance, // Full bridge instance object
           bridgeAddress: bridgeInstance.address,
           bridgeType: bridgeInstance.type,
           homeNetwork: bridgeInstance.homeNetwork,
           foreignNetwork: bridgeInstance.foreignNetwork,
-          homeTokenAddress: bridgeInstance.homeTokenAddress,
-          foreignTokenAddress: bridgeInstance.foreignTokenAddress,
           homeTokenSymbol: bridgeInstance.homeTokenSymbol,
           foreignTokenSymbol: bridgeInstance.foreignTokenSymbol,
-          
-          // Network information
           networkKey: bridgeInstance.homeNetwork.toLowerCase(),
-          networkName: bridgeInstance.homeNetwork, // Use network name as fallback
-          networkId: bridgeInstance.homeNetwork.toLowerCase(),
-          
-          // Transfer direction
-          direction: 'export', // From home to foreign
-          fromNetwork: bridgeInstance.homeNetwork,
-          toNetwork: bridgeInstance.foreignNetwork,
-          fromTokenSymbol: bridgeInstance.homeTokenSymbol,
-          toTokenSymbol: bridgeInstance.foreignTokenSymbol,
-          
-          // Token information (for compatibility)
-          tokenSymbol: sourceToken.symbol,
-          tokenAddress: sourceToken.address,
-          
-          // Status
-          status: 'pending'
-        };
+          networkName: bridgeInstance.homeNetwork
+        });
         
         console.log('💾 Adding NewExpatriation event to storage:', eventData);
         addTransferEventToStorage(eventData);
