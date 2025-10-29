@@ -228,7 +228,7 @@ async function decodeEventsWithABI(networkKey, bridgeAddress, events, bridgeType
               toNetwork: foreignNetwork, // Use actual bridge configuration
               homeNetwork: homeNetwork,
               foreignNetwork: foreignNetwork,
-              networkName: homeNetwork,
+              networkName: networkConfig?.name || networkKey,
               tokenSymbol: homeTokenSymbol, // Use actual token symbol from bridge config
               homeTokenSymbol: homeTokenSymbol,
               foreignTokenSymbol: foreignTokenSymbol
@@ -244,7 +244,7 @@ async function decodeEventsWithABI(networkKey, bridgeAddress, events, bridgeType
               toNetwork: homeNetwork, // Use actual bridge configuration
               homeNetwork: homeNetwork,
               foreignNetwork: foreignNetwork,
-              networkName: homeNetwork,
+              networkName: networkConfig?.name || networkKey,
               tokenSymbol: homeTokenSymbol, // Use actual token symbol from bridge config
               homeTokenSymbol: homeTokenSymbol,
               foreignTokenSymbol: foreignTokenSymbol
@@ -255,13 +255,14 @@ async function decodeEventsWithABI(networkKey, bridgeAddress, events, bridgeType
               amount: decoded.args.amount,
               recipientAddress: decoded.args.recipient_address,
               senderAddress: decoded.args.sender_address,
+              claimant_address: decoded.args.author_address,
               reward: decoded.args.reward,
               data: decoded.args.data,
               txid: decoded.args.txid,
-              timestamp: Number(decoded.args.txts), // Use txts from event
+              txts: Number(decoded.args.txts),
               blockNumber: event.blockNumber,
               claimTransactionHash: event.transactionHash,
-              networkName: homeNetwork,
+              networkName: networkConfig?.name || networkKey,
               tokenSymbol: homeTokenSymbol, // Use actual token symbol from bridge config
               homeTokenSymbol: homeTokenSymbol,
               foreignTokenSymbol: foreignTokenSymbol,
@@ -287,7 +288,7 @@ async function decodeEventsWithABI(networkKey, bridgeAddress, events, bridgeType
           networkKey: networkKey,
           bridgeType: bridgeType,
           bridgeAddress: bridgeAddress,
-          networkName: homeNetwork,
+          networkName: networkConfig?.name || networkKey,
           tokenSymbol: homeTokenSymbol, // Use actual token symbol from bridge config
           homeTokenSymbol: homeTokenSymbol,
           foreignTokenSymbol: foreignTokenSymbol,

@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { ethers } from 'ethers';
 import { useWeb3 } from '../contexts/Web3Context';
 import { useSettings } from '../contexts/SettingsContext';
@@ -299,6 +299,9 @@ const ClaimList = () => {
     isUpdating: false, // Track if we're currently updating claims (legacy)
     updatingClaims: new Set() // Track which specific claims are being updated
   });
+  // Refs to avoid re-renders/infinite loops during bulk updates
+  const bulkProcessedRef = useRef(new Set());
+  const bulkRunningRef = useRef(false);
   // Cache stats removed from UI - cache still works internally for performance
 
   // Network switching functions
@@ -788,45 +791,31 @@ const ClaimList = () => {
   }, [network?.symbol, getTransferTokenSymbol, getNetworkWithSettings]);
 
   const getStakeTokenSymbol = useCallback((claim) => {
-    // Stakes are always in the stake token
-    // We need to get this from the bridge settings
-    if (claim.bridgeInstance && claim.bridgeInstance.stakeTokenSymbol) {
-      return claim.bridgeInstance.stakeTokenSymbol;
-    }
-    // Fallback to network configuration
-    const networkConfig = getNetworkWithSettings(network?.symbol);
-    if (networkConfig && networkConfig.stakeToken) {
-      return networkConfig.stakeToken;
-    }
+    try {
+      if (!claim?.bridgeAddress) return 'Unknown';
+      const bridges = getBridgeInstancesWithSettings();
+      const bridge = Object.values(bridges).find(b => b.address?.toLowerCase() === claim.bridgeAddress.toLowerCase());
+      if (bridge?.stakeTokenSymbol) return bridge.stakeTokenSymbol;
+    } catch (_) {}
     return 'Unknown';
-  }, [network?.symbol, getNetworkWithSettings]);
+  }, [getBridgeInstancesWithSettings]);
 
   const getStakeTokenAddress = useCallback((claim) => {
-    // Get stake token symbol first
-    const stakeTokenSymbol = getStakeTokenSymbol(claim);
-    
-    // Try to get address from current network tokens first
-    const networkConfig = getNetworkWithSettings(network?.symbol);
-    if (networkConfig && networkConfig.tokens) {
-      const token = networkConfig.tokens[stakeTokenSymbol];
-      if (token && token.address) {
-        return token.address;
+    try {
+      if (!claim?.bridgeAddress) return null;
+      const bridges = getBridgeInstancesWithSettings();
+      const bridge = Object.values(bridges).find(b => b.address?.toLowerCase() === claim.bridgeAddress.toLowerCase());
+      if (bridge?.stakeTokenAddress) return bridge.stakeTokenAddress;
+      // If only symbol is present, try to resolve within the bridge's home network tokens
+      const symbol = bridge?.stakeTokenSymbol;
+      if (symbol) {
+        const homeCfg = getNetworkWithSettings(bridge.homeNetwork || claim.networkKey || network?.symbol);
+        const token = homeCfg?.tokens?.[symbol];
+        if (token?.address) return token.address;
       }
-    }
-    
-    // Try to get address from other networks
-    for (const networkKey of Object.keys(NETWORKS)) {
-      const network = NETWORKS[networkKey];
-      if (network.tokens && network.tokens[stakeTokenSymbol]) {
-        const token = network.tokens[stakeTokenSymbol];
-        if (token && token.address) {
-          return token.address;
-        }
-      }
-    }
-    
+    } catch (_) {}
     return null;
-  }, [network?.symbol, getNetworkWithSettings, getStakeTokenSymbol]);
+  }, [getBridgeInstancesWithSettings, getNetworkWithSettings, network?.symbol]);
 
   const getTransferTokenAddress = useCallback((claim) => {
     // If we already have a tokenAddress stored, use it (for pending transfers)
@@ -1520,10 +1509,6 @@ const ClaimList = () => {
     
     try {
       await loadClaimsAndTransfersParallel(true);
-      const directionName = bridgeDirection === 'all' 
-        ? 'All Bridge Directions' 
-        : getBridgeDirections().find(d => d.id === bridgeDirection)?.name || bridgeDirection;
-      toast.success(`Parallel discovery completed for ${directionName}`);
     } catch (error) {
       console.error('❌ Error during parallel discovery:', error);
       toast.error('Failed to discover data for selected direction');
@@ -1531,8 +1516,7 @@ const ClaimList = () => {
       setIsSearching(false);
       setCacheStatus(prev => ({ ...prev, isRefreshing: false }));
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [bridgeDirection]); // Removed loadClaimsAndTransfersParallel from dependencies to prevent double execution
+  }, [bridgeDirection, loadClaimsAndTransfersParallel]);
 
   // Check if a claim was recently updated
   const isClaimRecentlyUpdated = useCallback((claim) => {
@@ -1688,8 +1672,9 @@ const ClaimList = () => {
         txts: txts,
         ts: ts,
         claimantAddress: claimantAddress,
+        claimant_address: claimantAddress,
         expiryTs: expiryTs,
-        periodNumber: periodNumber,
+        period_number: periodNumber,
         currentOutcome: currentOutcome,
         isLarge: isLarge,
         withdrawn: withdrawn,
@@ -1751,7 +1736,6 @@ const ClaimList = () => {
         }
       }));
 
-      toast.success(`Claim #${claimNum} updated from contract`);
       console.log(`Claim #${claimNum} updated successfully:`, {
         amount: amount.toString(),
         reward: updatedClaim.reward?.toString(),
@@ -1770,6 +1754,7 @@ const ClaimList = () => {
         currentOutcome: updatedClaim.currentOutcome,
         finished: updatedClaim.finished,
         withdrawn: updatedClaim.withdrawn,
+        period_number: updatedClaim.period_number,
         txid: updatedClaim.txid
       });
     } catch (error) {
@@ -1810,6 +1795,48 @@ const ClaimList = () => {
 
   // No wallet connection required to view claims
   // Wallet connection is only needed for actions like withdraw/challenge
+  // After aggregated data is loaded, trigger individual updates for all claims (non-pending)
+  useEffect(() => {
+    const runBulkUpdates = async () => {
+      if (!aggregatedData) return;
+      if (bulkRunningRef.current) return;
+
+      // Gather all claims (completed + suspicious). Pending transfers have no claimNum and should be skipped
+      const allClaims = [
+        ...(aggregatedData.completedTransfers || []),
+        ...(aggregatedData.suspiciousClaims || [])
+      ].filter(c => (c.actualClaimNum || c.claimNum) && c.bridgeAddress);
+
+      // Helper to build a stable claim key
+      const getClaimKey = (c) => {
+        const rawNum = c.actualClaimNum || c.claimNum;
+        const numStr = (rawNum && typeof rawNum.toString === 'function') ? rawNum.toString() : String(rawNum);
+        const addr = (c.bridgeAddress || '').toLowerCase();
+        return `${addr}-${numStr}`;
+      };
+
+      const toProcess = allClaims.filter(c => !bulkProcessedRef.current.has(getClaimKey(c)));
+      if (toProcess.length === 0) return;
+
+      bulkRunningRef.current = true;
+      try {
+        for (const claim of toProcess) {
+          try {
+            await updateSpecificClaim(claim);
+          } catch (e) {
+            // continue
+          } finally {
+            bulkProcessedRef.current.add(getClaimKey(claim));
+            await new Promise(r => setTimeout(r, 150));
+          }
+        }
+      } finally {
+        bulkRunningRef.current = false;
+      }
+    };
+
+    runBulkUpdates();
+  }, [aggregatedData, updateSpecificClaim]);
 
   const getClaimStatus = (claim) => {
     if (!currentBlock) {
@@ -2161,41 +2188,7 @@ const ClaimList = () => {
       )}
 
 
-      {/* Parallel Discovery Progress */}
-      {discoveryState.isDiscovering && (
-        <div className="mb-4 p-3 bg-dark-800 rounded-lg border border-dark-700">
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-2 text-sm">
-              <span className="text-secondary-400">Parallel Discovery:</span>
-              <span className="text-blue-400">
-                Bridges: {discoveryState.discoveryProgress.bridgesCompleted}/{discoveryState.discoveryProgress.totalBridges}
-              </span>
-              <span className="text-secondary-400">•</span>
-              <span className="text-green-400">
-                Claims: {discoveryState.discoveryProgress.claimDataLoaded}/{discoveryState.discoveryProgress.totalClaims}
-              </span>
-              <span className="text-secondary-400">•</span>
-              <span className="text-purple-400">Range: {rangeHours}h</span>
-            </div>
-            <div className="flex items-center gap-2">
-              <div className="w-2 h-2 bg-blue-500 rounded-full animate-pulse"></div>
-              <span className="text-xs text-blue-400">Discovering...</span>
-            </div>
-          </div>
-          <div className="mt-2">
-            <div className="w-full bg-dark-700 rounded-full h-2">
-              <div 
-                className="bg-blue-500 h-2 rounded-full transition-all duration-300"
-                style={{ 
-                  width: `${discoveryState.discoveryProgress.totalBridges > 0 
-                    ? (discoveryState.discoveryProgress.bridgesCompleted / discoveryState.discoveryProgress.totalBridges) * 100 
-                    : 0}%` 
-                }}
-              ></div>
-            </div>
-          </div>
-        </div>
-      )}
+      {/* Parallel Discovery Progress removed per request */}
 
       {/* Loading State */}
       {(loading || isSearching) && (
@@ -2303,10 +2296,10 @@ const ClaimList = () => {
               if (blockDiff !== 0) return blockDiff;
             }
             
-            // If block numbers are the same or missing, sort by timestamp (most recent first)
-            const timestampA = a.timestamp || a.blockTimestamp || 0;
-            const timestampB = b.timestamp || b.blockTimestamp || 0;
-            return timestampB - timestampA;
+            // If block numbers are the same or missing, sort by time (most recent first)
+            const timeA = (a.timestamp ?? a.txts ?? a.blockTimestamp ?? 0);
+            const timeB = (b.timestamp ?? b.txts ?? b.blockTimestamp ?? 0);
+            return timeB - timeA;
           });
 
 
@@ -2675,7 +2668,7 @@ const ClaimList = () => {
                             <div>
                               <span className="text-secondary-400">Timestamp:</span>
                               <span className="text-white ml-2">
-                                {claim.timestamp ? new Date(claim.timestamp * 1000).toLocaleString() : 'N/A'}
+                                {claim.txts ? new Date(claim.txts * 1000).toLocaleString() : 'N/A'}
                               </span>
                               {(() => {
                                 const matchStatus = getFieldMatchStatus(claim, 'timestamp');
@@ -2989,16 +2982,8 @@ const ClaimList = () => {
                     <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 text-sm mb-3">
                       {/* Debug: Show raw claim data if missing */}
                       {(!claim.amount || !claim.yesStake || !claim.noStake) && (
-                        <div className="col-span-full mb-3 p-2 bg-yellow-900/20 border border-yellow-500/50 rounded text-xs">
-                          <div className="text-yellow-400 font-medium mb-1">⚠️ Missing Claim Data:</div>
-                          <div className="text-yellow-300">
-                            Amount: {claim.amount ? '✅' : '❌'} | 
-                            Reward: {claim.reward ? '✅' : '❌'} | 
-                            YES Stake: {claim.yesStake ? '✅' : '❌'} | 
-                            NO Stake: {claim.noStake ? '✅' : '❌'} |
-                            Current Outcome: {claim.currentOutcome !== undefined ? '✅' : '❌'} |
-                            Finished: {claim.finished !== undefined ? '✅' : '❌'}
-                          </div>
+                        <div className="col-span-full mb-3 p-2 bg-gray-900/20 border border-gray-500/50 rounded text-xs">
+                          <div className="text-gray-400 font-medium mb-1">Loading claim data...</div>
                         </div>
                       )}
                       
@@ -3007,7 +2992,16 @@ const ClaimList = () => {
                       <div className="col-span-full">
                       <div>
                       <h4 className="text-sm font-medium text-secondary-300 mb-3">
-                        <span className="text-secondary-400 mb-3">Period {claim.period_number !== undefined ? `#${claim.period_number + 1} -` : ''}</span>
+                        <span className="text-secondary-400 mb-3">Period {(() => {
+                          console.log('🔍 Period number debug:', {
+                            period_number: claim.period_number,
+                            type: typeof claim.period_number,
+                            isUndefined: claim.period_number === undefined,
+                            isNull: claim.period_number === null,
+                            condition: claim.period_number !== undefined && claim.period_number !== null
+                          });
+                          return claim.period_number !== undefined && claim.period_number !== null ? `#${claim.period_number + 1} -` : '';
+                        })()}</span>
                         <span className="text-white ml-2 mb-3">
                           {getTimeRemaining(claim.expiryTs)}
                         </span>

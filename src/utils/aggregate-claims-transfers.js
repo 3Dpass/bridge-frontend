@@ -525,8 +525,8 @@ export const aggregateClaimsAndTransfers = (claims, transfers) => {
          claim.homeNetwork === matchingTransfer.homeNetwork)
       );
 
-      // Check timestamp validation - claim.timestamp must match transfer.timestamp
-      const timestampMatch = claim.timestamp === matchingTransfer.timestamp;
+      // Check timestamp validation - claim.txts (event timestamp) must match transfer.timestamp
+      const timestampMatch = claim.txts === matchingTransfer.timestamp;
       const timestampMatchReason = timestampMatch ? 'match' : 'timestamp_mismatch';
 
       // Determine if this is suspicious due to parameter mismatches
@@ -557,7 +557,7 @@ export const aggregateClaimsAndTransfers = (claims, transfers) => {
         transferRecipientLower: matchingTransfer.recipientAddress?.toLowerCase(),
         claimBridgeType: claim.bridgeType,
         transferEventType: matchingTransfer.eventType,
-        claimTimestamp: claim.timestamp,
+        claimTimestamp: claim.txts,
         transferTimestamp: matchingTransfer.timestamp,
         timestampMatchReason
       });
