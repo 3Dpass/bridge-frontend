@@ -43,6 +43,44 @@ const toChecksumAddress = (address) => {
   }
 };
 
+// Normalize various numeric-like inputs (string, number, BigNumber, {_hex} | {hex}) to a wei string
+const toWeiString = (value) => {
+  if (value === undefined || value === null) return '0';
+  if (ethers.BigNumber.isBigNumber(value)) return value.toString();
+  if (typeof value === 'object') {
+    // Ethers BigNumber-like objects from JSON
+    if (value._isBigNumber) {
+      try { return ethers.BigNumber.from(value).toString(); } catch (e) { /* fallthrough */ }
+    }
+    // Plain objects with hex/type fields from storage
+    if (value._hex || value.hex) {
+      try { return ethers.BigNumber.from(value._hex || value.hex).toString(); } catch (e) { /* fallthrough */ }
+    }
+  }
+  if (typeof value === 'string') return value;
+  return String(value);
+};
+
+// Normalize a numeric value to a wei string using token decimals when input may be human-readable
+const normalizeToWeiString = (value, decimals) => {
+  const v = toWeiString(value);
+  if (!v) return '0';
+  // If looks like a decimal string or clearly not a big integer, parse with decimals
+  const isDecimalLike = typeof v === 'string' && (v.includes('.') || (!v.startsWith('0x') && parseFloat(v) < 1000000000000));
+  if (isDecimalLike) {
+    try {
+      return ethers.utils.parseUnits(v, decimals).toString();
+    } catch (_) {
+      // fallthrough
+    }
+  }
+  try {
+    return ethers.BigNumber.from(v).toString();
+  } catch (_) {
+    return v;
+  }
+};
+
 // Helper functions to get network and token configuration
 const getNetworkConfig = (networkId) => {
   return Object.values(NETWORKS).find(network => network.id === networkId);
@@ -292,18 +330,20 @@ const NewClaim = ({ isOpen, onClose, selectedToken = null, selectedTransfer = nu
     
     // Handle amount (should be in wei format)
     let amountWei;
-    if (parseFloat(formData.amount) > 1000000000000) {
-      amountWei = ethers.BigNumber.from(formData.amount);
+    const amountInput = toWeiString(formData.amount);
+    if (parseFloat(amountInput) > 1000000000000) {
+      amountWei = ethers.BigNumber.from(amountInput);
     } else {
-      amountWei = ethers.utils.parseUnits(formData.amount, tokenDecimals);
+      amountWei = ethers.utils.parseUnits(amountInput, tokenDecimals);
     }
     
     // Handle reward (use as-is from event)
     let rewardWei;
-    if (parseFloat(formData.reward) > 1000000000000) {
-      rewardWei = ethers.BigNumber.from(formData.reward);
+    const rewardInput = toWeiString(formData.reward);
+    if (parseFloat(rewardInput) > 1000000000000) {
+      rewardWei = ethers.BigNumber.from(rewardInput);
     } else {
-      rewardWei = ethers.utils.parseUnits(formData.reward, tokenDecimals);
+      rewardWei = ethers.utils.parseUnits(rewardInput, tokenDecimals);
     }
     
     const transferWei = amountWei.sub(rewardWei);
@@ -360,42 +400,74 @@ const NewClaim = ({ isOpen, onClose, selectedToken = null, selectedTransfer = nu
           };
           
           const txtsValue = await calculateTxts();
-          // Determine the correct token address based on the transfer type
+          // Determine the correct token address by looking up bridges in settings based on transfer type
           let tokenAddress = '';
-          
-          // For repatriation claims, we always want the homeTokenAddress (token on Ethereum side)
-          // regardless of current network detection, because repatriation claims are created on Ethereum
-          if (selectedTransfer.eventType === 'NewRepatriation') {
-            // Repatriation: use homeTokenAddress (USDT on Ethereum)
-            tokenAddress = selectedTransfer.homeTokenAddress || selectedTransfer.fromTokenAddress || '';
-            console.log('🔍 Repatriation detected - using homeTokenAddress:', tokenAddress);
-          } else if (network?.id === NETWORKS.THREEDPASS.id) {
-            // On 3DPass: use foreignTokenAddress (token on 3DPass side)
-            tokenAddress = selectedTransfer.foreignTokenAddress || selectedTransfer.toTokenAddress || '';
-          } else if (network?.id === NETWORKS.ETHEREUM.id) {
-            // On Ethereum: determine based on event type
-            if (selectedTransfer.eventType === 'NewExpatriation') {
-              // For expatriation: use foreignTokenAddress (token on destination network - Ethereum)
-              tokenAddress = selectedTransfer.foreignTokenAddress || selectedTransfer.toTokenAddress || '';
-            } else {
-              // For repatriation: use homeTokenAddress (token on Ethereum side)
-              tokenAddress = selectedTransfer.homeTokenAddress || selectedTransfer.fromTokenAddress || '';
+          let matchedBridge = null;
+
+          try {
+            const allBridges = getBridgeInstancesWithSettings();
+            const bridges = Object.values(allBridges || {});
+
+            if (selectedTransfer.eventType === 'NewRepatriation') {
+              // Find export bridge on the current network for this token
+              matchedBridge = bridges.find(b =>
+                b.type === 'export' &&
+                b.homeNetwork === network?.name &&
+                (
+                  (selectedTransfer.homeTokenAddress && b.homeTokenAddress?.toLowerCase() === selectedTransfer.homeTokenAddress?.toLowerCase()) ||
+                  (selectedTransfer.homeTokenSymbol && b.homeTokenSymbol === selectedTransfer.homeTokenSymbol)
+                )
+              );
+              tokenAddress = matchedBridge?.homeTokenAddress || '';
+              if (!tokenAddress) {
+                // fallback to any export bridge on this network if symbols/addresses weren't present on event
+                const looseMatch = bridges.find(b => b.type === 'export' && b.homeNetwork === network?.name && b.homeTokenAddress);
+                tokenAddress = looseMatch?.homeTokenAddress || '';
+                matchedBridge = matchedBridge || looseMatch || null;
+              }
+            } else if (selectedTransfer.eventType === 'NewExpatriation') {
+              // Find import/import_wrapper bridge on the current (destination) network for this token
+              matchedBridge = bridges.find(b =>
+                (b.type === 'import' || b.type === 'import_wrapper') &&
+                b.foreignNetwork === network?.name &&
+                (
+                  (selectedTransfer.foreignTokenAddress && b.foreignTokenAddress?.toLowerCase() === selectedTransfer.foreignTokenAddress?.toLowerCase()) ||
+                  (selectedTransfer.foreignTokenSymbol && b.foreignTokenSymbol === selectedTransfer.foreignTokenSymbol)
+                )
+              );
+              tokenAddress = matchedBridge?.foreignTokenAddress || '';
+              if (!tokenAddress) {
+                // fallback to any import/import_wrapper bridge on this network if symbols/addresses weren't present on event
+                const looseMatch = bridges.find(b => (b.type === 'import' || b.type === 'import_wrapper') && b.foreignNetwork === network?.name && b.foreignTokenAddress);
+                tokenAddress = looseMatch?.foreignTokenAddress || '';
+                matchedBridge = matchedBridge || looseMatch || null;
+              }
             }
-          } else {
-            // Fallback: try both
-            tokenAddress = selectedTransfer.foreignTokenAddress || selectedTransfer.homeTokenAddress || selectedTransfer.toTokenAddress || '';
+
+            // Absolute fallback to event fields if still not found
+            if (!tokenAddress) {
+              tokenAddress = selectedTransfer.foreignTokenAddress || selectedTransfer.homeTokenAddress || selectedTransfer.toTokenAddress || selectedTransfer.fromTokenAddress || '';
+            }
+
+            if (matchedBridge) {
+              setSelectedBridge(matchedBridge);
+            }
+          } catch (err) {
+            console.warn('⚠️ Failed to resolve token via settings bridges, falling back to event fields:', err?.message);
+            tokenAddress = selectedTransfer.foreignTokenAddress || selectedTransfer.homeTokenAddress || selectedTransfer.toTokenAddress || selectedTransfer.fromTokenAddress || '';
           }
-          
-          console.log('🔍 Setting token address for network:', {
+
+          console.log('🔍 Resolved token via settings for network:', {
             networkId: network?.id,
             networkName: network?.name,
+            eventType: selectedTransfer.eventType,
             foreignTokenAddress: selectedTransfer.foreignTokenAddress,
             homeTokenAddress: selectedTransfer.homeTokenAddress,
             fromTokenAddress: selectedTransfer.fromTokenAddress,
             toTokenAddress: selectedTransfer.toTokenAddress,
-            selectedTokenAddress: tokenAddress,
-            transferReward: selectedTransfer.reward,
-            fullTransfer: selectedTransfer
+            resolvedTokenAddress: tokenAddress,
+            resolvedBridgeType: matchedBridge?.type,
+            resolvedBridgeAddress: matchedBridge?.address
           });
           
           // Get the correct token decimals for formatting
@@ -411,14 +483,8 @@ const NewClaim = ({ isOpen, onClose, selectedToken = null, selectedTransfer = nu
             tokenAddress: tokenAddress.toLowerCase(),
             // CRITICAL: Preserve exact format to match bot expectations
             // Transfer amounts from blockchain events are already in wei format
-            amount: selectedTransfer.amount ? 
-              (typeof selectedTransfer.amount === 'string' ? 
-                selectedTransfer.amount : // Keep string format as-is
-                selectedTransfer.amount.toString()) : '', // Convert BigNumber to string (wei format)
-            reward: selectedTransfer.reward ? 
-              (typeof selectedTransfer.reward === 'string' ? 
-                selectedTransfer.reward : // Keep string format as-is
-                selectedTransfer.reward.toString()) : '0', // Convert BigNumber to string (wei format)
+            amount: selectedTransfer.amount ? normalizeToWeiString(selectedTransfer.amount, tokenDecimals) : '',
+            reward: selectedTransfer.reward ? normalizeToWeiString(selectedTransfer.reward, tokenDecimals) : '0',
             txid: selectedTransfer.txid || selectedTransfer.transactionHash || '',
             txts: txtsValue,
             senderAddress: toChecksumAddress(selectedTransfer.fromAddress || selectedTransfer.senderAddress || ''),
@@ -498,7 +564,7 @@ const NewClaim = ({ isOpen, onClose, selectedToken = null, selectedTransfer = nu
       
       return () => clearTimeout(timer);
     }
-  }, [isOpen, selectedToken, selectedTransfer, account, provider, getNetworkWithSettings, network?.id, network?.name]);
+  }, [isOpen, selectedToken, selectedTransfer, account, provider, getNetworkWithSettings, getBridgeInstancesWithSettings, network?.id, network?.name]);
 
   // Load available tokens from bridge configurations
   const loadAvailableTokens = useCallback(async () => {
@@ -1187,9 +1253,10 @@ const NewClaim = ({ isOpen, onClose, selectedToken = null, selectedTransfer = nu
       // Check if the amount is already in wei format
       // Transfer amounts from blockchain events are already in wei format
       let amountWei;
-      
+      // Normalize amount to string first in case it's a BigNumber-like object
+      const amountInput = toWeiString(amount);
       // Amount from transfer events is always in wei format
-        amountWei = ethers.BigNumber.from(amount);
+      amountWei = ethers.BigNumber.from(amountInput);
       console.log('🔍 Amount is wei format (from transfer event):', {
           originalAmount: amount,
           amountWei: amountWei.toString(),
@@ -2011,7 +2078,7 @@ const NewClaim = ({ isOpen, onClose, selectedToken = null, selectedTransfer = nu
       
       // Amount from transfer events is always in wei format
       let amountWei;
-        amountWei = ethers.BigNumber.from(formData.amount);
+        amountWei = ethers.BigNumber.from(toWeiString(formData.amount));
       console.log('🔍 Amount is wei format (from transfer event):', {
           originalAmount: formData.amount,
           amountWei: amountWei.toString(),
@@ -2037,7 +2104,7 @@ const NewClaim = ({ isOpen, onClose, selectedToken = null, selectedTransfer = nu
         }
         
         // Reward from transfer events is always in wei format
-          rewardWei = ethers.BigNumber.from(cleanRewardValue);
+          rewardWei = ethers.BigNumber.from(toWeiString(cleanRewardValue));
         console.log('🔍 Reward is wei format (from transfer event):', {
             originalReward: cleanRewardValue,
             rewardWei: rewardWei.toString(),
@@ -2133,51 +2200,35 @@ const NewClaim = ({ isOpen, onClose, selectedToken = null, selectedTransfer = nu
         
         // Validate amount format consistency
         if (selectedTransfer.amount) {
-          const transferAmountFormatted = typeof selectedTransfer.amount === 'string' ? 
-            (selectedTransfer.amount.startsWith('0x') ? 
-              ethers.utils.formatUnits(selectedTransfer.amount, tokenDecimals) : 
-              selectedTransfer.amount) : 
-            ethers.utils.formatUnits(selectedTransfer.amount, tokenDecimals);
+          const transferAmountWei = normalizeToWeiString(selectedTransfer.amount, tokenDecimals);
+          const currentAmountWei = toWeiString(formData.amount);
           
-          const currentAmountFormatted = formData.amount;
-          
-          console.log('🔍 Bot format validation - Amount:', {
-            transferAmount: selectedTransfer.amount,
-            transferAmountFormatted,
-            currentAmount: formData.amount,
-            currentAmountFormatted,
-            exactMatch: transferAmountFormatted === currentAmountFormatted,
-            formatConsistent: true
+          console.log('🔍 Bot format validation - Amount (wei):', {
+            transferAmountWei,
+            currentAmountWei,
+            exactMatch: transferAmountWei === currentAmountWei
           });
           
-          // CRITICAL: Ensure exact format match to prevent bot challenges
-          if (transferAmountFormatted !== currentAmountFormatted) {
-            throw new Error(`Amount format mismatch: Transfer has "${transferAmountFormatted}" but claim has "${currentAmountFormatted}". This will cause bot challenges.`);
+          // CRITICAL: Ensure exact wei format match to prevent bot challenges
+          if (transferAmountWei !== currentAmountWei) {
+            throw new Error(`Amount format mismatch: Transfer has "${transferAmountWei}" but claim has "${currentAmountWei}". This will cause bot challenges.`);
           }
         }
         
         // Validate reward format consistency (match amount validation logic)
         if (selectedTransfer.reward) {
-          const transferRewardFormatted = typeof selectedTransfer.reward === 'string' ? 
-            (selectedTransfer.reward.startsWith('0x') ? 
-              ethers.utils.formatUnits(selectedTransfer.reward, tokenDecimals) : 
-              selectedTransfer.reward) : 
-            ethers.utils.formatUnits(selectedTransfer.reward, tokenDecimals);
+          const transferRewardWei = normalizeToWeiString(selectedTransfer.reward, tokenDecimals);
+          const currentRewardWei = toWeiString(formData.reward || '0');
           
-          const currentRewardFormatted = formData.reward || '0';
-          
-          console.log('🔍 Bot format validation - Reward:', {
-            transferReward: selectedTransfer.reward,
-            transferRewardFormatted,
-            currentReward: formData.reward,
-            currentRewardFormatted,
-            exactMatch: transferRewardFormatted === currentRewardFormatted,
-            formatConsistent: true
+          console.log('🔍 Bot format validation - Reward (wei):', {
+            transferRewardWei,
+            currentRewardWei,
+            exactMatch: transferRewardWei === currentRewardWei
           });
           
-          // CRITICAL: Ensure exact format match to prevent bot challenges
-          if (transferRewardFormatted !== currentRewardFormatted) {
-            throw new Error(`Reward format mismatch: Transfer has "${transferRewardFormatted}" but claim has "${currentRewardFormatted}". This will cause bot challenges.`);
+          // CRITICAL: Ensure exact wei format match to prevent bot challenges
+          if (transferRewardWei !== currentRewardWei) {
+            throw new Error(`Reward format mismatch: Transfer has "${transferRewardWei}" but claim has "${currentRewardWei}". This will cause bot challenges.`);
           }
         }
         
@@ -2469,7 +2520,7 @@ const NewClaim = ({ isOpen, onClose, selectedToken = null, selectedTransfer = nu
       
       // Amount from transfer events is always in wei format
       let amountWeiForStake;
-        amountWeiForStake = ethers.BigNumber.from(formData.amount);
+      amountWeiForStake = ethers.BigNumber.from(toWeiString(formData.amount));
       console.log('🔍 Pre-flight amount is wei format (from transfer event):', {
           originalAmount: formData.amount,
           amountWeiForStake: amountWeiForStake.toString(),
@@ -3167,7 +3218,7 @@ const NewClaim = ({ isOpen, onClose, selectedToken = null, selectedTransfer = nu
                               let humanReadableAmount;
                               
       // Amount from transfer events is always in wei format
-      const amountWei = ethers.BigNumber.from(formData.amount);
+      const amountWei = ethers.BigNumber.from(toWeiString(formData.amount));
       humanReadableAmount = ethers.utils.formatUnits(amountWei, amountDecimals);
                               
                               // Apply display multiplier for P3D tokens (check if it's a P3D token)
@@ -3237,7 +3288,7 @@ const NewClaim = ({ isOpen, onClose, selectedToken = null, selectedTransfer = nu
                               const tokenDecimals = getTokenDecimals(network?.id, formData.tokenAddress);
                               
                               // Amount from transfer events is always in wei format
-                              const amountWei = ethers.BigNumber.from(formData.amount);
+                              const amountWei = ethers.BigNumber.from(toWeiString(formData.amount));
                               let humanReadableAmount = ethers.utils.formatUnits(amountWei, tokenDecimals);
                               
                               // Apply display multiplier for P3D tokens
@@ -3262,7 +3313,7 @@ const NewClaim = ({ isOpen, onClose, selectedToken = null, selectedTransfer = nu
                               const tokenDecimals = getTokenDecimals(network?.id, formData.tokenAddress);
                               
                               // Reward from transfer events is always in wei format
-                              const rewardWei = ethers.BigNumber.from(formData.reward);
+                              const rewardWei = ethers.BigNumber.from(toWeiString(formData.reward));
                               let humanReadableReward = ethers.utils.formatUnits(rewardWei, tokenDecimals);
                               
                               // Apply display multiplier for P3D tokens
@@ -3288,20 +3339,22 @@ const NewClaim = ({ isOpen, onClose, selectedToken = null, selectedTransfer = nu
                               
                               // Handle amount (should be in wei format)
                               let amountWei;
-                              if (parseFloat(formData.amount) > 1000000000000) {
-                                amountWei = ethers.BigNumber.from(formData.amount);
+                              const amountInput = toWeiString(formData.amount);
+                              if (parseFloat(amountInput) > 1000000000000) {
+                                amountWei = ethers.BigNumber.from(amountInput);
                               } else {
-                                amountWei = ethers.utils.parseUnits(formData.amount, tokenDecimals);
+                                amountWei = ethers.utils.parseUnits(amountInput, tokenDecimals);
                               }
                               
                               // Handle reward (use as-is from event)
                               let rewardWei;
-                              if (parseFloat(formData.reward) > 1000000000000) {
+                              const rewardInput = toWeiString(formData.reward);
+                              if (parseFloat(rewardInput) > 1000000000000) {
                                 // Reward is in wei format
-                                rewardWei = ethers.BigNumber.from(formData.reward);
+                                rewardWei = ethers.BigNumber.from(rewardInput);
                               } else {
                                 // Reward is in human-readable format
-                                rewardWei = ethers.utils.parseUnits(formData.reward, tokenDecimals);
+                                rewardWei = ethers.utils.parseUnits(rewardInput, tokenDecimals);
                               }
                               
                               const transferWei = amountWei.sub(rewardWei);
@@ -3330,18 +3383,20 @@ const NewClaim = ({ isOpen, onClose, selectedToken = null, selectedTransfer = nu
                               
                               // Handle amount (should be in wei format)
                               let amountWei;
-                              if (parseFloat(formData.amount) > 1000000000000) {
-                                amountWei = ethers.BigNumber.from(formData.amount);
+                              const amountInput2 = toWeiString(formData.amount);
+                              if (parseFloat(amountInput2) > 1000000000000) {
+                                amountWei = ethers.BigNumber.from(amountInput2);
                               } else {
-                                amountWei = ethers.utils.parseUnits(formData.amount, tokenDecimals);
+                                amountWei = ethers.utils.parseUnits(amountInput2, tokenDecimals);
                               }
                               
                               // Handle reward (use as-is from event)
                               let rewardWei;
-                              if (parseFloat(formData.reward) > 1000000000000) {
-                                rewardWei = ethers.BigNumber.from(formData.reward);
+                              const rewardInput2 = toWeiString(formData.reward);
+                              if (parseFloat(rewardInput2) > 1000000000000) {
+                                rewardWei = ethers.BigNumber.from(rewardInput2);
                               } else {
-                                rewardWei = ethers.utils.parseUnits(formData.reward, tokenDecimals);
+                                rewardWei = ethers.utils.parseUnits(rewardInput2, tokenDecimals);
                               }
                               
                               const transferWei = amountWei.sub(rewardWei);
@@ -3371,18 +3426,20 @@ const NewClaim = ({ isOpen, onClose, selectedToken = null, selectedTransfer = nu
                               
                               // Handle amount (should be in wei format)
                               let amountWei;
-                              if (parseFloat(formData.amount) > 1000000000000) {
-                                amountWei = ethers.BigNumber.from(formData.amount);
+                              const amountInput3 = toWeiString(formData.amount);
+                              if (parseFloat(amountInput3) > 1000000000000) {
+                                amountWei = ethers.BigNumber.from(amountInput3);
                               } else {
-                                amountWei = ethers.utils.parseUnits(formData.amount, tokenDecimals);
+                                amountWei = ethers.utils.parseUnits(amountInput3, tokenDecimals);
                               }
                               
                               // Handle reward (use as-is from event)
                               let rewardWei;
-                              if (parseFloat(formData.reward) > 1000000000000) {
-                                rewardWei = ethers.BigNumber.from(formData.reward);
+                              const rewardInput3 = toWeiString(formData.reward);
+                              if (parseFloat(rewardInput3) > 1000000000000) {
+                                rewardWei = ethers.BigNumber.from(rewardInput3);
                               } else {
-                                rewardWei = ethers.utils.parseUnits(formData.reward, tokenDecimals);
+                                rewardWei = ethers.utils.parseUnits(rewardInput3, tokenDecimals);
                               }
                               
                               const transferWei = amountWei.sub(rewardWei);
@@ -3407,18 +3464,20 @@ const NewClaim = ({ isOpen, onClose, selectedToken = null, selectedTransfer = nu
                         
                         // Handle amount (should be in wei format)
                         let amountWei;
-                        if (parseFloat(formData.amount) > 1000000000000) {
-                          amountWei = ethers.BigNumber.from(formData.amount);
+                        const amountInput4 = toWeiString(formData.amount);
+                        if (parseFloat(amountInput4) > 1000000000000) {
+                          amountWei = ethers.BigNumber.from(amountInput4);
                         } else {
-                          amountWei = ethers.utils.parseUnits(formData.amount, tokenDecimals);
+                          amountWei = ethers.utils.parseUnits(amountInput4, tokenDecimals);
                         }
                         
                         // Handle reward (use as-is from event)
                         let rewardWei;
-                        if (parseFloat(formData.reward) > 1000000000000) {
-                          rewardWei = ethers.BigNumber.from(formData.reward);
+                        const rewardInput4 = toWeiString(formData.reward);
+                        if (parseFloat(rewardInput4) > 1000000000000) {
+                          rewardWei = ethers.BigNumber.from(rewardInput4);
                         } else {
-                          rewardWei = ethers.utils.parseUnits(formData.reward, tokenDecimals);
+                          rewardWei = ethers.utils.parseUnits(rewardInput4, tokenDecimals);
                         }
                         
                         const transferWei = amountWei.sub(rewardWei);
