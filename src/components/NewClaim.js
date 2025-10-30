@@ -10,6 +10,7 @@ import {
 import { getBlockTimestamp } from '../utils/bridge-contracts';
 import { fetchClaimDetails } from '../utils/claim-details-fetcher.js';
 import { normalizeAmount } from '../utils/data-normalizer.js';
+import { convertActualToDisplay } from '../utils/decimal-converter.js';
 import { addClaimEventToStorage, createClaimEventData } from '../utils/unified-event-cache';
 import { 
   EXPORT_ABI,
@@ -63,19 +64,11 @@ const toWeiString = (value) => {
   return String(value);
 };
 
-// Normalize a numeric value to a wei string using token decimals when input may be human-readable
-const normalizeToWeiString = (value, decimals) => {
+// Normalize a numeric value to a wei string
+// Amounts from blockchain events are always in wei format, so we just normalize the format
+const normalizeToWeiString = (value) => {
   const v = toWeiString(value);
-  if (!v) return '0';
-  // If looks like a decimal string or clearly not a big integer, parse with decimals
-  const isDecimalLike = typeof v === 'string' && (v.includes('.') || (!v.startsWith('0x') && parseFloat(v) < 1000000000000));
-  if (isDecimalLike) {
-    try {
-      return ethers.utils.parseUnits(v, decimals).toString();
-    } catch (_) {
-      // fallthrough
-    }
-  }
+  if (!v || v === '0') return '0';
   try {
     return ethers.BigNumber.from(v).toString();
   } catch (_) {
@@ -132,37 +125,26 @@ const getStakeTokenDecimals = (networkId, stakeTokenAddress = null) => {
   return 18; // Default fallback
 };
 
-// Helper function to get display multiplier for stake token
-const getStakeTokenDisplayMultiplier = (networkId) => {
-  const networkConfig = getNetworkConfig(networkId);
-  if (!networkConfig) return 1; // Default fallback
+// Helper function to format amounts for display (always uses decimal-converter)
+// This ensures consistent formatting and proper multiplier handling
+// Can handle both wei (BigNumber/string) and human-readable amounts
+const formatAmountForDisplay = (weiAmount, decimals, tokenAddress, getTokenDecimalsDisplayMultiplier) => {
+  if (!weiAmount || weiAmount === '0') return '0';
   
-  // For 3DPass, P3D has display multiplier
-  if (networkId === NETWORKS.THREEDPASS.id) {
-    return networkConfig.nativeCurrency?.decimalsDisplayMultiplier || 1;
-  }
+  // Convert wei to human-readable format
+  const humanReadable = ethers.utils.formatUnits(weiAmount, decimals);
   
-  return 1; // Default fallback for other networks
+  // Use decimal-converter utility for consistent formatting and multiplier handling
+  return convertActualToDisplay(humanReadable, decimals, tokenAddress, getTokenDecimalsDisplayMultiplier);
 };
 
-// Helper function to format stake token amount for display
-const formatStakeTokenForDisplay = (amount, networkId, stakeTokenAddress = null) => {
-  // Only apply display multiplier for 3DPass native tokens (P3D)
-  // For other networks or ERC20 tokens, don't apply any multiplier
-  if (networkId === NETWORKS.THREEDPASS.id && stakeTokenAddress === NETWORKS.THREEDPASS.tokens.P3D.address) {
-    const multiplier = getStakeTokenDisplayMultiplier(networkId);
-    const numericAmount = parseFloat(amount);
-    if (isNaN(numericAmount)) return amount;
-    return (numericAmount * multiplier).toString();
-  }
+// Helper to format human-readable amounts for display (converts to wei first, then formats)
+const formatHumanReadableForDisplay = (humanReadableAmount, decimals, tokenAddress, getTokenDecimalsDisplayMultiplier) => {
+  if (!humanReadableAmount || humanReadableAmount === '0') return '0';
   
-  // For all other cases (ETH, USDT, etc.), format to avoid scientific notation
-  const numericAmount = parseFloat(amount);
-  if (isNaN(numericAmount)) return amount;
-  
-  // Use toFixed with enough precision to avoid scientific notation
-  // For very small numbers, use up to 18 decimal places
-  return numericAmount.toFixed(18).replace(/\.?0+$/, '');
+  // Convert human-readable amount to wei, then format
+  const weiAmount = ethers.utils.parseUnits(humanReadableAmount || '0', decimals);
+  return formatAmountForDisplay(weiAmount, decimals, tokenAddress, getTokenDecimalsDisplayMultiplier);
 };
 
 // Helper function to check if this is a third-party claim
@@ -311,7 +293,7 @@ const parseError = (error) => {
 
 const NewClaim = ({ isOpen, onClose, selectedToken = null, selectedTransfer = null, onClaimSubmitted = null }) => {
   const { account, provider, network, signer } = useWeb3();
-  const { getBridgeInstancesWithSettings, getNetworkWithSettings } = useSettings();
+  const { getBridgeInstancesWithSettings, getNetworkWithSettings, getTokenDecimalsDisplayMultiplier } = useSettings();
   
   
   // Form state
@@ -342,26 +324,13 @@ const NewClaim = ({ isOpen, onClose, selectedToken = null, selectedTransfer = nu
     
     const tokenDecimals = getTokenDecimals(network?.id, formData.tokenAddress);
     
-    // Handle amount (should be in wei format)
-    let amountWei;
-    const amountInput = toWeiString(formData.amount);
-    if (parseFloat(amountInput) > 1000000000000) {
-      amountWei = ethers.BigNumber.from(amountInput);
-    } else {
-      amountWei = ethers.utils.parseUnits(amountInput, tokenDecimals);
-    }
-    
-    // Handle reward (use as-is from event)
-    let rewardWei;
-    const rewardInput = toWeiString(formData.reward);
-    if (parseFloat(rewardInput) > 1000000000000) {
-      rewardWei = ethers.BigNumber.from(rewardInput);
-    } else {
-      rewardWei = ethers.utils.parseUnits(rewardInput, tokenDecimals);
-    }
-    
+    // All amounts are stored in wei format internally (from blockchain events)
+    const amountWei = ethers.BigNumber.from(toWeiString(formData.amount));
+    const rewardWei = ethers.BigNumber.from(toWeiString(formData.reward));
     const transferWei = amountWei.sub(rewardWei);
-    const balanceWei = ethers.utils.parseUnits(tokenBalance, tokenDecimals);
+    
+    // Token balance is stored as human-readable string from balance queries, convert to wei for comparison
+    const balanceWei = ethers.utils.parseUnits(tokenBalance || '0', tokenDecimals);
     
     return transferWei.gt(balanceWei);
   };
@@ -520,8 +489,8 @@ const NewClaim = ({ isOpen, onClose, selectedToken = null, selectedTransfer = nu
             tokenAddress: tokenAddress.toLowerCase(),
             // CRITICAL: Preserve exact format to match bot expectations
             // Transfer amounts from blockchain events are already in wei format
-            amount: selectedTransfer.amount ? normalizeToWeiString(selectedTransfer.amount, tokenDecimals) : '',
-            reward: selectedTransfer.reward ? normalizeToWeiString(selectedTransfer.reward, tokenDecimals) : '0',
+            amount: selectedTransfer.amount ? normalizeToWeiString(selectedTransfer.amount) : '',
+            reward: selectedTransfer.reward ? normalizeToWeiString(selectedTransfer.reward) : '0',
             txid: selectedTransfer.txid || selectedTransfer.transactionHash || '',
             txts: txtsValue,
             senderAddress: toChecksumAddress(selectedTransfer.fromAddress || selectedTransfer.senderAddress || ''),
@@ -1292,13 +1261,8 @@ const NewClaim = ({ isOpen, onClose, selectedToken = null, selectedTransfer = nu
       // Use the correct decimals for the amount from configuration
       const amountDecimals = getTokenDecimals(network?.id, formData.tokenAddress);
       
-      // Check if the amount is already in wei format
-      // Transfer amounts from blockchain events are already in wei format
-      let amountWei;
-      // Normalize amount to string first in case it's a BigNumber-like object
-      const amountInput = toWeiString(amount);
       // Amount from transfer events is always in wei format
-      amountWei = ethers.BigNumber.from(amountInput);
+      const amountWei = ethers.BigNumber.from(toWeiString(amount));
       console.log('🔍 Amount is wei format (from transfer event):', {
           originalAmount: amount,
           amountWei: amountWei.toString(),
@@ -2251,11 +2215,10 @@ const NewClaim = ({ isOpen, onClose, selectedToken = null, selectedTransfer = nu
       console.log('🔍 Step 6: Validating format consistency...');
       if (selectedTransfer) {
         console.log('🔍 Selected transfer found, validating format consistency');
-        const tokenDecimals = getTokenDecimals(network?.id, formData.tokenAddress);
         
         // Validate amount format consistency
         if (selectedTransfer.amount) {
-          const transferAmountWei = normalizeToWeiString(selectedTransfer.amount, tokenDecimals);
+          const transferAmountWei = normalizeToWeiString(selectedTransfer.amount);
           const currentAmountWei = toWeiString(formData.amount);
           
           console.log('🔍 Bot format validation - Amount (wei):', {
@@ -2272,7 +2235,7 @@ const NewClaim = ({ isOpen, onClose, selectedToken = null, selectedTransfer = nu
         
         // Validate reward format consistency (match amount validation logic)
         if (selectedTransfer.reward) {
-          const transferRewardWei = normalizeToWeiString(selectedTransfer.reward, tokenDecimals);
+          const transferRewardWei = normalizeToWeiString(selectedTransfer.reward);
           const currentRewardWei = toWeiString(formData.reward || '0');
           
           console.log('🔍 Bot format validation - Reward (wei):', {
@@ -3179,18 +3142,12 @@ const NewClaim = ({ isOpen, onClose, selectedToken = null, selectedTransfer = nu
                         <div className="text-right">
                           <p className="text-sm text-secondary-400">Balance</p>
                           <p className="font-medium text-white">
-                            {(() => {
-                              // Apply display multiplier for P3D tokens
-                              if (tokenMetadata?.symbol === 'P3D') {
-                                const multiplier = getStakeTokenDisplayMultiplier(NETWORKS.THREEDPASS.id);
-                                const numericAmount = parseFloat(tokenBalance);
-                                if (!isNaN(numericAmount)) {
-                                  return (numericAmount * multiplier).toString();
-                                }
-                              }
-                              
-                              return tokenBalance;
-                            })()}
+                            {formatHumanReadableForDisplay(
+                              tokenBalance,
+                              tokenMetadata?.decimals || getTokenDecimals(network?.id, formData.tokenAddress),
+                              formData.tokenAddress,
+                              getTokenDecimalsDisplayMultiplier
+                            )}
                           </p>
                         </div>
                       </div>
@@ -3209,7 +3166,12 @@ const NewClaim = ({ isOpen, onClose, selectedToken = null, selectedTransfer = nu
                                   ? 'text-red-400' 
                                   : 'text-white'
                               }`}>
-                                {isLoadingStakeBalance ? 'Loading...' : formatStakeTokenForDisplay(stakeTokenBalance, network?.id, selectedBridge?.stakeTokenAddress)}
+                                {isLoadingStakeBalance ? 'Loading...' : formatHumanReadableForDisplay(
+                                  stakeTokenBalance,
+                                  getStakeTokenDecimals(network?.id, selectedBridge?.stakeTokenAddress),
+                                  selectedBridge?.stakeTokenAddress,
+                                  getTokenDecimalsDisplayMultiplier
+                                )}
                                 {!isLoadingStakeBalance && parseFloat(stakeTokenBalance) < parseFloat(requiredStake) && (
                                     <span className="text-xs text-red-400 ml-1">
                                       (Insufficient)
@@ -3268,29 +3230,20 @@ const NewClaim = ({ isOpen, onClose, selectedToken = null, selectedTransfer = nu
                     <div>
                       <p className="text-secondary-400">Required Stake</p>
                       <p className="font-medium text-white">
-                        {formatStakeTokenForDisplay(requiredStake, network?.id, selectedBridge?.stakeTokenAddress)} {selectedBridge?.stakeTokenSymbol || 'stake'}
+                        {formatHumanReadableForDisplay(
+                          requiredStake,
+                          getStakeTokenDecimals(network?.id, selectedBridge?.stakeTokenAddress),
+                          selectedBridge?.stakeTokenAddress,
+                          getTokenDecimalsDisplayMultiplier
+                        )} {selectedBridge?.stakeTokenSymbol || 'stake'}
                         {formData.amount && (
                           <span className="text-xs text-secondary-400 ml-1">
-                            (for {(() => {
-                              // Format the amount properly - check if it's in wei format
-                              const amountDecimals = getTokenDecimals(network?.id, formData.tokenAddress);
-                              let humanReadableAmount;
-                              
-      // Amount from transfer events is always in wei format
-      const amountWei = ethers.BigNumber.from(toWeiString(formData.amount));
-      humanReadableAmount = ethers.utils.formatUnits(amountWei, amountDecimals);
-                              
-                              // Apply display multiplier for P3D tokens (check if it's a P3D token)
-                              if (tokenMetadata?.symbol === 'P3D') {
-                                const multiplier = getStakeTokenDisplayMultiplier(NETWORKS.THREEDPASS.id);
-                                const numericAmount = parseFloat(humanReadableAmount);
-                                if (!isNaN(numericAmount)) {
-                                  return (numericAmount * multiplier).toString();
-                                }
-                              }
-                              
-                              return humanReadableAmount;
-                            })()} {tokenMetadata?.symbol})
+                            (for {formatAmountForDisplay(
+                              ethers.BigNumber.from(toWeiString(formData.amount)),
+                              getTokenDecimals(network?.id, formData.tokenAddress),
+                              formData.tokenAddress,
+                              getTokenDecimalsDisplayMultiplier
+                            )} {tokenMetadata?.symbol})
                           </span>
                         )}
                       </p>
@@ -3344,22 +3297,15 @@ const NewClaim = ({ isOpen, onClose, selectedToken = null, selectedTransfer = nu
                             {(() => {
                               if (!formData.amount) return '0';
                               
-                              const tokenDecimals = getTokenDecimals(network?.id, formData.tokenAddress);
+                              // Use tokenMetadata decimals if available, otherwise fall back to config
+                              const tokenDecimals = tokenMetadata?.decimals ?? getTokenDecimals(network?.id, formData.tokenAddress);
                               
                               // Amount from transfer events is always in wei format
                               const amountWei = ethers.BigNumber.from(toWeiString(formData.amount));
-                              let humanReadableAmount = ethers.utils.formatUnits(amountWei, tokenDecimals);
+                              const humanReadableAmount = ethers.utils.formatUnits(amountWei, tokenDecimals);
                               
-                              // Apply display multiplier for P3D tokens
-                              if (tokenMetadata?.symbol === 'P3D') {
-                                const multiplier = getStakeTokenDisplayMultiplier(NETWORKS.THREEDPASS.id);
-                                const numericAmount = parseFloat(humanReadableAmount);
-                                if (!isNaN(numericAmount)) {
-                                  return (numericAmount * multiplier).toString();
-                                }
-                              }
-                              
-                              return humanReadableAmount;
+                              // Use decimal-converter utility for consistent formatting
+                              return convertActualToDisplay(humanReadableAmount, tokenDecimals, formData.tokenAddress, getTokenDecimalsDisplayMultiplier);
                             })()} {tokenMetadata?.symbol}
                           </span>
                         </div>
@@ -3369,22 +3315,15 @@ const NewClaim = ({ isOpen, onClose, selectedToken = null, selectedTransfer = nu
                             {(() => {
                               if (!formData.reward) return '0';
                               
-                              const tokenDecimals = getTokenDecimals(network?.id, formData.tokenAddress);
+                              // Use tokenMetadata decimals if available, otherwise fall back to config
+                              const tokenDecimals = tokenMetadata?.decimals ?? getTokenDecimals(network?.id, formData.tokenAddress);
                               
                               // Reward from transfer events is always in wei format
                               const rewardWei = ethers.BigNumber.from(toWeiString(formData.reward));
-                              let humanReadableReward = ethers.utils.formatUnits(rewardWei, tokenDecimals);
+                              const humanReadableReward = ethers.utils.formatUnits(rewardWei, tokenDecimals);
                               
-                              // Apply display multiplier for P3D tokens
-                              if (tokenMetadata?.symbol === 'P3D') {
-                                const multiplier = getStakeTokenDisplayMultiplier(NETWORKS.THREEDPASS.id);
-                                const numericAmount = parseFloat(humanReadableReward);
-                                if (!isNaN(numericAmount)) {
-                                  return (numericAmount * multiplier).toString();
-                                }
-                              }
-                              
-                              return humanReadableReward;
+                              // Use decimal-converter utility for consistent formatting
+                              return convertActualToDisplay(humanReadableReward, tokenDecimals, formData.tokenAddress, getTokenDecimalsDisplayMultiplier);
                             })()}
                           </span>
                         </div>
@@ -3394,7 +3333,8 @@ const NewClaim = ({ isOpen, onClose, selectedToken = null, selectedTransfer = nu
                             {(() => {
                               if (!formData.amount || !formData.reward) return '0';
                               
-                              const tokenDecimals = getTokenDecimals(network?.id, formData.tokenAddress);
+                              // Use tokenMetadata decimals if available, otherwise fall back to config
+                              const tokenDecimals = tokenMetadata?.decimals ?? getTokenDecimals(network?.id, formData.tokenAddress);
                               
                               // Amount and reward from transfer events are always in wei format
                               const amountWei = ethers.BigNumber.from(toWeiString(formData.amount));
@@ -3407,18 +3347,10 @@ const NewClaim = ({ isOpen, onClose, selectedToken = null, selectedTransfer = nu
                                 return '0';
                               }
                               
-                              let humanReadableTransfer = ethers.utils.formatUnits(transferWei, tokenDecimals);
+                              const humanReadableTransfer = ethers.utils.formatUnits(transferWei, tokenDecimals);
                               
-                              // Apply display multiplier for P3D tokens
-                              if (tokenMetadata?.symbol === 'P3D') {
-                                const multiplier = getStakeTokenDisplayMultiplier(NETWORKS.THREEDPASS.id);
-                                const numericAmount = parseFloat(humanReadableTransfer);
-                                if (!isNaN(numericAmount)) {
-                                  return (numericAmount * multiplier).toString();
-                                }
-                              }
-                              
-                              return humanReadableTransfer;
+                              // Use decimal-converter utility for consistent formatting
+                              return convertActualToDisplay(humanReadableTransfer, tokenDecimals, formData.tokenAddress, getTokenDecimalsDisplayMultiplier);
                             })()} {tokenMetadata?.symbol}
                           </span>
                         </div>
@@ -3428,7 +3360,8 @@ const NewClaim = ({ isOpen, onClose, selectedToken = null, selectedTransfer = nu
                             (() => {
                               if (!formData.amount || !formData.reward) return false;
                               
-                              const tokenDecimals = getTokenDecimals(network?.id, formData.tokenAddress);
+                              // Use tokenMetadata decimals if available, otherwise fall back to config
+                              const tokenDecimals = tokenMetadata?.decimals ?? getTokenDecimals(network?.id, formData.tokenAddress);
                               
                               // Amount and reward from transfer events are always in wei format
                               const amountWei = ethers.BigNumber.from(toWeiString(formData.amount));
@@ -3449,21 +3382,17 @@ const NewClaim = ({ isOpen, onClose, selectedToken = null, selectedTransfer = nu
                               : 'text-white'
                           }`}>
                             {(() => {
-                              // Apply display multiplier for P3D tokens
-                              if (tokenMetadata?.symbol === 'P3D') {
-                                const multiplier = getStakeTokenDisplayMultiplier(NETWORKS.THREEDPASS.id);
-                                const numericAmount = parseFloat(tokenBalance);
-                                if (!isNaN(numericAmount)) {
-                                  return (numericAmount * multiplier).toString();
-                                }
-                              }
+                              // Use tokenMetadata decimals if available, otherwise fall back to config
+                              const tokenDecimals = tokenMetadata?.decimals ?? getTokenDecimals(network?.id, formData.tokenAddress);
                               
-                              return tokenBalance;
+                              // Use decimal-converter utility for consistent formatting
+                              return convertActualToDisplay(tokenBalance, tokenDecimals, formData.tokenAddress, getTokenDecimalsDisplayMultiplier);
                             })()} {tokenMetadata?.symbol}
                             {(() => {
                               if (!formData.amount || !formData.reward) return null;
                               
-                              const tokenDecimals = getTokenDecimals(network?.id, formData.tokenAddress);
+                              // Use tokenMetadata decimals if available, otherwise fall back to config
+                              const tokenDecimals = tokenMetadata?.decimals ?? getTokenDecimals(network?.id, formData.tokenAddress);
                               
                               // Amount and reward from transfer events are always in wei format
                               const amountWei = ethers.BigNumber.from(toWeiString(formData.amount));
@@ -3493,7 +3422,8 @@ const NewClaim = ({ isOpen, onClose, selectedToken = null, selectedTransfer = nu
                       <strong>Note:</strong> The bridge will charge your balance with {(() => {
                         if (!formData.amount || !formData.reward) return '0';
                         
-                        const tokenDecimals = getTokenDecimals(network?.id, formData.tokenAddress);
+                        // Use tokenMetadata decimals if available, otherwise fall back to config
+                        const tokenDecimals = tokenMetadata?.decimals ?? getTokenDecimals(network?.id, formData.tokenAddress);
                         
                         // Amount and reward from transfer events are always in wei format
                         const amountWei = ethers.BigNumber.from(toWeiString(formData.amount));
@@ -3506,18 +3436,10 @@ const NewClaim = ({ isOpen, onClose, selectedToken = null, selectedTransfer = nu
                           return '0';
                         }
                         
-                        let humanReadableTransfer = ethers.utils.formatUnits(transferWei, tokenDecimals);
+                        const humanReadableTransfer = ethers.utils.formatUnits(transferWei, tokenDecimals);
                         
-                        // Apply display multiplier for P3D tokens
-                        if (tokenMetadata?.symbol === 'P3D') {
-                          const multiplier = getStakeTokenDisplayMultiplier(NETWORKS.THREEDPASS.id);
-                          const numericAmount = parseFloat(humanReadableTransfer);
-                          if (!isNaN(numericAmount)) {
-                            return (numericAmount * multiplier).toString();
-                          }
-                        }
-                        
-                        return humanReadableTransfer;
+                        // Use decimal-converter utility for consistent formatting
+                        return convertActualToDisplay(humanReadableTransfer, tokenDecimals, formData.tokenAddress, getTokenDecimalsDisplayMultiplier);
                       })()} {tokenMetadata?.symbol} excluding the reward and transfer it to the recipient. 
                       After the challenge period expires, you will be able to withdraw both the stake 
                       and the transferred amount back to your balance, as long as you win the counterstake.
@@ -3787,10 +3709,20 @@ const NewClaim = ({ isOpen, onClose, selectedToken = null, selectedTransfer = nu
                   
                   <div className="bg-warning-900/20 border border-warning-700 rounded-lg p-2 mb-2">
                     <p className="text-xs text-warning-200">
-                      <strong>Required:</strong> {formatStakeTokenForDisplay(requiredStake, network?.id, selectedBridge?.stakeTokenAddress)} {selectedBridge?.stakeTokenSymbol || 'stake'} for staking
+                      <strong>Required:</strong> {formatHumanReadableForDisplay(
+                        requiredStake,
+                        getStakeTokenDecimals(network?.id, selectedBridge?.stakeTokenAddress),
+                        selectedBridge?.stakeTokenAddress,
+                        getTokenDecimalsDisplayMultiplier
+                      )} {selectedBridge?.stakeTokenSymbol || 'stake'} for staking
                     </p>
                     <p className="text-xs text-warning-200 mt-1">
-                      <strong>Current allowance:</strong> {allowance === 'Max' ? 'Max' : formatStakeTokenForDisplay(allowance, network?.id, selectedBridge?.stakeTokenAddress)} {selectedBridge?.stakeTokenSymbol || 'stake'}
+                      <strong>Current allowance:</strong> {allowance === 'Max' ? 'Max' : formatHumanReadableForDisplay(
+                        allowance,
+                        getStakeTokenDecimals(network?.id, selectedBridge?.stakeTokenAddress),
+                        selectedBridge?.stakeTokenAddress,
+                        getTokenDecimalsDisplayMultiplier
+                      )} {selectedBridge?.stakeTokenSymbol || 'stake'}
                     </p>
                   </div>
                   
@@ -3866,12 +3798,22 @@ const NewClaim = ({ isOpen, onClose, selectedToken = null, selectedTransfer = nu
                       <div className="flex justify-between">
                         <span className="text-success-300 text-xs">Current allowance:</span>
                         <span className="text-success-400 font-medium text-xs">
-                          {allowance === 'Max' ? 'Max' : formatStakeTokenForDisplay(allowance, network?.id, selectedBridge?.stakeTokenAddress)} {selectedBridge?.stakeTokenSymbol || 'stake'}
+                          {allowance === 'Max' ? 'Max' : formatHumanReadableForDisplay(
+                            allowance,
+                            getStakeTokenDecimals(network?.id, selectedBridge?.stakeTokenAddress),
+                            selectedBridge?.stakeTokenAddress,
+                            getTokenDecimalsDisplayMultiplier
+                          )} {selectedBridge?.stakeTokenSymbol || 'stake'}
                         </span>
                       </div>
                       <div className="flex justify-between">
                         <span className="text-success-300 text-xs">Required for staking:</span>
-                        <span className="text-success-400 font-medium text-xs">{formatStakeTokenForDisplay(requiredStake, network?.id, selectedBridge?.stakeTokenAddress)} {selectedBridge?.stakeTokenSymbol || 'stake'}</span>
+                        <span className="text-success-400 font-medium text-xs">{formatHumanReadableForDisplay(
+                          requiredStake,
+                          getStakeTokenDecimals(network?.id, selectedBridge?.stakeTokenAddress),
+                          selectedBridge?.stakeTokenAddress,
+                          getTokenDecimalsDisplayMultiplier
+                        )} {selectedBridge?.stakeTokenSymbol || 'stake'}</span>
                       </div>
                       {allowance === 'Max' && (
                         <div className="text-xs text-success-300 mt-1.5 p-1.5 bg-success-800/30 rounded border border-success-700">
