@@ -1,11 +1,11 @@
 import { ethers } from 'ethers';
 import { 
-  ASSISTANT_FACTORY_ABI,
-  EXPORT_ASSISTANT_ABI,
-  COUNTERSTAKE_ABI
+  EXPORT_ASSISTANT_ABI
 } from '../contracts/abi';
+import { getCounterstakeABI, createCounterstakeContract as createCounterstakeContractFactory, createAssistantFactoryContract } from './contract-factory.js';
 import { getBridgeInstanceByAddress } from '../config/networks';
 import { safeBigNumberToInt } from './safe-reward-handler';
+import { fetchClaimDetails } from './claim-details-fetcher.js';
 
 // 3DPass Bridge Contract Utilities
 
@@ -18,7 +18,7 @@ import { safeBigNumberToInt } from './safe-reward-handler';
  */
 export const getContractABI = (networkSymbol, contractType) => {
   // Always use the actual Counterstake ABI since all bridges use the same Counterstake contract
-  return COUNTERSTAKE_ABI;
+  return getCounterstakeABI();
 };
 
 /**
@@ -39,7 +39,7 @@ export const getBridgeABI = (bridgeInstance) => {
   if (!bridgeInstance) return null;
   
   // Always use the actual Counterstake ABI since all bridges use the same Counterstake contract
-  return COUNTERSTAKE_ABI;
+  return getCounterstakeABI();
 };
 
 /**
@@ -52,7 +52,7 @@ export const getBridgeABI = (bridgeInstance) => {
  */
 export const createBridgeContract = (providerOrSigner, contractAddress, networkSymbol, contractType) => {
   // Always use the actual Counterstake ABI since all bridges use the same Counterstake contract
-  return new ethers.Contract(contractAddress, COUNTERSTAKE_ABI, providerOrSigner);
+  return createCounterstakeContractFactory(contractAddress, providerOrSigner);
 };
 
 /**
@@ -466,7 +466,8 @@ export const claimTransfer = async (assistantContract, transfer, claimerAddress,
  */
 export const getAssistantContract = async (bridgeContract, provider, assistantFactoryAddress) => {
   try {
-    const factoryContract = new ethers.Contract(assistantFactoryAddress, ASSISTANT_FACTORY_ABI, provider);
+    // Use the centralized factory contract creation
+    const factoryContract = createAssistantFactoryContract(assistantFactoryAddress, provider);
     
     const bridgeAddress = bridgeContract.address;
     let assistantAddress;
@@ -535,68 +536,20 @@ export const getTransferStatus = async (contract, transferHash) => {
  * Get claim details for a specific claim number
  * @param {ethers.Contract} contract - Counterstake contract instance
  * @param {number} claimNum - Claim number
+ * @param {string} rpcUrl - RPC URL for fallback provider
  * @returns {Promise<Object|null>} Claim details or null if not found
  */
 export const getClaimDetails = async (contract, claimNum, rpcUrl) => {
   try {
-    console.log('🔍 getClaimDetails: Getting claim', claimNum, 'from contract:', contract.address);
-    
-    // Create a direct JsonRpcProvider using the provided RPC URL
-    console.log('🔍 getClaimDetails: Using RPC URL:', rpcUrl);
-    const directProvider = new ethers.providers.JsonRpcProvider(rpcUrl);
-    
-    // Use the same low-level call approach as the working script
-    const encodedData = contract.interface.encodeFunctionData('getClaim(uint256)', [claimNum]);
-    console.log('🔍 getClaimDetails: Encoded data:', encodedData);
-    
-    const result = await directProvider.call({
-      to: contract.address,
-      data: encodedData
+    // Use the centralized claim details fetcher
+    return await fetchClaimDetails({
+      contract,
+      claimNum,
+      rpcUrl,
+      useDirectProvider: !!rpcUrl // Use direct provider if RPC URL is provided
     });
-    
-    console.log('🔍 getClaimDetails: Raw result from direct provider.call:', result);
-    
-    // Decode the successful result
-    const decodedResult = contract.interface.decodeFunctionResult('getClaim(uint256)', result);
-    console.log('🔍 getClaimDetails: Successfully decoded claim', claimNum, ':', decodedResult);
-    
-    if (decodedResult && decodedResult.length > 0) {
-      return decodedResult[0]; // Return the decoded claim data
-    }
-    
-    return null;
   } catch (error) {
-    console.log('🔍 getClaimDetails: Full error object:', error);
-    console.log('🔍 getClaimDetails: Error message:', error.message);
-    console.log('🔍 getClaimDetails: Error code:', error.code);
-    console.log('🔍 getClaimDetails: Error data:', error.data);
-    console.log('🔍 getClaimDetails: Error reason:', error.reason);
-    
-    // Check if this is a revert indicating the claim doesn't exist
-    if (error.message && error.message.includes('call revert exception')) {
-      // If we have error.data, it means the call actually succeeded but ethers.js interpreted it as a revert
-      // This often happens when the ABI doesn't match exactly or there's a decoding issue
-      if (error.data && error.data !== '0x') {
-        console.log('🔍 getClaimDetails: Call succeeded but ethers.js interpreted as revert. Raw data:', error.data);
-        
-        try {
-          // Try to decode the raw data directly
-          const decodedResult = contract.interface.decodeFunctionResult('getClaim(uint256)', error.data);
-          console.log('🔍 getClaimDetails: Successfully decoded claim from error.data:', claimNum, ':', decodedResult);
-          
-          if (decodedResult && decodedResult.length > 0) {
-            return decodedResult[0]; // Return the decoded claim data
-          }
-        } catch (decodeError) {
-          console.log('🔍 getClaimDetails: Failed to decode error.data:', decodeError.message);
-        }
-      }
-      
-      console.log('🔍 getClaimDetails: Claim', claimNum, 'does not exist (revert)');
-      return null;
-    }
-    
-    console.log('🔍 getClaimDetails: Failed to decode claim', claimNum, ':', error.message);
+    console.error('Error in getClaimDetails:', error);
     return null;
   }
 };
@@ -664,7 +617,7 @@ const fetchClaimEventsFromProviderBlocks = async (provider, bridgeAddress, event
     console.log(`🔍 fetchClaimEventsFromProviderBlocks: Processing ${eventBlocks.length} NewClaim events for ${bridgeAddress}`);
     
     // Use COUNTERSTAKE_ABI for NewClaim events
-    const contract = new ethers.Contract(bridgeAddress, COUNTERSTAKE_ABI, provider);
+    const contract = createCounterstakeContractFactory(bridgeAddress, provider);
     
     const allEvents = [];
     
@@ -942,15 +895,9 @@ export const createCounterstakeContract = async (providerOrSigner, contractAddre
       throw new Error('Invalid contract address');
     }
     
-    const { COUNTERSTAKE_ABI } = await import('../contracts/abi');
-    console.log('🔍 COUNTERSTAKE_ABI loaded:', COUNTERSTAKE_ABI ? 'yes' : 'no');
-    console.log('🔍 COUNTERSTAKE_ABI length:', COUNTERSTAKE_ABI?.length);
-    
-    if (!COUNTERSTAKE_ABI) {
-      throw new Error('Failed to load COUNTERSTAKE_ABI');
-    }
-    
-    const contract = new ethers.Contract(contractAddress, COUNTERSTAKE_ABI, providerOrSigner);
+    // Use factory function for consistent contract creation
+    const contract = createCounterstakeContractFactory(contractAddress, providerOrSigner);
+    console.log('🔍 COUNTERSTAKE_ABI loaded:', contract ? 'yes' : 'no');
     console.log('🔍 Contract created with address:', contract.address);
     console.log('🔍 Contract interface functions:', Object.keys(contract.interface.functions || {}));
     return contract;

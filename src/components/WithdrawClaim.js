@@ -1,6 +1,7 @@
 import React, { useState, useCallback, useRef } from 'react';
 import { ethers } from 'ethers';
 import { createCounterstakeContract } from '../utils/bridge-contracts';
+import { fetchClaimDetails } from '../utils/claim-details-fetcher.js';
 import { useWeb3 } from '../contexts/Web3Context';
 import { motion } from 'framer-motion';
 import { CheckCircle, XCircle, Loader, Clock } from 'lucide-react';
@@ -188,7 +189,15 @@ const WithdrawClaim = ({ claim, onWithdrawSuccess, onClose }) => {
       // Try to get claim details before withdrawing to verify it exists
       let claimDetails = null;
       try {
-        claimDetails = await contract.getClaim(claimNum);
+        claimDetails = await fetchClaimDetails({
+          contract,
+          claimNum: claimNum.toString()
+        });
+        
+        if (!claimDetails) {
+          throw new Error('Claim does not exist');
+        }
+        
         console.log('🔍 Claim details retrieved:', claimDetails);
         console.log('🔍 Claim amount:', claimDetails.amount?.toString());
         console.log('🔍 Claim recipient:', claimDetails.recipient_address);
@@ -298,7 +307,15 @@ const WithdrawClaim = ({ claim, onWithdrawSuccess, onClose }) => {
       
       // Check contract state one more time right before withdraw
       try {
-        const finalClaimCheck = await contract.getClaim(claimNum);
+        const finalClaimCheck = await fetchClaimDetails({
+          contract,
+          claimNum: claimNum.toString()
+        });
+        
+        if (!finalClaimCheck) {
+          throw new Error('Claim does not exist');
+        }
+        
         console.log('🔍 Final contract state check:');
         console.log('  - Contract withdrawn:', finalClaimCheck.withdrawn);
         console.log('  - Contract finished:', finalClaimCheck.finished);

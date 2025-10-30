@@ -11,10 +11,11 @@
 import { ethers } from 'ethers';
 import { getAllEventBlockNumbersUnified } from './unified-block-fetcher.js';
 import { getNetworkWithSettings } from './settings.js';
-import { COUNTERSTAKE_ABI, EXPORT_ABI, IMPORT_ABI } from '../contracts/abi.js';
+import { getBridgeABI, getCounterstakeABI } from './contract-factory.js';
 import { getBlockTimestamp } from './bridge-contracts.js';
 import { wait } from './utils.js';
 import { addTransferEventToStorage, addClaimEventToStorage } from './unified-event-cache.js';
+import { parseClaimEvent } from './event-parser.js';
 
 // Rate limiting configuration
 const RATE_LIMIT_MS = 1000; // 1 second between requests
@@ -171,9 +172,9 @@ async function decodeEventsWithABI(networkKey, bridgeAddress, events, bridgeType
   }
   
     // Create interfaces for different event types
-    const exportInterface = new ethers.utils.Interface(EXPORT_ABI);
-    const importInterface = new ethers.utils.Interface(IMPORT_ABI);
-    const counterstakeInterface = new ethers.utils.Interface(COUNTERSTAKE_ABI);
+    const exportInterface = new ethers.utils.Interface(getBridgeABI('export'));
+    const importInterface = new ethers.utils.Interface(getBridgeABI('import'));
+    const counterstakeInterface = new ethers.utils.Interface(getCounterstakeABI());
 
     // Convert raw logs to ethers format and decode
     const decodedEvents = [];
@@ -264,16 +265,9 @@ async function decodeEventsWithABI(networkKey, bridgeAddress, events, bridgeType
               foreignTokenSymbol: foreignTokenSymbol
             }),
             ...(event.eventType === 'NewClaim' && {
-              claimNum: decoded.args.claim_num,
-              actualClaimNum: decoded.args.claim_num,
-              amount: decoded.args.amount,
-              recipientAddress: decoded.args.recipient_address,
-              senderAddress: decoded.args.sender_address,
-              claimant_address: decoded.args.author_address,
-              reward: decoded.args.reward,
-              data: decoded.args.data,
-              txid: decoded.args.txid,
-              txts: Number(decoded.args.txts),
+              // Use parseClaimEvent utility to normalize fields
+              ...parseClaimEvent(decoded.args),
+              // Add metadata fields
               blockNumber: event.blockNumber,
               claimTransactionHash: event.transactionHash,
               networkName: networkConfig?.name || networkKey,

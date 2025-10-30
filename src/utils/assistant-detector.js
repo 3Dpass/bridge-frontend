@@ -1,9 +1,5 @@
 import { ethers } from 'ethers';
-import { 
-  EXPORT_ABI, 
-  IMPORT_ABI, 
-  IMPORT_WRAPPER_ABI 
-} from '../contracts/abi';
+import { createBridgeContract } from './contract-factory';
 import { autoDetectToken } from './token-detector';
 import { NETWORKS } from '../config/networks';
 import { hasBridgesRegistry, getAssistantInfoFromRegistry } from './update-bridge-info';
@@ -106,7 +102,7 @@ export const detectAssistantType = async (provider, assistantAddress, bridgeAddr
     // Check if it's an EXPORT bridge
     try {
       console.log(`  Checking if bridge is EXPORT type...`);
-      const exportBridge = new ethers.Contract(bridgeAddress, EXPORT_ABI, provider);
+      const exportBridge = createBridgeContract(bridgeAddress, 'export', provider);
       await exportBridge.foreign_network();
       bridgeType = 'export';
       console.log(`  ✅ Bridge is EXPORT type`);
@@ -118,7 +114,7 @@ export const detectAssistantType = async (provider, assistantAddress, bridgeAddr
     if (!bridgeType) {
       try {
         console.log(`  Checking if bridge is IMPORT_WRAPPER type...`);
-        const importWrapperBridge = new ethers.Contract(bridgeAddress, IMPORT_WRAPPER_ABI, provider);
+        const importWrapperBridge = createBridgeContract(bridgeAddress, 'import_wrapper', provider);
         await importWrapperBridge.home_network();
         bridgeType = 'import_wrapper';
         console.log(`  ✅ Bridge is IMPORT_WRAPPER type`);
@@ -131,7 +127,7 @@ export const detectAssistantType = async (provider, assistantAddress, bridgeAddr
     if (!bridgeType) {
       try {
         console.log(`  Checking if bridge is IMPORT type...`);
-        const importBridge = new ethers.Contract(bridgeAddress, IMPORT_ABI, provider);
+        const importBridge = createBridgeContract(bridgeAddress, 'import', provider);
         await importBridge.home_network();
         bridgeType = 'import';
         console.log(`  ✅ Bridge is IMPORT type`);
@@ -208,7 +204,7 @@ export const detectAssistantType = async (provider, assistantAddress, bridgeAddr
  */
 export const getExportBridgeData = async (provider, bridgeAddress) => {
   try {
-    const contract = new ethers.Contract(bridgeAddress, EXPORT_ABI, provider);
+    const contract = createBridgeContract(bridgeAddress, 'export', provider);
     
     const [
       foreignNetwork,
@@ -239,7 +235,7 @@ export const getExportBridgeData = async (provider, bridgeAddress) => {
  */
 export const getImportBridgeData = async (provider, bridgeAddress) => {
   try {
-    const contract = new ethers.Contract(bridgeAddress, IMPORT_ABI, provider);
+    const contract = createBridgeContract(bridgeAddress, 'import', provider);
     
     const [
       homeNetwork,
@@ -270,7 +266,7 @@ export const getImportBridgeData = async (provider, bridgeAddress) => {
  */
 export const getImportWrapperBridgeData = async (provider, bridgeAddress) => {
   try {
-    const contract = new ethers.Contract(bridgeAddress, IMPORT_WRAPPER_ABI, provider);
+    const contract = createBridgeContract(bridgeAddress, 'import_wrapper', provider);
     
     const [
       homeNetwork,

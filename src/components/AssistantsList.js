@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { useSettings } from '../contexts/SettingsContext';
 import { useWeb3 } from '../contexts/Web3Context';
+import { useNetworkSwitcher } from '../hooks/useNetworkSwitcher';
 import { motion } from 'framer-motion';
 import { ethers } from 'ethers';
 import toast from 'react-hot-toast';
@@ -14,6 +15,7 @@ import { IPRECOMPILE_ERC20_ABI } from '../contracts/abi';
 const AssistantsList = () => {
   const { getAssistantContractsWithSettings, getAllNetworksWithSettings, get3DPassTokenDecimalsDisplayMultiplier } = useSettings();
   const { account } = useWeb3();
+  const { getRequiredNetworkForAssistant, checkAndSwitchNetwork } = useNetworkSwitcher();
   const [assistants, setAssistants] = useState([]);
   const [loading, setLoading] = useState(true);
   const [balances, setBalances] = useState({});
@@ -884,249 +886,75 @@ const AssistantsList = () => {
     }
   }, []);
 
-  // Network switching functions
-  const getRequiredNetwork = useCallback((assistant) => {
-    const networksWithSettings = getAllNetworksWithSettings();
-    
-    console.log('🔍 getRequiredNetwork called for assistant:', assistant.address);
-    console.log('🔍 Available networks:', Object.keys(networksWithSettings));
-    
-    for (const networkKey in networksWithSettings) {
-      const networkConfig = networksWithSettings[networkKey];
-      console.log('🔍 Checking network:', networkKey, {
-        hasBridges: !!networkConfig.bridges,
-        bridgeCount: networkConfig.bridges ? Object.keys(networkConfig.bridges).length : 0
-      });
-      
-      if (networkConfig && networkConfig.bridges) {
-        for (const bridgeKey in networkConfig.bridges) {
-          const bridge = networkConfig.bridges[bridgeKey];
-          console.log('🔍 Checking bridge:', {
-            bridgeAddress: bridge.address,
-            assistantBridgeAddress: assistant.bridgeAddress,
-            networkName: networkConfig.name,
-            networkId: networkConfig.id,
-            matches: bridge.address === assistant.bridgeAddress
-          });
-          
-          if (bridge.address === assistant.bridgeAddress) {
-            const result = {
-              ...networkConfig,
-              chainId: networkConfig.id,
-              bridgeAddress: bridge.address,
-              assistantType: assistant.type
-            };
-            console.log('✅ Found required network:', result);
-            return result;
-          }
-        }
-      }
-    }
-    console.log('❌ No required network found for assistant:', assistant.address);
-    return null;
-  }, [getAllNetworksWithSettings]);
-
-  const checkNetwork = useCallback(async () => {
-    try {
-      const currentChainId = await window.ethereum.request({ method: 'eth_chainId' });
-      const currentChainIdNumber = parseInt(currentChainId, 16);
-      console.log('🔍 Current chain ID:', currentChainIdNumber);
-      return currentChainIdNumber;
-    } catch (error) {
-      console.error('Error checking network:', error);
-      return null;
-    }
-  }, []);
-
-  const switchToRequiredNetwork = useCallback(async (requiredNetwork) => {
-    try {
-      console.log('🔄 Switching to network:', requiredNetwork.name, 'Chain ID:', requiredNetwork.chainId);
-      
-      const chainIdHex = `0x${requiredNetwork.chainId.toString(16)}`;
-      
-      try {
-        await window.ethereum.request({
-          method: 'wallet_switchEthereumChain',
-          params: [{ chainId: chainIdHex }],
-        });
-        console.log('✅ Network switched successfully');
-        return true;
-      } catch (switchError) {
-        console.log('⚠️ Network not added, attempting to add it...');
-        
-        if (switchError.code === 4902) {
-          try {
-            await window.ethereum.request({
-              method: 'wallet_addEthereumChain',
-              params: [{
-                chainId: chainIdHex,
-                chainName: requiredNetwork.name,
-                nativeCurrency: requiredNetwork.nativeCurrency,
-                rpcUrls: [requiredNetwork.rpcUrl],
-                blockExplorerUrls: [requiredNetwork.explorer],
-              }],
-            });
-            console.log('✅ Network added and switched successfully');
-            return true;
-          } catch (addError) {
-            console.error('❌ Failed to add network:', addError);
-            return false;
-          }
-        } else {
-          console.error('❌ Failed to switch network:', switchError);
-          return false;
-        }
-      }
-    } catch (error) {
-      console.error('❌ Network switching error:', error);
-      return false;
-    }
-  }, []);
-
   const handleDeposit = useCallback(async (assistant) => {
     console.log('🔘 Deposit button clicked for assistant:', assistant.address);
-    
-    // Check if we need to switch networks first
-    const requiredNetwork = getRequiredNetwork(assistant);
-    if (!requiredNetwork) {
-      toast.error('Could not determine required network for this assistant');
+
+    const requiredNetwork = getRequiredNetworkForAssistant(assistant);
+    const switchSuccess = await checkAndSwitchNetwork(requiredNetwork);
+
+    if (!switchSuccess) {
       return;
     }
-    
-    const currentChainId = await checkNetwork();
-    if (currentChainId !== requiredNetwork.chainId) {
-      console.log('🚨 NETWORK SWITCHING WILL BE TRIGGERED NOW!');
-      console.log('🔄 Wrong network detected, switching automatically...');
-      toast(`Switching to ${requiredNetwork.name} network...`);
-      const switchSuccess = await switchToRequiredNetwork(requiredNetwork);
-      console.log('🔍 Network switch result:', switchSuccess);
-      if (!switchSuccess) {
-        toast.error('Failed to switch to the required network');
-        return;
-      }
-      // Wait a moment for the network to settle
-      await new Promise(resolve => setTimeout(resolve, 1000));
-    }
-    
+
     setSelectedAssistant(assistant);
     setShowDepositDialog(true);
-  }, [getRequiredNetwork, checkNetwork, switchToRequiredNetwork]);
+  }, [getRequiredNetworkForAssistant, checkAndSwitchNetwork]);
 
   const handleWithdraw = useCallback(async (assistant) => {
     console.log('🔘 Withdraw button clicked for assistant:', assistant.address);
-    
-    // Check if we need to switch networks first
-    const requiredNetwork = getRequiredNetwork(assistant);
-    if (!requiredNetwork) {
-      toast.error('Could not determine required network for this assistant');
+
+    const requiredNetwork = getRequiredNetworkForAssistant(assistant);
+    const switchSuccess = await checkAndSwitchNetwork(requiredNetwork);
+
+    if (!switchSuccess) {
       return;
     }
-    
-    const currentChainId = await checkNetwork();
-    if (currentChainId !== requiredNetwork.chainId) {
-      console.log('🚨 NETWORK SWITCHING WILL BE TRIGGERED NOW!');
-      console.log('🔄 Wrong network detected, switching automatically...');
-      toast(`Switching to ${requiredNetwork.name} network...`);
-      const switchSuccess = await switchToRequiredNetwork(requiredNetwork);
-      console.log('🔍 Network switch result:', switchSuccess);
-      if (!switchSuccess) {
-        toast.error('Failed to switch to the required network');
-        return;
-      }
-      // Wait a moment for the network to settle
-      await new Promise(resolve => setTimeout(resolve, 1000));
-    }
-    
+
     setSelectedAssistant(assistant);
     setShowWithdrawDialog(true);
-  }, [getRequiredNetwork, checkNetwork, switchToRequiredNetwork]);
+  }, [getRequiredNetworkForAssistant, checkAndSwitchNetwork]);
 
   const handleWithdrawManagementFee = useCallback(async (assistant) => {
     console.log('🔘 Withdraw Management Fee button clicked for assistant:', assistant.address);
-    
-    // Check if we need to switch networks first
-    const requiredNetwork = getRequiredNetwork(assistant);
-    if (!requiredNetwork) {
-      toast.error('Could not determine required network for this assistant');
+
+    const requiredNetwork = getRequiredNetworkForAssistant(assistant);
+    const switchSuccess = await checkAndSwitchNetwork(requiredNetwork);
+
+    if (!switchSuccess) {
       return;
     }
-    
-    const currentChainId = await checkNetwork();
-    if (currentChainId !== requiredNetwork.chainId) {
-      console.log('🚨 NETWORK SWITCHING WILL BE TRIGGERED NOW!');
-      console.log('🔄 Wrong network detected, switching automatically...');
-      toast(`Switching to ${requiredNetwork.name} network...`);
-      const switchSuccess = await switchToRequiredNetwork(requiredNetwork);
-      console.log('🔍 Network switch result:', switchSuccess);
-      if (!switchSuccess) {
-        toast.error('Failed to switch to the required network');
-        return;
-      }
-      // Wait a moment for the network to settle
-      await new Promise(resolve => setTimeout(resolve, 1000));
-    }
-    
+
     setSelectedAssistant(assistant);
     setShowWithdrawManagementFeeDialog(true);
-  }, [getRequiredNetwork, checkNetwork, switchToRequiredNetwork]);
+  }, [getRequiredNetworkForAssistant, checkAndSwitchNetwork]);
 
   const handleWithdrawSuccessFee = useCallback(async (assistant) => {
     console.log('🔘 Withdraw Success Fee button clicked for assistant:', assistant.address);
-    
-    // Check if we need to switch networks first
-    const requiredNetwork = getRequiredNetwork(assistant);
-    if (!requiredNetwork) {
-      toast.error('Could not determine required network for this assistant');
+
+    const requiredNetwork = getRequiredNetworkForAssistant(assistant);
+    const switchSuccess = await checkAndSwitchNetwork(requiredNetwork);
+
+    if (!switchSuccess) {
       return;
     }
-    
-    const currentChainId = await checkNetwork();
-    if (currentChainId !== requiredNetwork.chainId) {
-      console.log('🚨 NETWORK SWITCHING WILL BE TRIGGERED NOW!');
-      console.log('🔄 Wrong network detected, switching automatically...');
-      toast(`Switching to ${requiredNetwork.name} network...`);
-      const switchSuccess = await switchToRequiredNetwork(requiredNetwork);
-      console.log('🔍 Network switch result:', switchSuccess);
-      if (!switchSuccess) {
-        toast.error('Failed to switch to the required network');
-        return;
-      }
-      // Wait a moment for the network to settle
-      await new Promise(resolve => setTimeout(resolve, 1000));
-    }
-    
+
     setSelectedAssistant(assistant);
     setShowWithdrawSuccessFeeDialog(true);
-  }, [getRequiredNetwork, checkNetwork, switchToRequiredNetwork]);
+  }, [getRequiredNetworkForAssistant, checkAndSwitchNetwork]);
 
   const handleAssignNewManager = useCallback(async (assistant) => {
     console.log('🔘 Assign New Manager button clicked for assistant:', assistant.address);
-    
-    // Check if we need to switch networks first
-    const requiredNetwork = getRequiredNetwork(assistant);
-    if (!requiredNetwork) {
-      toast.error('Could not determine required network for this assistant');
+
+    const requiredNetwork = getRequiredNetworkForAssistant(assistant);
+    const switchSuccess = await checkAndSwitchNetwork(requiredNetwork);
+
+    if (!switchSuccess) {
       return;
     }
-    
-    const currentChainId = await checkNetwork();
-    if (currentChainId !== requiredNetwork.chainId) {
-      console.log('🚨 NETWORK SWITCHING WILL BE TRIGGERED NOW!');
-      console.log('🔄 Wrong network detected, switching automatically...');
-      toast(`Switching to ${requiredNetwork.name} network...`);
-      const switchSuccess = await switchToRequiredNetwork(requiredNetwork);
-      console.log('🔍 Network switch result:', switchSuccess);
-      if (!switchSuccess) {
-        toast.error('Failed to switch to the required network');
-        return;
-      }
-      // Wait a moment for the network to settle
-      await new Promise(resolve => setTimeout(resolve, 1000));
-    }
-    
+
     setSelectedAssistant(assistant);
     setShowAssignNewManagerDialog(true);
-  }, [getRequiredNetwork, checkNetwork, switchToRequiredNetwork]);
+  }, [getRequiredNetworkForAssistant, checkAndSwitchNetwork]);
 
   const handleCloseDialogs = useCallback(() => {
     setShowDepositDialog(false);

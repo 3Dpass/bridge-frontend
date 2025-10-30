@@ -3,7 +3,8 @@ import { useWeb3 } from '../contexts/Web3Context';
 import { useSettings } from '../contexts/SettingsContext';
 import { getNetworkWithSettings } from '../utils/settings';
 import { NETWORKS } from '../config/networks';
-import { ASSISTANT_FACTORY_ABI, EXPORT_ASSISTANT_ABI, IMPORT_ASSISTANT_ABI, IMPORT_WRAPPER_ASSISTANT_ABI, EXPORT_WRAPPER_ASSISTANT_ABI, IP3D_ABI, IPRECOMPILE_ERC20_ABI } from '../contracts/abi';
+import { createAssistantFactoryContract } from '../utils/contract-factory';
+import { EXPORT_ASSISTANT_ABI, IMPORT_ASSISTANT_ABI, IMPORT_WRAPPER_ASSISTANT_ABI, EXPORT_WRAPPER_ASSISTANT_ABI, IP3D_ABI, IPRECOMPILE_ERC20_ABI } from '../contracts/abi';
 import { getProvider } from '../utils/provider-manager';
 import { 
   Plus, 
@@ -15,6 +16,7 @@ import {
 import { motion, AnimatePresence } from 'framer-motion';
 import toast from 'react-hot-toast';
 import { ethers } from 'ethers';
+import { handleTransactionError } from '../utils/error-handler';
 
 const CreateNewAssistant = ({ networkKey, onClose, onAssistantCreated }) => {
   const { signer, account } = useWeb3();
@@ -273,7 +275,8 @@ const CreateNewAssistant = ({ networkKey, onClose, onAssistantCreated }) => {
 
     setIsCreating(true);
     try {
-      const factoryContract = new ethers.Contract(factoryAddress, ASSISTANT_FACTORY_ABI, signer);
+      // Use the centralized factory contract creation
+      const factoryContract = createAssistantFactoryContract(factoryAddress, signer);
       const bridgeDetails = getSelectedBridgeDetails();
       
       let tx;
@@ -358,25 +361,9 @@ const CreateNewAssistant = ({ networkKey, onClose, onAssistantCreated }) => {
       }
       
     } catch (error) {
-      console.error('Error creating assistant:', error);
-      
-      // Handle different types of errors gracefully
-      if (error.code === 'ACTION_REJECTED' || error.message?.includes('user rejected')) {
-        toast.error('Transaction was cancelled by user');
-      } else if (error.code === 'INSUFFICIENT_FUNDS') {
-        toast.error('Insufficient funds to pay for gas fees');
-      } else if (error.code === 'UNPREDICTABLE_GAS_LIMIT') {
-        toast.error('Gas estimation failed. Please try again or increase gas limit');
-      } else if (error.message?.includes('execution reverted')) {
-        // Extract revert reason if available
-        const revertReason = error.message.match(/execution reverted: (.+)/)?.[1] || 'Transaction failed';
-        toast.error(`Transaction failed: ${revertReason}`);
-      } else if (error.message?.includes('network')) {
-        toast.error('Network error. Please check your connection and try again');
-      } else {
-        // Generic error message for other cases
-        toast.error(`Failed to create assistant: ${error.message || 'Unknown error'}`);
-      }
+      handleTransactionError(error, {
+        messagePrefix: 'Failed to create assistant: '
+      });
     } finally {
       setIsCreating(false);
     }
@@ -451,25 +438,9 @@ const CreateNewAssistant = ({ networkKey, onClose, onAssistantCreated }) => {
       toast.success('Precompile approved successfully');
       
     } catch (error) {
-      console.error('Error approving precompile:', error);
-      
-      // Handle different types of errors gracefully
-      if (error.code === 'ACTION_REJECTED' || error.message?.includes('user rejected')) {
-        toast.error('Approval transaction was cancelled by user');
-      } else if (error.code === 'INSUFFICIENT_FUNDS') {
-        toast.error('Insufficient funds to pay for gas fees');
-      } else if (error.code === 'UNPREDICTABLE_GAS_LIMIT') {
-        toast.error('Gas estimation failed. Please try again or increase gas limit');
-      } else if (error.message?.includes('execution reverted')) {
-        // Extract revert reason if available
-        const revertReason = error.message.match(/execution reverted: (.+)/)?.[1] || 'Transaction failed';
-        toast.error(`Approval failed: ${revertReason}`);
-      } else if (error.message?.includes('network')) {
-        toast.error('Network error. Please check your connection and try again');
-      } else {
-        // Generic error message for other cases
-        toast.error(`Failed to approve precompile: ${error.message || 'Unknown error'}`);
-      }
+      handleTransactionError(error, {
+        messagePrefix: 'Failed to approve precompile: '
+      });
     } finally {
       setIsApproving(false);
     }

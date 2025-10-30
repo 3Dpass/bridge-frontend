@@ -1,10 +1,11 @@
 import { ethers } from 'ethers';
-import { 
-  EXPORT_ABI, 
-  IMPORT_ABI, 
-  IMPORT_WRAPPER_ABI,
-  ORACLE_ABI
+import {
+  ORACLE_ABI,
+  EXPORT_ABI,
+  IMPORT_ABI,
+  IMPORT_WRAPPER_ABI
 } from '../contracts/abi';
+import { createBridgeContract } from './contract-factory';
 import { autoDetectToken } from './token-detector';
 import { NETWORKS, ADDRESS_ZERO } from '../config/networks';
 import { getProvider } from './provider-manager';
@@ -39,7 +40,7 @@ export const detectBridgeType = async (provider, bridgeAddress) => {
     // Try EXPORT first (most distinct)
     try {
       console.log(`  Trying EXPORT...`);
-      const exportContract = new ethers.Contract(bridgeAddress, EXPORT_ABI, provider);
+      const exportContract = createBridgeContract(bridgeAddress, 'export', provider);
       await exportContract.foreign_network();
       console.log(`  ✅ EXPORT detected!`);
       return BRIDGE_TYPES.EXPORT;
@@ -52,7 +53,7 @@ export const detectBridgeType = async (provider, bridgeAddress) => {
     let homeNetwork;
     try {
       console.log(`  Checking if it's an import-type bridge...`);
-      const importContract = new ethers.Contract(bridgeAddress, IMPORT_ABI, provider);
+      const importContract = createBridgeContract(bridgeAddress, 'import', provider);
       homeNetwork = await importContract.home_network();
       console.log(`  ✅ Confirmed import-type bridge with home_network: ${homeNetwork}`);
     } catch (error) {
@@ -64,7 +65,7 @@ export const detectBridgeType = async (provider, bridgeAddress) => {
     // Try IMPORT_WRAPPER-specific functions with better error handling
     try {
       console.log(`  Trying IMPORT_WRAPPER-specific functions...`);
-      const importWrapperContract = new ethers.Contract(bridgeAddress, IMPORT_WRAPPER_ABI, provider);
+      const importWrapperContract = createBridgeContract(bridgeAddress, 'import_wrapper', provider);
       
       // Try precompileAddress() first (most reliable)
       try {

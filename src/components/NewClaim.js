@@ -8,6 +8,8 @@ import {
   getTokenSymbolFromPrecompile
 } from '../utils/threedpass';
 import { getBlockTimestamp } from '../utils/bridge-contracts';
+import { fetchClaimDetails } from '../utils/claim-details-fetcher.js';
+import { normalizeAmount } from '../utils/data-normalizer.js';
 import { addClaimEventToStorage, createClaimEventData } from '../utils/unified-event-cache';
 import { 
   EXPORT_ABI,
@@ -2487,7 +2489,15 @@ const NewClaim = ({ isOpen, onClose, selectedToken = null, selectedTransfer = nu
         // Check if any ongoing claim matches our parameters
         for (const claimNum of ongoingClaims) {
           try {
-            const claim = await bridgeContract['getClaim(uint256)'](claimNum);
+            const claim = await fetchClaimDetails({
+              contract: bridgeContract,
+              claimNum: claimNum.toString()
+            });
+            
+            if (!claim) {
+              continue; // Skip if claim doesn't exist
+            }
+            
             console.log(`🔍 Claim ${claimNum}:`, {
               txid: claim.txid,
               sender_address: claim.sender_address,
@@ -2800,17 +2810,13 @@ const NewClaim = ({ isOpen, onClose, selectedToken = null, selectedTransfer = nu
         console.log('🔍 Fetching complete claim details from contract...');
         let claimDetails = null;
         try {
-          // Use the same method as the normal flow - direct contract call
-          const encodedData = bridgeContract.interface.encodeFunctionData('getClaim(uint256)', [claimNum]);
-          const result = await signer.provider.call({
-            to: bridgeContract.address,
-            data: encodedData
+          // Use centralized fetcher
+          claimDetails = await fetchClaimDetails({
+            contract: bridgeContract,
+            claimNum: claimNum.toString()
           });
           
-          // Decode the result
-          const decodedResult = bridgeContract.interface.decodeFunctionResult('getClaim(uint256)', result);
-          if (decodedResult && decodedResult.length > 0) {
-            claimDetails = decodedResult[0];
+          if (claimDetails) {
             console.log('🔍 Successfully fetched claim details from contract:', claimDetails);
             console.log('🔍 Claim details fields:', {
               claimant_address: claimDetails.claimant_address,
@@ -2856,15 +2862,15 @@ const NewClaim = ({ isOpen, onClose, selectedToken = null, selectedTransfer = nu
         // Add claim details from contract if available
         if (claimDetails) {
           eventData.current_outcome = claimDetails.current_outcome;
-          eventData.yes_stake = claimDetails.yes_stake;
-          eventData.no_stake = claimDetails.no_stake;
+          eventData.yes_stake = normalizeAmount(claimDetails.yes_stake);
+          eventData.no_stake = normalizeAmount(claimDetails.no_stake);
           eventData.finished = claimDetails.finished;
           eventData.withdrawn = claimDetails.withdrawn;
           eventData.claimant_address = claimDetails.claimant_address;
           eventData.period_number = claimDetails.period_number;
           eventData.currentOutcome = claimDetails.current_outcome;
-          eventData.yesStake = claimDetails.yes_stake;
-          eventData.noStake = claimDetails.no_stake;
+          eventData.yesStake = normalizeAmount(claimDetails.yes_stake);
+          eventData.noStake = normalizeAmount(claimDetails.no_stake);
         } else {
           // Default values if claim details fetch failed
           eventData.current_outcome = null;

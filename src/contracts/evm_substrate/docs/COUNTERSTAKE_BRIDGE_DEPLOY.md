@@ -82,7 +82,7 @@ Example:
 brew install node
 
 # Install pnpm
-npm install -g pnpm
+pnpm setup
 
 # Install Rust
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
@@ -1063,7 +1063,7 @@ exports.production_oracle_prices = {
 ### Monitoring Setup
 ```bash
 # Set up monitoring
-npm install -g pm2
+pnpm add -g pm2
 pm2 start ecosystem.config.js
 pm2 startup
 pm2 save

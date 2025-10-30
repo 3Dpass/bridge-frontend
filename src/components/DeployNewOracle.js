@@ -11,6 +11,7 @@ import {
 import { motion, AnimatePresence } from 'framer-motion';
 import toast from 'react-hot-toast';
 import { ethers } from 'ethers';
+import { handleTransactionError } from '../utils/error-handler';
 
 // Oracle contract ABI (complete ABI for deployment and interaction)
 const ORACLE_ABI = [
@@ -232,55 +233,10 @@ const DeployNewOracle = ({ networkKey, onClose, onOracleCreated }) => {
       }
       
     } catch (error) {
-      console.error('Error deploying oracle:', error);
-      
-      // Dismiss any loading toasts first
       toast.dismiss();
-      
-      // Handle different types of errors gracefully
-      if (error.code === 4001 || 
-          error.code === 'ACTION_REJECTED' || 
-          error.message?.includes('User denied transaction') ||
-          error.message?.includes('user rejected transaction') ||
-          error.message?.includes('User rejected')) {
-        // User cancelled the transaction in MetaMask
-        toast.error('Transaction cancelled by user');
-      } else if (error.code === -32603 || 
-                 error.message?.includes('insufficient funds') ||
-                 error.message?.includes('insufficient balance')) {
-        // Insufficient funds
-        toast.error('Insufficient funds for transaction. Please check your wallet balance.');
-      } else if (error.message?.includes('gas') || 
-                 error.message?.includes('Gas') ||
-                 error.code === -32000) {
-        // Gas related errors
-        toast.error('Transaction failed due to gas issues. Please try again or increase gas limit.');
-      } else if (error.message?.includes('revert') || 
-                 error.message?.includes('execution reverted')) {
-        // Contract revert
-        toast.error('Transaction failed. Please check your inputs and try again.');
-      } else if (error.message?.includes('network') || 
-                 error.message?.includes('Network')) {
-        // Network related errors
-        toast.error('Network error. Please check your connection and try again.');
-      } else if (error.message?.includes('timeout') || 
-                 error.message?.includes('Timeout')) {
-        // Timeout errors
-        toast.error('Transaction timed out. Please try again.');
-      } else if (error.message?.includes('nonce')) {
-        // Nonce errors
-        toast.error('Transaction nonce error. Please try again.');
-      } else {
-        // Generic error - show a more user-friendly message
-        const errorMessage = error.message || 'Unknown error occurred';
-        console.error('Unhandled error details:', {
-          code: error.code,
-          message: error.message,
-          reason: error.reason,
-          action: error.action
-        });
-        toast.error(`Failed to deploy oracle: ${errorMessage}`);
-      }
+      handleTransactionError(error, {
+        messagePrefix: 'Failed to deploy oracle: '
+      });
     } finally {
       setIsDeploying(false);
     }

@@ -5,6 +5,8 @@
  * as the parallel discovery system. This ensures consistency across all data sources.
  */
 
+import { normalizeAmount } from './data-normalizer.js';
+
 // Storage keys matching ClaimList.js pattern
 const STORAGE_KEYS = {
   CLAIMS: 'bridge_claims_cache',
@@ -261,8 +263,8 @@ export const createTransferEventData = (params) => {
     // UI fields
     senderAddress,
     recipientAddress,
-    amount: amount?.toString(),
-    reward: reward?.toString(),
+    amount: normalizeAmount(amount),
+    reward: normalizeAmount(reward),
     
     // Extract txid based on event type
     txid: transactionHash, // For transfers, txid is the transaction hash
@@ -358,8 +360,8 @@ export const createClaimEventData = (params) => {
     senderAddress,
     recipientAddress,
     claimant_address: authorAddress,
-    amount: amount?.toString(),
-    reward: reward?.toString(),
+    amount: normalizeAmount(amount),
+    reward: normalizeAmount(reward),
     txid,
     txts: Number(txts),
     expiryTs,

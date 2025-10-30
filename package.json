@@ -3,6 +3,7 @@
   "version": "1.0.0",
   "description": "Web3 frontend for Counterstake Bridge - Cross-chain transfers between ETH, BSC, and 3DPass",
   "private": true,
+  "packageManager": "pnpm@9.0.0",
   "dependencies": {
     "@openzeppelin/contracts": "4.8.3",
     "@polkadot/api": "^16.4.9",
@@ -36,12 +37,6 @@
     "dev": "react-scripts start",
     "lint": "eslint src --ext .js,.jsx,.ts,.tsx",
     "lint:fix": "eslint src --ext .js,.jsx,.ts,.tsx --fix"
-  },
-  "eslintConfig": {
-    "extends": [
-      "react-app",
-      "react-app/jest"
-    ]
   },
   "browserslist": {
     "production": [

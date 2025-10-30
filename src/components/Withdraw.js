@@ -3,6 +3,7 @@ import { useWeb3 } from '../contexts/Web3Context';
 import { useSettings } from '../contexts/SettingsContext';
 import { ethers } from 'ethers';
 import toast from 'react-hot-toast';
+import { handleTransactionError } from '../utils/error-handler';
 import { 
   EXPORT_ASSISTANT_ABI, 
   EXPORT_WRAPPER_ASSISTANT_ABI, 
@@ -811,45 +812,9 @@ const Withdraw = ({ assistant, onClose, onSuccess }) => {
         onSuccess();
       }
     } catch (error) {
-      console.error('Withdraw error:', error);
-      console.error('Error details:', {
-        code: error.code,
-        message: error.message,
-        reason: error.reason,
-        data: error.data,
-        stack: error.stack
+      handleTransactionError(error, {
+        messagePrefix: 'Failed to withdraw: '
       });
-      
-      // Handle different types of errors gracefully
-      if (error.code === 'ACTION_REJECTED' || error.message?.includes('User denied')) {
-        toast.error('Transaction was cancelled by user');
-      } else if (error.code === 'INSUFFICIENT_FUNDS') {
-        toast.error('Insufficient funds for transaction');
-      } else if (error.code === -32603) {
-        // Internal JSON-RPC error - usually indicates a contract revert
-        console.error('❌ Internal JSON-RPC error detected. This usually means the contract call reverted.');
-        if (error.message?.includes('Internal JSON-RPC error')) {
-          toast.error('Transaction failed. The contract may have reverted. Check console for details.');
-        } else {
-          toast.error('Internal RPC error. Please try again or check your inputs.');
-        }
-      } else if (error.message?.includes('gas')) {
-        toast.error('Transaction failed due to gas issues. Please try again.');
-      } else if (error.message?.includes('revert')) {
-        toast.error('Transaction failed. Please check your inputs and try again.');
-      } else if (error.message?.includes('network')) {
-        toast.error('Network error. Please check your connection and try again.');
-      } else if (error.message?.includes('execution reverted')) {
-        toast.error('Transaction reverted. Please check your inputs and try again.');
-      } else if (error.message?.includes('nonce')) {
-        toast.error('Transaction nonce error. Please try again.');
-      } else if (error.message?.includes('timeout')) {
-        toast.error('Transaction timeout. Please try again.');
-      } else {
-        // Extract meaningful error message if available
-        const errorMessage = error.reason || error.message || 'Withdraw failed';
-        toast.error(errorMessage);
-      }
     } finally {
       setLoading(false);
       setIsProcessing(false);

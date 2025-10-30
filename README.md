@@ -30,7 +30,7 @@ A modern React.js Web3 frontend for the Counterstake Bridge, enabling cross-chai
 
 ## Prerequisites
 
-- Node.js 16+ and pnpm/npm/yarn
+- Node.js 16+ and pnpm
 - MetaMask browser extension
 - Access to supported networks in MetaMask
 
@@ -44,14 +44,7 @@ A modern React.js Web3 frontend for the Counterstake Bridge, enabling cross-chai
 
 2. **Install dependencies**
    ```bash
-   # Using pnpm (recommended)
    pnpm install
-   
-   # Or using npm
-   npm install
-   
-   # Or using yarn
-   yarn install
    ```
 
 3. **Configure networks** (Optional)
@@ -59,16 +52,9 @@ A modern React.js Web3 frontend for the Counterstake Bridge, enabling cross-chai
 
 4. **Start the development server**
    ```bash
-   # Using pnpm
    pnpm dev
    # or
    pnpm start
-   
-   # Or using npm
-   npm start
-   
-   # Or using yarn
-   yarn start
    ```
 
 5. **Open your browser**

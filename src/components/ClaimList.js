@@ -2,16 +2,15 @@ import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { ethers } from 'ethers';
 import { useWeb3 } from '../contexts/Web3Context';
 import { useSettings } from '../contexts/SettingsContext';
+import { useNetworkSwitcher } from '../hooks/useNetworkSwitcher';
 import { NETWORKS, getBridgeDirections, getBridgeAddressesForDirection, getNetworksForDirection } from '../config/networks';
 import { discoverAllBridgeEvents } from '../utils/parallel-bridge-discovery';
 import { aggregateClaimsAndTransfers } from '../utils/aggregate-claims-transfers';
+import { convertActualToDisplay } from '../utils/decimal-converter';
+import { normalizeAmount } from '../utils/data-normalizer';
+import { fetchClaimDetails } from '../utils/claim-details-fetcher.js';
+import { getBridgeABI, getCounterstakeABI, createContract } from '../utils/contract-factory.js';
 import { clearAllCachedEvents, getCachedTransfers, getCachedClaims, getCachedAggregated, getCachedSettings, getCacheTimestamp, setCachedData, STORAGE_KEYS } from '../utils/unified-event-cache';
-import { 
-  COUNTERSTAKE_ABI,
-  EXPORT_ABI,
-  IMPORT_ABI,
-  IMPORT_WRAPPER_ABI
-} from '../contracts/abi';
 import {
   Clock, 
   CheckCircle, 
@@ -184,6 +183,11 @@ const getFieldMatchStatus = (claim, field) => {
 const ClaimList = ({ activeTab }) => {
   const { account, network, getNetworkWithSettings } = useWeb3();
   const { getBridgeInstancesWithSettings, getTokenDecimalsDisplayMultiplier, getAllNetworksWithSettings } = useSettings();
+  const {
+    getRequiredNetworkForTransfer,
+    getRequiredNetworkForClaim,
+    checkAndSwitchNetwork
+  } = useNetworkSwitcher();
   const [claims, setClaims] = useState([]);
   const [aggregatedData, setAggregatedData] = useState(null);
   const [loading, setLoading] = useState(false);
@@ -247,91 +251,14 @@ const ClaimList = ({ activeTab }) => {
   const bulkRunningRef = useRef(false);
   // Cache stats removed from UI - cache still works internally for performance
 
-  // Network switching functions
-  const getRequiredNetwork = useCallback((transfer) => {
-    // For transfers, we need to determine which network the claim should be created on
-    // Import transfers (NewRepatriation) create claims on the foreign network (Ethereum)
-    // Export transfers (NewExpatriation) create claims on the home network (3DPass)
-    
-    console.log('🔍 getRequiredNetwork called with transfer:', {
-      eventType: transfer.eventType,
-      fromNetwork: transfer.fromNetwork,
-      toNetwork: transfer.toNetwork,
-      fullTransfer: transfer
-    });
-    
-    console.log('🔍 Available networks:', Object.values(NETWORKS).map(n => ({
-      name: n.name,
-      id: n.id,
-      symbol: n.symbol
-    })));
-    
-    if (transfer.eventType === 'NewRepatriation') {
-      // Import transfer: claim should be created on foreign network (Ethereum)
-      const network = Object.values(NETWORKS).find(network => 
-        network.name === transfer.toNetwork
-      );
-      console.log('🔍 NewRepatriation - looking for network:', transfer.toNetwork, 'found:', network?.name);
-      return network;
-    } else if (transfer.eventType === 'NewExpatriation') {
-      // Export transfer: claim should be created on destination network (3DPass)
-      const network = Object.values(NETWORKS).find(network => 
-        network.name === transfer.toNetwork
-      );
-      console.log('🔍 NewExpatriation - looking for network:', transfer.toNetwork, 'found:', network?.name);
-      return network;
-    }
-    
-    console.log('🔍 No matching event type found');
-    return null;
-  }, []);
-
-  const getRequiredNetworkForClaim = useCallback((claim) => {
-    // For claims, we need to determine which network the claim exists on
-    // This is the network where the bridge contract is deployed
-    
-    console.log('🔍 getRequiredNetworkForClaim called with claim:', {
-      bridgeAddress: claim.bridgeAddress,
-      networkName: claim.networkName,
-      bridgeType: claim.bridgeType
-    });
-    
-    // Find the network that contains this bridge address
-    const networksWithSettings = getNetworkWithSettings ? Object.values(NETWORKS) : [];
-    
-    for (const networkConfig of networksWithSettings) {
-      if (networkConfig && networkConfig.bridges) {
-        for (const bridgeKey in networkConfig.bridges) {
-          const bridge = networkConfig.bridges[bridgeKey];
-          if (bridge.address === claim.bridgeAddress) {
-            const result = {
-              ...networkConfig,
-              chainId: networkConfig.id,
-              bridgeAddress: bridge.address
-            };
-            console.log('✅ Found required network for claim:', result);
-            return result;
-          }
-        }
-      }
-    }
-    
-    console.log('❌ No required network found for claim:', claim.bridgeAddress);
-    return null;
-  }, [getNetworkWithSettings]);
-
   // Helper function to get the correct ABI based on bridge type
-  const getBridgeABI = useCallback((bridgeType) => {
-    switch (bridgeType) {
-      case 'export':
-        return EXPORT_ABI;
-      case 'import':
-        return IMPORT_ABI;
-      case 'import_wrapper':
-        return IMPORT_WRAPPER_ABI;
-      default:
-        console.warn(`Unknown bridge type: ${bridgeType}, using COUNTERSTAKE_ABI as fallback`);
-        return COUNTERSTAKE_ABI;
+  // Wrapper for getBridgeABI with COUNTERSTAKE_ABI fallback
+  const getBridgeABIWithFallback = useCallback((bridgeType) => {
+    try {
+      return getBridgeABI(bridgeType);
+    } catch (error) {
+      console.warn(`Unknown bridge type: ${bridgeType}, using COUNTERSTAKE_ABI as fallback`);
+      return getCounterstakeABI();
     }
   }, []);
 
@@ -347,8 +274,8 @@ const ClaimList = ({ activeTab }) => {
           const networkConfig = getNetworkWithSettings(bridge.homeNetwork);
           if (networkConfig?.rpcUrl) {
             const provider = new ethers.providers.JsonRpcProvider(networkConfig.rpcUrl);
-            const bridgeABI = getBridgeABI(bridge.type);
-            const bridgeContract = new ethers.Contract(bridge.address, bridgeABI, provider);
+            const bridgeABI = getBridgeABIWithFallback(bridge.type);
+            const bridgeContract = createContract(bridge.address, bridgeABI, provider);
             
             const settings = await bridgeContract.settings();
             settingsMap[bridge.address] = {
@@ -375,7 +302,7 @@ const ClaimList = ({ activeTab }) => {
     } catch (error) {
       console.error('❌ Error loading contract settings:', error);
     }
-  }, [getBridgeInstancesWithSettings, getNetworkWithSettings, getBridgeABI]);
+  }, [getBridgeInstancesWithSettings, getNetworkWithSettings, getBridgeABIWithFallback]);
 
   // Check if a transfer is ready to be claimed based on min_tx_age
   const isTransferReadyToClaim = useCallback((transfer) => {
@@ -433,115 +360,20 @@ const ClaimList = ({ activeTab }) => {
     }
   }, [contractSettings, currentBlock]);
 
-  const checkNetwork = useCallback(async () => {
-    try {
-      const currentChainId = await window.ethereum.request({ method: 'eth_chainId' });
-      const currentChainIdNumber = parseInt(currentChainId, 16);
-      console.log('🔍 Current chain ID:', currentChainIdNumber);
-      return currentChainIdNumber;
-    } catch (error) {
-      console.error('Error checking network:', error);
-      return null;
-    }
-  }, []);
-
-  const switchToRequiredNetwork = useCallback(async (requiredNetwork) => {
-    try {
-      console.log('🔄 switchToRequiredNetwork called with:', requiredNetwork);
-      console.log('🔄 Switching to network:', requiredNetwork.name, 'Chain ID:', requiredNetwork.chainId || requiredNetwork.id);
-      
-      // Check if wallet is available
-      if (!window.ethereum) {
-        console.error('❌ No wallet detected');
-        return false;
-      }
-      
-      // Use chainId if available, otherwise use id
-      const chainId = requiredNetwork.chainId || requiredNetwork.id;
-      if (!chainId) {
-        console.error('❌ No chain ID found in network configuration');
-        return false;
-      }
-      
-      const chainIdHex = `0x${chainId.toString(16)}`;
-      console.log('🔄 Chain ID hex:', chainIdHex);
-      
-      try {
-        console.log('🔄 Attempting to switch to existing network...');
-        const result = await window.ethereum.request({
-          method: 'wallet_switchEthereumChain',
-          params: [{ chainId: chainIdHex }],
-        });
-        console.log('🔄 Switch request result:', result);
-        console.log('✅ Network switched successfully');
-        return true;
-      } catch (switchError) {
-        console.log('⚠️ Network switch failed:', switchError);
-        console.log('⚠️ Error code:', switchError.code);
-        console.log('⚠️ Error message:', switchError.message);
-        console.log('⚠️ Network not added, attempting to add it...');
-        
-        if (switchError.code === 4902) {
-          try {
-            console.log('🔄 Adding new network...');
-            const addResult = await window.ethereum.request({
-              method: 'wallet_addEthereumChain',
-              params: [{
-                chainId: chainIdHex,
-                chainName: requiredNetwork.name,
-                nativeCurrency: requiredNetwork.nativeCurrency,
-                rpcUrls: [requiredNetwork.rpcUrl],
-                blockExplorerUrls: [requiredNetwork.explorer],
-              }],
-            });
-            console.log('🔄 Add network result:', addResult);
-            console.log('✅ Network added and switched successfully');
-            return true;
-          } catch (addError) {
-            console.error('❌ Failed to add network:', addError);
-            console.error('❌ Add error code:', addError.code);
-            console.error('❌ Add error message:', addError.message);
-            return false;
-          }
-        } else {
-          console.error('❌ Failed to switch network:', switchError);
-          return false;
-        }
-      }
-    } catch (error) {
-      console.error('❌ Network switching error:', error);
-      return false;
-    }
-  }, []);
-
   const handleChallenge = useCallback(async (claim) => {
     console.log('🔘 Challenge button clicked for claim:', getClaimNumber(claim));
     
     // Check if we need to switch networks first
     const requiredNetwork = getRequiredNetworkForClaim(claim);
-    if (!requiredNetwork) {
-      toast.error('Could not determine required network for this claim');
+    const switchSuccess = await checkAndSwitchNetwork(requiredNetwork);
+
+    if (!switchSuccess) {
       return;
     }
-    
-    const currentChainId = await checkNetwork();
-    if (currentChainId !== requiredNetwork.chainId) {
-      console.log('🚨 NETWORK SWITCHING WILL BE TRIGGERED NOW!');
-      console.log('🔄 Wrong network detected, switching automatically...');
-      toast(`Switching to ${requiredNetwork.name} network...`);
-      const switchSuccess = await switchToRequiredNetwork(requiredNetwork);
-      console.log('🔍 Network switch result:', switchSuccess);
-      if (!switchSuccess) {
-        toast.error('Failed to switch to the required network');
-        return;
-      }
-      // Wait a moment for the network to settle
-      await new Promise(resolve => setTimeout(resolve, 1000));
-    }
-    
+
     setSelectedClaim(claim);
     setShowChallengeModal(true);
-  }, [getRequiredNetworkForClaim, checkNetwork, switchToRequiredNetwork]);
+  }, [getRequiredNetworkForClaim, checkAndSwitchNetwork]);
 
 
 
@@ -551,32 +383,9 @@ const ClaimList = ({ activeTab }) => {
     try {
       
       const ethers = require('ethers');
-      let amountString;
       
-      // Handle BigNumber objects (including deserialized ones from cache)
-      if (typeof amount?.toNumber === 'function') {
-        amountString = amount.toString();
-      } else if (typeof amount === 'string') {
-        amountString = amount;
-      } else if (typeof amount === 'number') {
-        amountString = amount.toString();
-      } else if (typeof amount === 'object' && amount !== null) {
-        // Handle deserialized BigNumber objects from cache
-        // They might have properties like _hex, _isBigNumber, or be plain objects with hex values
-        if (amount._hex) {
-          amountString = amount._hex;
-        } else if (amount.hex) {
-          amountString = amount.hex;
-        } else if (amount.toString && typeof amount.toString === 'function') {
-          amountString = amount.toString();
-        } else {
-          return '0.000000';
-        }
-      } else if (!amount) {
-        return '0.000000';
-      } else {
-        return '0.000000';
-      }
+      // Use normalizeAmount utility to handle BigNumber objects, strings, numbers, and deserialized objects
+      const amountString = normalizeAmount(amount);
       
       // Check if the amount string is actually zero
       if (amountString === '0' || amountString === '0x0') {
@@ -585,17 +394,15 @@ const ClaimList = ({ activeTab }) => {
       
       const rawValue = parseFloat(ethers.utils.formatUnits(amountString, decimals));
       
-      // Check if this is a P3D token and apply decimalsDisplayMultiplier
-      if (tokenAddress) {
-        const decimalsDisplayMultiplier = getTokenDecimalsDisplayMultiplier(tokenAddress);
-        if (decimalsDisplayMultiplier) {
-          // Apply the multiplier: 0.000001 * 1000000 = 1.0
-          const multipliedNumber = rawValue * decimalsDisplayMultiplier;
-          return multipliedNumber.toFixed(6).replace(/\.?0+$/, '') || '0';
-        }
+      // Use convertActualToDisplay utility for multiplier handling
+      const displayValue = convertActualToDisplay(rawValue.toString(), decimals, tokenAddress, getTokenDecimalsDisplayMultiplier);
+      
+      // If multiplier was applied, return the formatted result
+      if (tokenAddress && getTokenDecimalsDisplayMultiplier(tokenAddress)) {
+        return displayValue;
       }
       
-      // Determine appropriate decimal places dynamically based on the value
+      // Otherwise, apply dynamic decimal formatting based on value magnitude
       let decimalPlaces;
       
       if (rawValue === 0) {
@@ -824,8 +631,8 @@ const ClaimList = ({ activeTab }) => {
 
       // Create provider and contract instance
       const provider = new ethers.providers.JsonRpcProvider(networkConfig.rpcUrl);
-      const bridgeABI = getBridgeABI(claim.bridgeType);
-      const contract = new ethers.Contract(claim.bridgeAddress, bridgeABI, provider);
+      const bridgeABI = getBridgeABIWithFallback(claim.bridgeType);
+      const contract = createContract(claim.bridgeAddress, bridgeABI, provider);
 
       // Get the current outcome (0 = NO, 1 = YES)
       const currentOutcome = claim.currentOutcome;
@@ -845,7 +652,7 @@ const ClaimList = ({ activeTab }) => {
       console.error('🔍 Error checking user stakes:', error);
       return false;
     }
-  }, [getNetworkWithSettings, getBridgeABI]);
+  }, [getNetworkWithSettings, getBridgeABIWithFallback]);
 
   // Function to load stake information for all claims
   const loadStakeInformation = useCallback(async (claims) => {
@@ -1021,29 +828,15 @@ const ClaimList = ({ activeTab }) => {
     
     // Check if we need to switch networks first
     const requiredNetwork = getRequiredNetworkForClaim(claim);
-    if (!requiredNetwork) {
-      toast.error('Could not determine required network for this claim');
+    const switchSuccess = await checkAndSwitchNetwork(requiredNetwork);
+
+    if (!switchSuccess) {
       return;
     }
-    
-    const currentChainId = await checkNetwork();
-    if (currentChainId !== requiredNetwork.chainId) {
-      console.log('🚨 NETWORK SWITCHING WILL BE TRIGGERED NOW!');
-      console.log('🔄 Wrong network detected, switching automatically...');
-      toast(`Switching to ${requiredNetwork.name} network...`);
-      const switchSuccess = await switchToRequiredNetwork(requiredNetwork);
-      console.log('🔍 Network switch result:', switchSuccess);
-      if (!switchSuccess) {
-        toast.error('Failed to switch to the required network');
-        return;
-      }
-      // Wait a moment for the network to settle
-      await new Promise(resolve => setTimeout(resolve, 1000));
-    }
-    
+
     setSelectedClaim(prepareClaimForWithdraw(claim));
     setShowWithdrawModal(true);
-  }, [getRequiredNetworkForClaim, checkNetwork, switchToRequiredNetwork, prepareClaimForWithdraw]);
+  }, [getRequiredNetworkForClaim, checkAndSwitchNetwork, prepareClaimForWithdraw]);
 
   // Load cached data from browser storage
   const loadCachedData = useCallback(async () => {
@@ -1579,24 +1372,22 @@ const ClaimList = ({ activeTab }) => {
         return;
       }
 
-      // Get the correct ABI based on bridge type
-      const bridgeABI = getBridgeABI(claim.bridgeType);
-      console.log(`🔍 Using ABI for bridge type: ${claim.bridgeType}`, {
+      // Fetch fresh claim data using centralized fetcher
+      const claimData = await fetchClaimDetails({
+        provider: new ethers.providers.JsonRpcProvider(networkConfig.rpcUrl),
+        contractAddress: claim.bridgeAddress,
         bridgeType: claim.bridgeType,
-        abiLength: bridgeABI.length,
-        hasGetClaim: bridgeABI.some(item => item.includes('getClaim'))
+        claimNum: claimNum,
+        rpcUrl: networkConfig.rpcUrl
       });
-      
-      // Create provider and contract instance
-      const provider = new ethers.providers.JsonRpcProvider(networkConfig.rpcUrl);
-      const contract = new ethers.Contract(claim.bridgeAddress, bridgeABI, provider);
 
-      // Fetch fresh claim data using getClaim function
-      // Convert string claimNum back to BigNumber for contract call
-      const claimNumBigNumber = ethers.BigNumber.from(claimNum);
-      const claimData = await contract.getClaim(claimNumBigNumber);
+      if (!claimData) {
+        toast.error('Could not fetch claim details from contract');
+        return;
+      }
 
       // Update currentBlock to ensure button states are correct
+      const provider = new ethers.providers.JsonRpcProvider(networkConfig.rpcUrl);
       const block = await provider.getBlock('latest');
       setCurrentBlock(block);
       console.log(`🔍 Updated current block for claim refresh:`, {
@@ -1606,25 +1397,25 @@ const ClaimList = ({ activeTab }) => {
 
       console.log(`🔍 Raw claim data from contract:`, claimData);
 
-      // The getClaim function returns a tuple, so we need to destructure it
+      // Extract claim data fields
       // Based on the ABI: tuple(uint amount, address recipient_address, uint32 txts, uint32 ts, address claimant_address, uint32 expiry_ts, uint16 period_number, uint8 current_outcome, bool is_large, bool withdrawn, bool finished, string sender_address, string data, uint yes_stake, uint no_stake)
-      const [
+      const {
         amount,
-        recipientAddress,
+        recipient_address: recipientAddress,
         txts,
         ts,
-        claimantAddress,
-        expiryTs,
-        periodNumber,
-        currentOutcome,
-        isLarge,
+        claimant_address: claimantAddress,
+        expiry_ts: expiryTs,
+        period_number: periodNumber,
+        current_outcome: currentOutcome,
+        is_large: isLarge,
         withdrawn,
         finished,
-        senderAddress,
+        sender_address: senderAddress,
         data,
-        yesStake,
-        noStake
-      ] = claimData;
+        yes_stake: yesStake,
+        no_stake: noStake
+      } = claimData;
 
       console.log(`🔍 Destructured claim data:`, {
         amount: amount?.toString(),
@@ -1723,16 +1514,24 @@ const ClaimList = ({ activeTab }) => {
       }));
 
       // Also update the cached data with the fresh claim data
+      // Normalize amounts for consistent cache storage format (matching event-cached format)
       try {
         const cachedClaims = getCachedClaims() || [];
         const updatedCachedClaims = cachedClaims.map(c => 
           c.bridgeAddress === claim.bridgeAddress && 
           getClaimNumber(c) === claimNum 
-            ? updatedClaim 
+            ? {
+                ...updatedClaim,
+                // Normalize amounts for cache consistency (matching event-cached format)
+                amount: normalizeAmount(amount),
+                yesStake: normalizeAmount(yesStake),
+                noStake: normalizeAmount(noStake),
+                reward: normalizeAmount(claim.reward || updatedClaim.reward)
+              }
             : c
         );
         
-        // Update the cache with the fresh data
+        // Update the cache with the normalized data
         setCachedData(STORAGE_KEYS.CLAIMS, updatedCachedClaims);
       } catch (error) {
         console.warn('⚠️ Failed to update cached data:', error);
@@ -1749,7 +1548,7 @@ const ClaimList = ({ activeTab }) => {
         updatingClaims: new Set([...prev.updatingClaims].filter(key => key !== claimKey))
       }));
     }
-  }, [getNetworkWithSettings, getBridgeABI]);
+  }, [getNetworkWithSettings]);
 
   // getTimeSinceUpdate function removed - no longer needed since Updated badge was removed
 
@@ -3129,27 +2928,13 @@ const ClaimList = ({ activeTab }) => {
                               }
                               
                               try {
-                                // Determine the required network for this transfer
-                                const requiredNetwork = getRequiredNetwork(claim);
-                                console.log('🔍 Required network result:', requiredNetwork);
-                                
-                                if (!requiredNetwork) {
-                                  toast.error('Could not determine the required network for this transfer');
+                                const requiredNetwork = getRequiredNetworkForTransfer(claim);
+                                const switchSuccess = await checkAndSwitchNetwork(requiredNetwork);
+
+                                if (!switchSuccess) {
                                   return;
                                 }
-                                
-                                // Switch to the required network before opening the dialog
-                                console.log('🔄 Starting network switch to:', requiredNetwork.name);
-                                toast(`Switching to ${requiredNetwork.name} network...`);
-                                const switchResult = await switchToRequiredNetwork(requiredNetwork);
-                                console.log('🔄 Network switch result:', switchResult);
-                                
-                                if (!switchResult) {
-                                  toast.error('Failed to switch to the required network');
-                                  return;
-                                }
-                                
-                                // Set the transfer data and open the NewClaim dialog
+
                                 setSelectedTransfer(claim);
                                 setShowNewClaim(true);
                               } catch (error) {
