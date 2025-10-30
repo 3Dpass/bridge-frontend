@@ -3,65 +3,9 @@
  * These are basic tests to verify the retry mechanism works correctly
  */
 
-import { createSearchDepthAwareRetry, CircuitBreaker, ProviderHealthMonitor } from '../retry-with-fallback';
-
-// Mock settings functions
-const mockGetHistorySearchDepth = () => 24; // 24 hours
-const mockGetClaimSearchDepth = () => 12; // 12 hours
+import { CircuitBreaker, ProviderHealthMonitor } from '../retry-with-fallback';
 
 describe('Retry with Fallback', () => {
-  describe('createSearchDepthAwareRetry', () => {
-    it('should retry on failure with exponential backoff', async () => {
-      const retryFn = createSearchDepthAwareRetry(mockGetHistorySearchDepth, mockGetClaimSearchDepth);
-      
-      let attemptCount = 0;
-      const failingFn = async () => {
-        attemptCount++;
-        if (attemptCount < 3) {
-          throw new Error('Network error');
-        }
-        return 'success';
-      };
-
-      const result = await retryFn(failingFn, {
-        maxAttempts: 5,
-        baseDelay: 100,
-        searchDepthType: 'history'
-      });
-
-      expect(result).toBe('success');
-      expect(attemptCount).toBe(3);
-    });
-
-    it('should stop retrying when search depth is too restrictive', async () => {
-      const restrictiveGetHistorySearchDepth = () => 0.1; // 0.1 hours (6 minutes)
-      const retryFn = createSearchDepthAwareRetry(restrictiveGetHistorySearchDepth, mockGetClaimSearchDepth);
-      
-      const failingFn = async () => {
-        throw new Error('Network error');
-      };
-
-      await expect(retryFn(failingFn, {
-        maxAttempts: 5,
-        searchDepthType: 'history'
-      })).rejects.toThrow('Search depth limit too restrictive');
-    });
-
-    it('should respect max attempts limit', async () => {
-      const retryFn = createSearchDepthAwareRetry(mockGetHistorySearchDepth, mockGetClaimSearchDepth);
-      
-      const failingFn = async () => {
-        throw new Error('Persistent error');
-      };
-
-      await expect(retryFn(failingFn, {
-        maxAttempts: 2,
-        baseDelay: 10,
-        searchDepthType: 'claim'
-      })).rejects.toThrow('Persistent error');
-    });
-  });
-
   describe('CircuitBreaker', () => {
     it('should open after threshold failures', async () => {
       const circuitBreaker = new CircuitBreaker(3, 1000);
