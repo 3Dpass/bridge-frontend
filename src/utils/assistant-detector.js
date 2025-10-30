@@ -18,51 +18,56 @@ export const ASSISTANT_TYPES = {
  * Check if function selector exists in contract bytecode
  * @param {ethers.providers.Provider} provider - Web3 provider
  * @param {string} contractAddress - Contract address
- * @param {string} functionSelector - Function selector (e.g., 'approvePrecompile()')
+ * @param {string} functionSelector - Function selector (e.g., 'approvePrecompile()', 'approvePrecompile() external')
  * @returns {Promise<boolean>} True if function exists
  */
 const hasFunctionSelector = async (provider, contractAddress, functionSelector) => {
   try {
     console.log(`  🔍 Looking for function selector: ${functionSelector}`);
     
-    // Method 1: Try interface creation first (most reliable for this case)
+    // Extract just the function signature (remove modifiers like 'external', 'onlyManager', etc.)
+    // Pattern: extract function name and parameters, e.g., "approvePrecompile()"
+    const functionMatch = functionSelector.match(/function\s+(\w+)\s*\([^)]*\)/);
+    let cleanSignature = functionSelector;
+    
+    if (functionMatch) {
+      // If it starts with "function", extract the signature
+      cleanSignature = `function ${functionMatch[1]}()`;
+    } else {
+      // If it's already just the signature without "function" keyword, use as-is
+      // Remove any modifiers by extracting just the function name and parentheses
+      const simpleMatch = functionSelector.match(/(\w+)\s*\([^)]*\)/);
+      if (simpleMatch) {
+        cleanSignature = `function ${simpleMatch[1]}()`;
+      }
+    }
+    
+    console.log(`  🔍 Cleaned function signature: ${cleanSignature}`);
+    
+    // Method 1: Try interface creation with cleaned signature
     try {
-      new ethers.Contract(contractAddress, [functionSelector], provider);
-      console.log(`  ✅ Function exists (interface creation successful): ${functionSelector}`);
+      new ethers.Contract(contractAddress, [cleanSignature], provider);
+      console.log(`  ✅ Function exists (interface creation successful): ${cleanSignature}`);
       return true;
     } catch (interfaceError) {
       if (interfaceError.message.includes('unsupported fragment')) {
-        console.log(`  ❌ Function not found via interface (unsupported fragment): ${functionSelector}`);
-        return false;
+        console.log(`  ⚠️ Interface creation failed, trying bytecode check...`);
+      } else {
+        console.log(`  ⚠️ Interface creation failed: ${interfaceError.message}`);
       }
-      console.log(`  ❌ Function not found via interface: ${functionSelector} - ${interfaceError.message}`);
     }
     
-    // Method 2: Try static call (will fail due to onlyManager modifier, but that's OK)
-    try {
-      const contract = new ethers.Contract(contractAddress, [functionSelector], provider);
-      // Try to call the function - it will fail due to onlyManager modifier, but that's OK
-      await contract.callStatic[functionSelector.split('(')[0]]();
-      console.log(`  ✅ Function exists (static call successful): ${functionSelector}`);
-      return true;
-    } catch (staticCallError) {
-      // If it's an execution revert, the function exists but call failed
-      if (staticCallError.message.includes('execution reverted') || 
-          staticCallError.message.includes('call revert') ||
-          staticCallError.message.includes('onlyManager') ||
-          staticCallError.message.includes('caller is not the manager')) {
-        console.log(`  ✅ Function exists (static call reverted as expected): ${functionSelector}`);
-        return true;
-      }
-      console.log(`  ❌ Function not found via static call: ${functionSelector} - ${staticCallError.message}`);
-    }
-    
-    // Method 3: Bytecode check as fallback (less reliable)
-    const selector = ethers.utils.id(functionSelector).substring(0, 10);
+    // Method 2: Bytecode check (most reliable for detecting function existence)
+    const selector = ethers.utils.id(cleanSignature).substring(0, 10);
     console.log(`  🔍 Function selector (4 bytes): ${selector}`);
     
     // Get contract bytecode
     const bytecode = await provider.getCode(contractAddress);
+    if (!bytecode || bytecode === '0x') {
+      console.log(`  ❌ Contract has no bytecode`);
+      return false;
+    }
+    
     console.log(`  🔍 Contract bytecode length: ${bytecode.length}`);
     
     // Check if selector exists in bytecode
@@ -72,11 +77,32 @@ const hasFunctionSelector = async (provider, contractAddress, functionSelector) 
     console.log(`  🔍 Selector found in bytecode: ${found}`);
     
     if (found) {
-      console.log(`  ✅ Function exists (bytecode check): ${functionSelector}`);
+      console.log(`  ✅ Function exists (bytecode check): ${cleanSignature}`);
       return true;
     }
     
-    console.log(`  ❌ Function not found: ${functionSelector}`);
+    // Method 3: Try static call as last resort (will fail due to onlyManager modifier, but that's OK)
+    try {
+      const contract = new ethers.Contract(contractAddress, [cleanSignature], provider);
+      const functionName = cleanSignature.match(/function\s+(\w+)/)?.[1];
+      if (functionName) {
+        await contract.callStatic[functionName]();
+        console.log(`  ✅ Function exists (static call successful): ${cleanSignature}`);
+        return true;
+      }
+    } catch (staticCallError) {
+      // If it's an execution revert, the function exists but call failed
+      if (staticCallError.message.includes('execution reverted') || 
+          staticCallError.message.includes('call revert') ||
+          staticCallError.message.includes('onlyManager') ||
+          staticCallError.message.includes('caller is not the manager')) {
+        console.log(`  ✅ Function exists (static call reverted as expected): ${cleanSignature}`);
+        return true;
+      }
+      console.log(`  ⚠️ Static call failed: ${staticCallError.message}`);
+    }
+    
+    console.log(`  ❌ Function not found: ${cleanSignature}`);
     return false;
   } catch (error) {
     console.error('Error checking function selector:', error);
@@ -111,13 +137,24 @@ export const detectAssistantType = async (provider, assistantAddress, bridgeAddr
     }
     
     // Check if it's an IMPORT_WRAPPER bridge
+    // IMPORT_WRAPPER bridges have precompileAddress() method, while regular IMPORT bridges don't
     if (!bridgeType) {
       try {
         console.log(`  Checking if bridge is IMPORT_WRAPPER type...`);
         const importWrapperBridge = createBridgeContract(bridgeAddress, 'import_wrapper', provider);
+        
+        // First check if home_network() exists (both IMPORT and IMPORT_WRAPPER have this)
         await importWrapperBridge.home_network();
-        bridgeType = 'import_wrapper';
-        console.log(`  ✅ Bridge is IMPORT_WRAPPER type`);
+        
+        // Then check if precompileAddress() exists (only IMPORT_WRAPPER has this)
+        try {
+          await importWrapperBridge.precompileAddress();
+          bridgeType = 'import_wrapper';
+          console.log(`  ✅ Bridge is IMPORT_WRAPPER type`);
+        } catch (precompileError) {
+          // If precompileAddress() doesn't exist, it's likely a regular IMPORT bridge
+          console.log(`  ⚠️ home_network() exists but precompileAddress() doesn't - will check as regular IMPORT`);
+        }
       } catch (error) {
         console.log(`  ❌ Not an IMPORT_WRAPPER bridge: ${error.message}`);
       }
@@ -143,13 +180,10 @@ export const detectAssistantType = async (provider, assistantAddress, bridgeAddr
     console.log(`🔍 Detected bridge type: ${bridgeType}`);
     
     // Now check if the assistant has approvePrecompile function to determine if it's a wrapper
+    // Use the actual function signature from the ABI: "function approvePrecompile()"
     const possibleSignatures = [
-      'approvePrecompile()',
-      'approvePrecompile() external',
-      'approvePrecompile() external onlyManager',
-      'approvePrecompile() public',
-      'approvePrecompile() view',
-      'approvePrecompile() pure'
+      'function approvePrecompile()', // Try the correct ABI format first
+      'approvePrecompile()' // Fallback to simple format
     ];
     
     let hasApprovePrecompile = false;
@@ -164,7 +198,41 @@ export const detectAssistantType = async (provider, assistantAddress, bridgeAddr
     
     console.log(`🔍 Final result: hasApprovePrecompile = ${hasApprovePrecompile}`);
     
-    // Determine assistant type based on bridge type and approvePrecompile function
+    // Also check if the assistant has precompileAddress() function (for Import Wrapper assistants)
+    // ImportWrapperAssistant has precompileAddress() as a public variable
+    const precompileAddressSignatures = [
+      'function precompileAddress() view returns (address)',
+      'function precompileAddress() returns (address)',
+      'function precompileAddress()'
+    ];
+    
+    let hasPrecompileAddress = false;
+    for (const signature of precompileAddressSignatures) {
+      console.log(`🔍 Checking for precompileAddress(): ${signature}`);
+      hasPrecompileAddress = await hasFunctionSelector(provider, assistantAddress, signature);
+      if (hasPrecompileAddress) {
+        console.log(`  ✅ Found precompileAddress() with signature: ${signature}`);
+        break;
+      }
+    }
+    
+    // Also try direct contract call as it's a public variable
+    if (!hasPrecompileAddress) {
+      try {
+        const assistantContract = new ethers.Contract(assistantAddress, [
+          'function precompileAddress() view returns (address)'
+        ], provider);
+        await assistantContract.precompileAddress();
+        hasPrecompileAddress = true;
+        console.log(`  ✅ Found precompileAddress() via direct contract call`);
+      } catch (error) {
+        console.log(`  ⚠️ precompileAddress() not found via direct call: ${error.message}`);
+      }
+    }
+    
+    console.log(`🔍 Final result: hasPrecompileAddress = ${hasPrecompileAddress}`);
+    
+    // Determine assistant type based on bridge type and function checks
     if (bridgeType === 'export') {
       if (hasApprovePrecompile) {
         console.log(`  ✅ EXPORT_WRAPPER assistant detected!`);
@@ -179,8 +247,10 @@ export const detectAssistantType = async (provider, assistantAddress, bridgeAddr
       console.log(`  ✅ IMPORT_WRAPPER assistant detected!`);
       return 'import_wrapper';
     } else if (bridgeType === 'import') {
-      if (hasApprovePrecompile) {
-        console.log(`  ✅ IMPORT_WRAPPER assistant detected!`);
+      // Check both approvePrecompile (for ImportWrapperAssistant) and precompileAddress
+      // ImportWrapperAssistant has precompileAddress() public variable
+      if (hasPrecompileAddress || hasApprovePrecompile) {
+        console.log(`  ✅ IMPORT_WRAPPER assistant detected! (has precompileAddress: ${hasPrecompileAddress}, has approvePrecompile: ${hasApprovePrecompile})`);
         return 'import_wrapper';
       } else {
         console.log(`  ✅ Regular IMPORT assistant detected!`);
@@ -268,17 +338,29 @@ export const getImportWrapperBridgeData = async (provider, bridgeAddress) => {
   try {
     const contract = createBridgeContract(bridgeAddress, 'import_wrapper', provider);
     
-    const [
-      homeNetwork,
-      homeAsset,
-      precompileAddress,
-      settings
-    ] = await Promise.all([
+    // Try to get home_network and home_asset first (these should always exist)
+    const [homeNetwork, homeAsset] = await Promise.all([
       contract.home_network(),
-      contract.home_asset(),
-      contract.precompileAddress(),
-      contract.settings()
+      contract.home_asset()
     ]);
+    
+    // Try to get precompileAddress, but don't fail if it doesn't exist
+    let precompileAddress = null;
+    try {
+      precompileAddress = await contract.precompileAddress();
+    } catch (error) {
+      console.warn(`⚠️ precompileAddress() not available on ImportWrapper bridge ${bridgeAddress}, continuing without it`);
+      // This is okay - some ImportWrapper bridges might not have this method
+    }
+    
+    // Try to get settings
+    let settings = null;
+    try {
+      settings = await contract.settings();
+    } catch (error) {
+      console.warn(`⚠️ settings() not available on ImportWrapper bridge ${bridgeAddress}, continuing without it`);
+      // This is okay - settings might not be needed
+    }
 
     return {
       homeNetwork,
@@ -297,11 +379,12 @@ export const getImportWrapperBridgeData = async (provider, bridgeAddress) => {
  * @param {ethers.providers.Provider} provider - Web3 provider
  * @param {string} assistantAddress - Assistant contract address
  * @param {string} networkSymbol - Network where assistant is deployed
+ * @param {Object} settings - Optional settings for custom token lookup
  * @returns {Promise<Object>} Share token information
  */
-export const getAssistantShareTokenInfo = async (provider, assistantAddress, networkSymbol) => {
+export const getAssistantShareTokenInfo = async (provider, assistantAddress, networkSymbol, settings = null) => {
   try {
-    const tokenResult = await autoDetectToken(provider, assistantAddress, networkSymbol);
+    const tokenResult = await autoDetectToken(provider, assistantAddress, networkSymbol, settings);
     
     if (tokenResult.success) {
       return {
@@ -496,7 +579,7 @@ export const autoDetectAssistantWithBridge = async (provider, assistantAddress, 
     }
     
     // Get share token information
-    const shareTokenInfo = await getAssistantShareTokenInfo(provider, assistantAddress, networkSymbol);
+    const shareTokenInfo = await getAssistantShareTokenInfo(provider, assistantAddress, networkSymbol, settings);
     
     // Get manager address from assistant contract
     const managerAddress = await getManagerAddressFromAssistant(provider, assistantAddress);

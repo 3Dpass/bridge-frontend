@@ -312,7 +312,7 @@ export const updateBridgeInfoFromRegistry = async (provider, networkSymbol, sett
     // Detect token data
     for (const tokenAddress of tokenAddresses) {
       try {
-        const tokenResult = await autoDetectToken(provider, tokenAddress, networkSymbol);
+        const tokenResult = await autoDetectToken(provider, tokenAddress, networkSymbol, settings);
         if (tokenResult.success) {
           const tokenKey = tokenResult.tokenInfo.symbol;
           discoveredTokens[tokenKey] = tokenResult.tokenInfo;

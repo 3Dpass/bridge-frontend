@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { ethers } from 'ethers';
 import { useWeb3 } from '../contexts/Web3Context';
 import { useSettings } from '../contexts/SettingsContext';
@@ -10,6 +10,7 @@ import { updateBridgeInfoFromRegistry, hasBridgesRegistry } from '../utils/updat
 import { validateOracleContract } from '../utils/bridge-detector';
 import { getProvider, updateProviderSettings } from '../utils/provider-manager';
 import { getNetworkWithSettings } from '../utils/settings';
+import { switchNetwork } from '../utils/network-switcher';
 import { 
   Settings, 
   Network, 
@@ -67,6 +68,9 @@ const SettingsDialog = ({ isOpen, onClose }) => {
   const [showDeployOracle, setShowDeployOracle] = useState({});
   const [showAddOracle, setShowAddOracle] = useState({});
   const [newOracle, setNewOracle] = useState({});
+  const [checkingBridgeStatus, setCheckingBridgeStatus] = useState({});
+  const [checkingAssistantStatus, setCheckingAssistantStatus] = useState({});
+  const [discoveringFromRegistry, setDiscoveringFromRegistry] = useState({});
 
   // Check if an oracle with given address already exists
   const findExistingOracleByAddress = (networkKey, oracleAddress) => {
@@ -111,6 +115,84 @@ const SettingsDialog = ({ isOpen, onClose }) => {
   useEffect(() => {
     updateProviderSettings(settings);
   }, [settings]);
+
+  // Normalize network name to match config format
+  const normalizeNetworkName = useCallback((networkName) => {
+    if (!networkName) return networkName;
+    
+    // Handle case variations
+    const normalized = networkName.trim();
+    if (normalized.toLowerCase() === 'bsc') {
+      return 'Binance Smart Chain';
+    }
+    if (normalized.toLowerCase() === '3dpass') {
+      return '3DPass';
+    }
+    
+    // Return as-is for other networks
+    return normalized;
+  }, []);
+
+  // Compare bridge data to detect differences
+  const compareBridgeData = useCallback((existingBridge, detectedBridge) => {
+    console.log(`🔍 Comparing bridge data:`, {
+      existing: existingBridge,
+      detected: detectedBridge
+    });
+    
+    const fieldsToCompare = [
+      'type',
+      'homeNetwork',
+      'homeTokenSymbol',
+      'homeTokenAddress',
+      'foreignNetwork',
+      'foreignTokenSymbol',
+      'foreignTokenAddress',
+      'stakeTokenSymbol',
+      'stakeTokenAddress',
+      'oracleAddress'
+    ];
+    
+    const differences = {};
+    let hasDifferences = false;
+    
+    for (const field of fieldsToCompare) {
+      let existingValue = existingBridge[field];
+      let detectedValue = detectedBridge[field];
+      
+      // Special handling for oracleAddress field
+      if (field === 'oracleAddress') {
+        // For export bridges, both null and undefined should be considered equivalent
+        if (existingBridge.type === 'export' || detectedBridge.type === 'export') {
+          // Normalize null/undefined to null for export bridges
+          existingValue = existingValue || null;
+          detectedValue = detectedValue || null;
+        }
+      }
+      
+      // Normalize network names for comparison
+      if (field === 'homeNetwork' || field === 'foreignNetwork') {
+        existingValue = normalizeNetworkName(existingValue);
+        detectedValue = normalizeNetworkName(detectedValue);
+      }
+      
+      if (existingValue !== detectedValue) {
+        differences[field] = true;
+        hasDifferences = true;
+        console.log(`🔍 Bridge data mismatch in ${field}: existing="${existingValue}" (${typeof existingValue}) vs detected="${detectedValue}" (${typeof detectedValue})`);
+      } else {
+        differences[field] = false;
+        console.log(`✅ Bridge data match in ${field}: "${existingValue}"`);
+      }
+    }
+    
+    console.log(`🔍 Bridge comparison result: hasDifferences=${hasDifferences}`, differences);
+    
+    return {
+      hasDifferences,
+      differences
+    };
+  }, [normalizeNetworkName]);
 
   // Auto-check up-to-date status for existing bridges when dialog opens
   useEffect(() => {
@@ -197,7 +279,7 @@ const SettingsDialog = ({ isOpen, onClose }) => {
       // Run the check after a short delay to avoid blocking the UI
       setTimeout(checkExistingBridgesStatus, 1000);
     }
-  }, [isOpen, settings, addCustomBridgeInstanceForNetwork, getBridgeInstancesWithSettings, updateOracle]);
+  }, [isOpen, settings, addCustomBridgeInstanceForNetwork, getBridgeInstancesWithSettings, updateOracle, compareBridgeData]);
 
   // Generate unique bridge key based on detected bridge data
   const generateBridgeKey = (bridgeConfig, networkKey) => {
@@ -572,63 +654,6 @@ const SettingsDialog = ({ isOpen, onClose }) => {
     return false;
   };
 
-
-
-  // Compare bridge data to detect differences
-  const compareBridgeData = (existingBridge, detectedBridge) => {
-    console.log(`🔍 Comparing bridge data:`, {
-      existing: existingBridge,
-      detected: detectedBridge
-    });
-    
-    const fieldsToCompare = [
-      'type',
-      'homeNetwork',
-      'homeTokenSymbol',
-      'homeTokenAddress',
-      'foreignNetwork',
-      'foreignTokenSymbol',
-      'foreignTokenAddress',
-      'stakeTokenSymbol',
-      'stakeTokenAddress',
-      'oracleAddress'
-    ];
-    
-    const differences = {};
-    let hasDifferences = false;
-    
-    for (const field of fieldsToCompare) {
-      let existingValue = existingBridge[field];
-      let detectedValue = detectedBridge[field];
-      
-      // Special handling for oracleAddress field
-      if (field === 'oracleAddress') {
-        // For export bridges, both null and undefined should be considered equivalent
-        if (existingBridge.type === 'export' || detectedBridge.type === 'export') {
-          // Normalize null/undefined to null for export bridges
-          existingValue = existingValue || null;
-          detectedValue = detectedValue || null;
-        }
-      }
-      
-      if (existingValue !== detectedValue) {
-        differences[field] = true;
-        hasDifferences = true;
-        console.log(`🔍 Bridge data mismatch in ${field}: existing="${existingValue}" (${typeof existingValue}) vs detected="${detectedValue}" (${typeof detectedValue})`);
-      } else {
-        differences[field] = false;
-        console.log(`✅ Bridge data match in ${field}: "${existingValue}"`);
-      }
-    }
-    
-    console.log(`🔍 Bridge comparison result: hasDifferences=${hasDifferences}`, differences);
-    
-    return {
-      hasDifferences,
-      differences
-    };
-  };
-
   // Check if assistant already exists in settings/config
   const isAssistantAlreadyExists = (networkKey, assistantAddress) => {
     if (!assistantAddress) return false;
@@ -969,8 +994,54 @@ const SettingsDialog = ({ isOpen, onClose }) => {
     toast.success(`Oracle ${oracleKey} added to settings`);
   };
 
+  // Helper function to switch network before opening dialogs
+  const handleNetworkSwitch = async (networkKey) => {
+    const networkConfig = NETWORKS[networkKey];
+    if (!networkConfig) {
+      toast.error('Could not determine required network');
+      return false;
+    }
+    
+    // Check if we need to switch networks
+    if (!window.ethereum) {
+      console.error('MetaMask not available');
+      toast.error('MetaMask not available');
+      return false;
+    }
+    
+    try {
+      const chainId = await window.ethereum.request({ method: 'eth_chainId' });
+      const currentChainId = parseInt(chainId, 16);
+      console.log('🔍 Current chain ID:', currentChainId, 'Required chain ID:', networkConfig.id);
+      
+      if (currentChainId !== networkConfig.id) {
+        console.log('🔄 Wrong network detected, switching automatically...');
+        toast.loading(`Switching to ${networkConfig.name} network...`);
+        
+        const success = await switchNetwork(networkConfig);
+        if (success) {
+          console.log('✅ Network switched successfully to:', networkConfig.name);
+          // Wait a moment for the network to settle
+          await new Promise(resolve => setTimeout(resolve, 1000));
+          return true;
+        } else {
+          console.error('❌ Network switch failed');
+          toast.error(`Failed to switch to ${networkConfig.name} network`);
+          return false;
+        }
+      }
+      
+      return true; // Already on correct network
+    } catch (error) {
+      console.error('Error checking/switching network:', error);
+      toast.error('Failed to check current network');
+      return false;
+    }
+  };
+
   // Handle discovering bridges and assistants from registry
   const handleDiscoverFromRegistry = async (networkKey) => {
+    setDiscoveringFromRegistry(prev => ({ ...prev, [networkKey]: true }));
     try {
       // Get the appropriate provider for this network
       const networkProvider = getProvider(networkKey);
@@ -1118,6 +1189,8 @@ const SettingsDialog = ({ isOpen, onClose }) => {
     } catch (error) {
       console.error('Error discovering from registry:', error);
       toast.error(`Discovery failed: ${error.message}`);
+    } finally {
+      setDiscoveringFromRegistry(prev => ({ ...prev, [networkKey]: false }));
     }
   };
 
@@ -1175,10 +1248,11 @@ const SettingsDialog = ({ isOpen, onClose }) => {
                     {hasBridgesRegistry(networkKey) && (
                       <button
                         onClick={() => handleDiscoverFromRegistry(networkKey)}
-                        className="btn-primary flex items-center gap-2 px-3 py-1 text-sm"
+                        disabled={discoveringFromRegistry[networkKey]}
+                        className="btn-primary flex items-center gap-2 px-3 py-1 text-sm disabled:opacity-50 disabled:cursor-not-allowed"
                         title="Discover bridges and assistants from BridgesRegistry"
                       >
-                        <RefreshCw className="w-4 h-4" />
+                        <RefreshCw className={`w-4 h-4 ${discoveringFromRegistry[networkKey] ? 'animate-spin' : ''}`} />
                         Update
                       </button>
                     )}
@@ -1484,7 +1558,7 @@ const SettingsDialog = ({ isOpen, onClose }) => {
                                     const networkProvider = getProvider(networkKey);
                                     console.log(`Auto-detecting token on ${networkKey} using provider:`, networkProvider.connection.url);
                                     
-                                    const result = await autoDetectToken(networkProvider, address, networkKey);
+                                    const result = await autoDetectToken(networkProvider, address, networkKey, settings);
                                     if (result.success) {
                                       // Check if token already exists AFTER detection
                                       const tokenExists = isTokenAlreadyExists(networkKey, address);
@@ -1826,18 +1900,19 @@ const SettingsDialog = ({ isOpen, onClose }) => {
                                 <>
                                   <button
                                     onClick={async () => {
-                                      toast.loading(`Checking ${bridgeKey} up-to-date status...`);
-                                      const upToDate = await updateBridgeUpToDateStatus(networkKey, bridgeKey, bridgeConfig);
-                                      if (upToDate) {
-                                        toast.success(`${bridgeKey} is up to date`);
-                                      } else {
-                                        toast.error(`${bridgeKey} needs updating`);
+                                      const statusKey = `${networkKey}_${bridgeKey}`;
+                                      setCheckingBridgeStatus(prev => ({ ...prev, [statusKey]: true }));
+                                      try {
+                                        await updateBridgeUpToDateStatus(networkKey, bridgeKey, bridgeConfig);
+                                      } finally {
+                                        setCheckingBridgeStatus(prev => ({ ...prev, [statusKey]: false }));
                                       }
                                     }}
-                                    className="btn-secondary px-1 py-0.5"
+                                    disabled={checkingBridgeStatus[`${networkKey}_${bridgeKey}`]}
+                                    className="btn-secondary px-1 py-0.5 disabled:opacity-50 disabled:cursor-not-allowed"
                                     title="Check up-to-date status"
                                   >
-                                    <RefreshCw className="w-3 h-3" />
+                                    <RefreshCw className={`w-3 h-3 ${checkingBridgeStatus[`${networkKey}_${bridgeKey}`] ? 'animate-spin' : ''}`} />
                                   </button>
                                 <button
                                   onClick={() => handleRemoveBridge(networkKey, bridgeKey)}
@@ -1852,18 +1927,19 @@ const SettingsDialog = ({ isOpen, onClose }) => {
                               {!settings[networkKey]?.bridges?.[bridgeKey] && (bridgeConfig.upToDate === undefined || bridgeConfig.upToDate === null) && (
                                 <button
                                   onClick={async () => {
-                                    toast.loading(`Checking ${bridgeKey} up-to-date status...`);
-                                    const upToDate = await updateBridgeUpToDateStatus(networkKey, bridgeKey, bridgeConfig);
-                                    if (upToDate) {
-                                      toast.success(`${bridgeKey} is up to date`);
-                                    } else {
-                                      toast.error(`${bridgeKey} needs updating`);
+                                    const statusKey = `${networkKey}_${bridgeKey}`;
+                                    setCheckingBridgeStatus(prev => ({ ...prev, [statusKey]: true }));
+                                    try {
+                                      await updateBridgeUpToDateStatus(networkKey, bridgeKey, bridgeConfig);
+                                    } finally {
+                                      setCheckingBridgeStatus(prev => ({ ...prev, [statusKey]: false }));
                                     }
                                   }}
-                                  className="btn-secondary px-1 py-0.5"
+                                  disabled={checkingBridgeStatus[`${networkKey}_${bridgeKey}`]}
+                                  className="btn-secondary px-1 py-0.5 disabled:opacity-50 disabled:cursor-not-allowed"
                                   title="Check up-to-date status"
                                 >
-                                  <RefreshCw className="w-3 h-3" />
+                                  <RefreshCw className={`w-3 h-3 ${checkingBridgeStatus[`${networkKey}_${bridgeKey}`] ? 'animate-spin' : ''}`} />
                                 </button>
                               )}
                             </div>
@@ -1894,59 +1970,10 @@ const SettingsDialog = ({ isOpen, onClose }) => {
                   </button>
                             <button
                               onClick={async () => {
-                                // Check if we need to switch networks first
-                                const networkConfig = NETWORKS[networkKey];
-                                if (!networkConfig) {
-                                  toast.error('Could not determine required network');
+                                // Switch network if needed
+                                const networkSwitched = await handleNetworkSwitch(networkKey);
+                                if (!networkSwitched) {
                                   return;
-                                }
-                                
-                                // Check current network
-                                if (!window.ethereum) {
-                                  console.error('MetaMask not available');
-                                  toast.error('MetaMask not available');
-                                  return;
-                                }
-                                
-                                let currentChainId;
-                                try {
-                                  const chainId = await window.ethereum.request({ method: 'eth_chainId' });
-                                  currentChainId = parseInt(chainId, 16);
-                                  console.log('🔍 Current chain ID:', currentChainId, 'Required chain ID:', networkConfig.id);
-                                } catch (error) {
-                                  console.error('Error getting chain ID:', error);
-                                  toast.error('Failed to check current network');
-                                  return;
-                                }
-                                
-                                if (currentChainId !== networkConfig.id) {
-                                  console.log('🚨 NETWORK SWITCHING WILL BE TRIGGERED NOW!');
-                                  console.log('🔄 Wrong network detected, switching automatically...');
-                                  
-                                  try {
-                                    const chainId = `0x${networkConfig.id.toString(16)}`;
-                                    console.log('🔄 Switching to network:', { networkKey, chainId });
-
-                                    await window.ethereum.request({
-                                      method: 'wallet_switchEthereumChain',
-                                      params: [{ chainId }],
-                                    });
-
-                                    console.log('✅ Network switched successfully to:', networkConfig.name);
-                                    toast.success(`Switched to ${networkConfig.name} network`);
-                                    
-                                    // Wait a moment for the network to settle
-                                    await new Promise(resolve => setTimeout(resolve, 1000));
-                                  } catch (error) {
-                                    console.error('❌ Network switch failed:', error);
-                                    if (error.code === 4902) {
-                                      // Network not added to MetaMask
-                                      toast.error(`${networkConfig.name} network not found in MetaMask. Please add it manually.`);
-                                    } else {
-                                      toast.error('Failed to switch network');
-                                    }
-                                    return;
-                                  }
                                 }
                                 
                                 // Now open the dialog
@@ -2537,59 +2564,10 @@ const SettingsDialog = ({ isOpen, onClose }) => {
                             </button>
                             <button
                               onClick={async () => {
-                                // Check if we need to switch networks first
-                                const networkConfig = NETWORKS[networkKey];
-                                if (!networkConfig) {
-                                  toast.error('Could not determine required network');
+                                // Switch network if needed
+                                const networkSwitched = await handleNetworkSwitch(networkKey);
+                                if (!networkSwitched) {
                                   return;
-                                }
-                                
-                                // Check current network
-                                if (!window.ethereum) {
-                                  console.error('MetaMask not available');
-                                  toast.error('MetaMask not available');
-                                  return;
-                                }
-                                
-                                let currentChainId;
-                                try {
-                                  const chainId = await window.ethereum.request({ method: 'eth_chainId' });
-                                  currentChainId = parseInt(chainId, 16);
-                                  console.log('🔍 Current chain ID:', currentChainId, 'Required chain ID:', networkConfig.id);
-                                } catch (error) {
-                                  console.error('Error getting chain ID:', error);
-                                  toast.error('Failed to check current network');
-                                  return;
-                                }
-                                
-                                if (currentChainId !== networkConfig.id) {
-                                  console.log('🚨 NETWORK SWITCHING WILL BE TRIGGERED NOW!');
-                                  console.log('🔄 Wrong network detected, switching automatically...');
-                                  
-                                  try {
-                                    const chainId = `0x${networkConfig.id.toString(16)}`;
-                                    console.log('🔄 Switching to network:', { networkKey, chainId });
-
-                                    await window.ethereum.request({
-                                      method: 'wallet_switchEthereumChain',
-                                      params: [{ chainId }],
-                                    });
-
-                                    console.log('✅ Network switched successfully to:', networkConfig.name);
-                                    toast.success(`Switched to ${networkConfig.name} network`);
-                                    
-                                    // Wait a moment for the network to settle
-                                    await new Promise(resolve => setTimeout(resolve, 1000));
-                                  } catch (error) {
-                                    console.error('❌ Network switch failed:', error);
-                                    if (error.code === 4902) {
-                                      // Network not added to MetaMask
-                                      toast.error(`${networkConfig.name} network not found in MetaMask. Please add it manually.`);
-                                    } else {
-                                      toast.error('Failed to switch network');
-                                    }
-                                    return;
-                                  }
                                 }
                                 
                                 // Now open the dialog
@@ -2846,18 +2824,19 @@ const SettingsDialog = ({ isOpen, onClose }) => {
                                 <>
                                   <button
                                     onClick={async () => {
-                                      toast.loading(`Checking ${assistantKey} up-to-date status...`);
-                                      const upToDate = await updateAssistantUpToDateStatus(networkKey, assistantKey, assistantConfig);
-                                      if (upToDate) {
-                                        toast.success(`${assistantKey} is up to date`);
-                                      } else {
-                                        toast.error(`${assistantKey} needs updating`);
+                                      const statusKey = `${networkKey}_${assistantKey}`;
+                                      setCheckingAssistantStatus(prev => ({ ...prev, [statusKey]: true }));
+                                      try {
+                                        await updateAssistantUpToDateStatus(networkKey, assistantKey, assistantConfig);
+                                      } finally {
+                                        setCheckingAssistantStatus(prev => ({ ...prev, [statusKey]: false }));
                                       }
                                     }}
-                                    className="btn-secondary px-1 py-0.5"
+                                    disabled={checkingAssistantStatus[`${networkKey}_${assistantKey}`]}
+                                    className="btn-secondary px-1 py-0.5 disabled:opacity-50 disabled:cursor-not-allowed"
                                     title="Check up-to-date status"
                                   >
-                                    <RefreshCw className="w-3 h-3" />
+                                    <RefreshCw className={`w-3 h-3 ${checkingAssistantStatus[`${networkKey}_${assistantKey}`] ? 'animate-spin' : ''}`} />
                                   </button>
                                 <button
                                   onClick={() => handleRemoveAssistant(networkKey, assistantKey)}
@@ -2872,18 +2851,19 @@ const SettingsDialog = ({ isOpen, onClose }) => {
                               {!settings[networkKey]?.assistants?.[assistantKey] && (assistantConfig.upToDate === undefined || assistantConfig.upToDate === null) && (
                                 <button
                                   onClick={async () => {
-                                    toast.loading(`Checking ${assistantKey} up-to-date status...`);
-                                    const upToDate = await updateAssistantUpToDateStatus(networkKey, assistantKey, assistantConfig);
-                                    if (upToDate) {
-                                      toast.success(`${assistantKey} is up to date`);
-                                    } else {
-                                      toast.error(`${assistantKey} needs updating`);
+                                    const statusKey = `${networkKey}_${assistantKey}`;
+                                    setCheckingAssistantStatus(prev => ({ ...prev, [statusKey]: true }));
+                                    try {
+                                      await updateAssistantUpToDateStatus(networkKey, assistantKey, assistantConfig);
+                                    } finally {
+                                      setCheckingAssistantStatus(prev => ({ ...prev, [statusKey]: false }));
                                     }
                                   }}
-                                  className="btn-secondary px-1 py-0.5"
+                                  disabled={checkingAssistantStatus[`${networkKey}_${assistantKey}`]}
+                                  className="btn-secondary px-1 py-0.5 disabled:opacity-50 disabled:cursor-not-allowed"
                                   title="Check up-to-date status"
                                 >
-                                  <RefreshCw className="w-3 h-3" />
+                                  <RefreshCw className={`w-3 h-3 ${checkingAssistantStatus[`${networkKey}_${assistantKey}`] ? 'animate-spin' : ''}`} />
                                 </button>
                               )}
                             </div>
@@ -2916,59 +2896,10 @@ const SettingsDialog = ({ isOpen, onClose }) => {
                   </button>
                             <button
                               onClick={async () => {
-                                // Check if we need to switch networks first
-                                const networkConfig = NETWORKS[networkKey];
-                                if (!networkConfig) {
-                                  toast.error('Could not determine required network');
+                                // Switch network if needed
+                                const networkSwitched = await handleNetworkSwitch(networkKey);
+                                if (!networkSwitched) {
                                   return;
-                                }
-                                
-                                // Check current network
-                                if (!window.ethereum) {
-                                  console.error('MetaMask not available');
-                                  toast.error('MetaMask not available');
-                                  return;
-                                }
-                                
-                                let currentChainId;
-                                try {
-                                  const chainId = await window.ethereum.request({ method: 'eth_chainId' });
-                                  currentChainId = parseInt(chainId, 16);
-                                  console.log('🔍 Current chain ID:', currentChainId, 'Required chain ID:', networkConfig.id);
-                                } catch (error) {
-                                  console.error('Error getting chain ID:', error);
-                                  toast.error('Failed to check current network');
-                                  return;
-                                }
-                                
-                                if (currentChainId !== networkConfig.id) {
-                                  console.log('🚨 NETWORK SWITCHING WILL BE TRIGGERED NOW!');
-                                  console.log('🔄 Wrong network detected, switching automatically...');
-                                  
-                                  try {
-                                    const chainId = `0x${networkConfig.id.toString(16)}`;
-                                    console.log('🔄 Switching to network:', { networkKey, chainId });
-
-                                    await window.ethereum.request({
-                                      method: 'wallet_switchEthereumChain',
-                                      params: [{ chainId }],
-                                    });
-
-                                    console.log('✅ Network switched successfully to:', networkConfig.name);
-                                    toast.success(`Switched to ${networkConfig.name} network`);
-                                    
-                                    // Wait a moment for the network to settle
-                                    await new Promise(resolve => setTimeout(resolve, 1000));
-                                  } catch (error) {
-                                    console.error('❌ Network switch failed:', error);
-                                    if (error.code === 4902) {
-                                      // Network not added to MetaMask
-                                      toast.error(`${networkConfig.name} network not found in MetaMask. Please add it manually.`);
-                                    } else {
-                                      toast.error('Failed to switch network');
-                                    }
-                                    return;
-                                  }
                                 }
                                 
                                 // Now open the dialog

@@ -1,4 +1,8 @@
 import { NETWORKS, getBridgeInstances, getAssistantContracts, P3D_PRECOMPILE_ADDRESS } from '../config/networks.js';
+import { 
+  is3DPassPrecompile as is3DPassPrecompileFromThreedpass,
+  isP3DPrecompile as isP3DPrecompileFromThreedpass
+} from './threedpass';
 
 /**
  * Load settings from localStorage
@@ -313,28 +317,23 @@ export const validateTokenAddress = (address) => {
 
 /**
  * Check if a token is a 3DPass precompile
+ * Uses threedpass.js as source of truth
  * @param {string} tokenAddress - Token address to check
+ * @param {Object} settings - Optional settings for custom token lookup
  * @returns {boolean} True if it's a 3DPass precompile
  */
-export const is3DPassPrecompile = (tokenAddress) => {
-  if (!tokenAddress) return false;
-  
-  // P3D precompile
-  if (tokenAddress.toLowerCase() === P3D_PRECOMPILE_ADDRESS.toLowerCase()) {
-    return true;
-  }
-  
-  // Other 3DPass ERC20 precompiles (start with 0xFBFBFBFA)
-  return tokenAddress.toLowerCase().startsWith('0xfbfbfbfa');
+export const is3DPassPrecompile = (tokenAddress, settings = null) => {
+  return is3DPassPrecompileFromThreedpass(tokenAddress, settings);
 };
 
 /**
  * Check if a token is the P3D precompile specifically
+ * Uses threedpass.js as source of truth
  * @param {string} tokenAddress - Token address to check
  * @returns {boolean} True if it's the P3D precompile
  */
 export const isP3DPrecompile = (tokenAddress) => {
-  return tokenAddress && tokenAddress.toLowerCase() === P3D_PRECOMPILE_ADDRESS.toLowerCase();
+  return isP3DPrecompileFromThreedpass(tokenAddress);
 };
 
 /**

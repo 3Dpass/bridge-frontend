@@ -413,7 +413,7 @@ export const NETWORKS = {
         bridgeAddress: '0x50fcE1D58b41c3600C74de03238Eee71aFDfBf1F', // Matches the bridge address on 3dpass P3D_EXPORT
         description: 'P3D Export Assistant 3dpass-Ethereum',
         shareSymbol: 'P3DEA',
-        shareName: 'P3D Import Assistant Shares',
+        shareName: 'P3D Export Assistant Shares',
         managerAddress: '0x067Fac51f31Dc80263D55f9980DF1358357DC10d'
       },
       P3D_EXPORT_ASSISTANT_2: {

@@ -1,31 +1,31 @@
 import { ethers } from 'ethers';
 import { IP3D_ABI, IPRECOMPILE_ERC20_ABI, IERC20_BASE_ABI, IERC20_WITH_SYMBOL_ABI } from '../contracts/abi';
-import { P3D_PRECOMPILE_ADDRESS, ADDRESS_ZERO, NETWORKS } from '../config/networks';
+import { ADDRESS_ZERO, NETWORKS } from '../config/networks';
+import { 
+  is3DPassPrecompile as is3DPassPrecompileFromThreedpass,
+  isP3DPrecompile as isP3DPrecompileFromThreedpass,
+  getAssetIdFromPrecompile as getAssetIdFromPrecompileFromThreedpass
+} from './threedpass';
 
 /**
  * Detect if a token address is a 3DPass precompile
+ * Uses threedpass.js as source of truth
  * @param {string} address - Token address
+ * @param {Object} settings - Optional settings for custom token lookup
  * @returns {boolean} True if it's a 3DPass precompile
  */
-export const is3DPassPrecompile = (address) => {
-  if (!address) return false;
-  
-  // P3D precompile
-  if (address.toLowerCase() === P3D_PRECOMPILE_ADDRESS.toLowerCase()) {
-    return true;
-  }
-  
-  // Other 3DPass ERC20 precompiles (start with 0xFBFBFBFA)
-  return address.toLowerCase().startsWith('0xfbfbfbfa');
+export const is3DPassPrecompile = (address, settings = null) => {
+  return is3DPassPrecompileFromThreedpass(address, settings);
 };
 
 /**
  * Detect if a token address is specifically the P3D precompile
+ * Uses threedpass.js as source of truth
  * @param {string} address - Token address
  * @returns {boolean} True if it's the P3D precompile
  */
 export const isP3DPrecompile = (address) => {
-  return address && address.toLowerCase() === P3D_PRECOMPILE_ADDRESS.toLowerCase();
+  return isP3DPrecompileFromThreedpass(address);
 };
 
 /**
@@ -52,6 +52,7 @@ export const isNativeToken = (address, networkSymbol) => {
 
 /**
  * Get the appropriate ABI for a token based on its address
+ * Uses threedpass.js for 3DPass tokens
  * @param {string} address - Token address
  * @returns {Array} Contract ABI
  */
@@ -67,12 +68,14 @@ export const getTokenABI = (address) => {
 
 /**
  * Fetch token information from the blockchain
+ * Uses threedpass.js for 3DPass precompile detection
  * @param {ethers.providers.Provider} provider - Web3 provider
  * @param {string} address - Token address
  * @param {string} networkSymbol - Network symbol (e.g., 'THREEDPASS', 'ETHEREUM')
+ * @param {Object} settings - Optional settings for custom token lookup
  * @returns {Promise<Object>} Token information object
  */
-export const fetchTokenInfo = async (provider, address, networkSymbol) => {
+export const fetchTokenInfo = async (provider, address, networkSymbol, settings = null) => {
   try {
     if (!provider || !address) {
       throw new Error('Provider and address are required');
@@ -117,19 +120,20 @@ export const fetchTokenInfo = async (provider, address, networkSymbol) => {
           isPrecompile = true;
           isNative = true;
           standard = 'Native';
-        } else if (is3DPassPrecompile(address)) {
+        } else if (is3DPassPrecompile(address, settings)) {
           isPrecompile = true;
           standard = 'ERC20';
-          // For 3DPass precompiles, we can try to extract asset ID from the address
-          // The asset ID is encoded in all bytes after the 0xfBFBfbFA prefix
-          // Format: 0xfBFBfbFA + [Asset ID in hex]
-          try {
-            // Extract all bytes after the 0xfBFBfbFA prefix (8 characters)
-            const assetIdHex = address.slice(10); // Remove "0xfBFBfbFA" (10 chars)
-            // Convert to decimal, handling leading zeros
-            assetId = parseInt(assetIdHex, 16);
-          } catch (error) {
-            console.warn('Could not extract asset ID from precompile address:', error);
+          // For 3DPass precompiles, use threedpass.js to get asset ID (checks config first)
+          assetId = getAssetIdFromPrecompileFromThreedpass(address, settings);
+          
+          // Fallback: if config doesn't have asset ID, try to extract from address hex
+          if (!assetId && address.toLowerCase().startsWith('0xfbfbfbfa')) {
+            try {
+              const assetIdHex = address.slice(10); // Remove "0xfBFBfbFA" (10 chars)
+              assetId = parseInt(assetIdHex, 16);
+            } catch (error) {
+              console.warn('Could not extract asset ID from precompile address:', error);
+            }
           }
         }
       } else {
@@ -182,33 +186,40 @@ export const validateTokenAddress = (address) => {
 
 /**
  * Get asset ID from 3DPass precompile address
+ * Uses threedpass.js as source of truth (checks config first, falls back to hex extraction)
  * @param {string} address - Precompile address
+ * @param {Object} settings - Optional settings for custom token lookup
  * @returns {number|null} Asset ID or null if not found
  */
-export const getAssetIdFromPrecompile = (address) => {
-  if (!is3DPassPrecompile(address) || isP3DPrecompile(address)) {
-    return null;
+export const getAssetIdFromPrecompile = (address, settings = null) => {
+  // Use threedpass.js function first (checks config)
+  let assetId = getAssetIdFromPrecompileFromThreedpass(address, settings);
+  
+  // Fallback: if config doesn't have it and it's a precompile, try to extract from hex
+  if (!assetId && is3DPassPrecompile(address, settings) && !isP3DPrecompile(address)) {
+    if (address.toLowerCase().startsWith('0xfbfbfbfa')) {
+      try {
+        const assetIdHex = address.slice(10); // Remove "0xfBFBfbFA" (10 chars)
+        assetId = parseInt(assetIdHex, 16);
+      } catch (error) {
+        console.warn('Could not extract asset ID from precompile address:', error);
+      }
+    }
   }
   
-  try {
-    // Extract all bytes after the 0xfBFBfbFA prefix
-    // Format: 0xfBFBfbFA + [Asset ID in hex]
-    const assetIdHex = address.slice(10); // Remove "0xfBFBfbFA" (10 chars)
-    return parseInt(assetIdHex, 16);
-  } catch (error) {
-    console.warn('Could not extract asset ID from precompile address:', error);
-    return null;
-  }
+  return assetId;
 };
 
 /**
  * Auto-detect token type and fetch information
+ * Uses threedpass.js for 3DPass precompile detection
  * @param {ethers.providers.Provider} provider - Web3 provider
  * @param {string} address - Token address
  * @param {string} networkSymbol - Network symbol
+ * @param {Object} settings - Optional settings for custom token lookup
  * @returns {Promise<Object>} Auto-detected token configuration
  */
-export const autoDetectToken = async (provider, address, networkSymbol) => {
+export const autoDetectToken = async (provider, address, networkSymbol, settings = null) => {
   try {
     // Validate address format
     if (!validateTokenAddress(address)) {
@@ -216,7 +227,7 @@ export const autoDetectToken = async (provider, address, networkSymbol) => {
     }
 
     // Fetch token information from blockchain
-    const tokenInfo = await fetchTokenInfo(provider, address, networkSymbol);
+    const tokenInfo = await fetchTokenInfo(provider, address, networkSymbol, settings);
 
     return {
       success: true,

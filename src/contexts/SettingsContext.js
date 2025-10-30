@@ -1,5 +1,9 @@
 import React, { createContext, useContext, useState, useEffect, useCallback } from 'react';
 import { NETWORKS, getBridgeInstances, P3D_PRECOMPILE_ADDRESS } from '../config/networks';
+import { 
+  is3DPassPrecompile as is3DPassPrecompileFromThreedpass,
+  isP3DPrecompile as isP3DPrecompileFromThreedpass
+} from '../utils/threedpass';
 
 const SettingsContext = createContext();
 
@@ -630,31 +634,15 @@ export const SettingsProvider = ({ children }) => {
   }, []);
 
   // Check if a token is a 3DPass precompile
+  // Uses threedpass.js as source of truth
   const is3DPassPrecompile = useCallback((tokenAddress) => {
-    if (!tokenAddress) return false;
-    
-    // P3D precompile
-    if (tokenAddress.toLowerCase() === P3D_PRECOMPILE_ADDRESS.toLowerCase()) {
-      return true;
-    }
-    
-    // Check if it's a known token from configuration
-    const network = getNetworkWithSettings('THREEDPASS');
-    if (network && network.tokens) {
-      for (const [, token] of Object.entries(network.tokens)) {
-        if (token.address.toLowerCase() === tokenAddress.toLowerCase()) {
-          return true;
-        }
-      }
-    }
-    
-    // Other 3DPass ERC20 precompiles (start with 0xFBFBFBFA)
-    return tokenAddress.toLowerCase().startsWith('0xfbfbfbfa');
-  }, [getNetworkWithSettings]);
+    return is3DPassPrecompileFromThreedpass(tokenAddress, settings);
+  }, [settings]);
 
   // Check if a token is the P3D precompile specifically
+  // Uses threedpass.js as source of truth
   const isP3DPrecompile = useCallback((tokenAddress) => {
-    return tokenAddress && tokenAddress.toLowerCase() === P3D_PRECOMPILE_ADDRESS.toLowerCase();
+    return isP3DPrecompileFromThreedpass(tokenAddress);
   }, []);
 
   // Get 3DPass token by address

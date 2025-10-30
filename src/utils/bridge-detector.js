@@ -6,7 +6,8 @@ import {
   IMPORT_WRAPPER_ABI
 } from '../contracts/abi';
 import { createBridgeContract } from './contract-factory';
-import { autoDetectToken } from './token-detector';
+import { autoDetectToken, is3DPassPrecompile } from './token-detector';
+import { get3DPassTokenByAddress } from './threedpass';
 import { NETWORKS, ADDRESS_ZERO } from '../config/networks';
 import { getProvider } from './provider-manager';
 import { getNetworkWithSettings } from './settings';
@@ -296,20 +297,37 @@ export const getExportBridgeData = async (provider, bridgeAddress, networkSymbol
     let stakeTokenSymbol = null;
     
     // Discover foreign token symbol from foreign network
+    // Use original foreignNetwork for token discovery (not normalized) since config uses original names
     if (foreignAsset && foreignAsset !== ADDRESS_ZERO) {
       try {
-        console.log(`🔍 Discovering foreign token symbol for ${foreignAsset} on ${normalizedForeignNetwork} network`);
+        // Check if this is a 3DPass precompile address (starts with 0xfBFBfbFA)
+        // If so, we need to use the 3DPass network to fetch the symbol, not the foreign network
+        let targetNetwork = foreignNetwork; // Use original network name for token discovery
+        if (is3DPassPrecompile(foreignAsset)) {
+          console.log(`🔍 Detected 3DPass precompile address: ${foreignAsset}`);
+          targetNetwork = '3DPass';
+          console.log(`🔍 Using 3DPass network to discover token symbol for precompile`);
+        } else {
+          // Normalize network name for token discovery only if needed
+          // BSC config uses 'BSC' as name, so keep it as 'BSC' for discovery
+          // 3dpass needs to be normalized to '3DPass' for discovery
+          if (targetNetwork === '3dpass') {
+            targetNetwork = '3DPass';
+          }
+        }
+        
+        console.log(`🔍 Discovering foreign token symbol for ${foreignAsset} on ${targetNetwork} network`);
         
         // Validate address format first
         if (!ethers.utils.isAddress(foreignAsset)) {
           console.warn(`⚠️ Invalid foreign asset address format: ${foreignAsset}`);
           foreignTokenSymbol = 'Invalid Address';
         } else {
-          foreignTokenSymbol = await discoverTokenSymbol(foreignAsset, normalizedForeignNetwork, settings);
+          foreignTokenSymbol = await discoverTokenSymbol(foreignAsset, targetNetwork, settings);
           if (foreignTokenSymbol) {
             console.log(`✅ Successfully discovered foreign token symbol: ${foreignTokenSymbol}`);
           } else {
-            console.log(`❌ Failed to discover foreign token symbol for ${foreignAsset} on ${normalizedForeignNetwork}`);
+            console.log(`❌ Failed to discover foreign token symbol for ${foreignAsset} on ${targetNetwork}`);
           }
         }
       } catch (error) {
@@ -323,8 +341,15 @@ export const getExportBridgeData = async (provider, bridgeAddress, networkSymbol
       try {
         const currentNetworkName = NETWORKS[networkSymbol]?.name || '3DPass';
         stakeTokenSymbol = await discoverTokenSymbol(stakeTokenAddress, currentNetworkName, settings);
-    } catch (error) {
+      } catch (error) {
         console.warn('Failed to discover stake token symbol:', error);
+      }
+    } else if (stakeTokenAddress === ADDRESS_ZERO) {
+      // Zero address means native token - get symbol from settings/config
+      console.log(`🔍 Stake token address is zero address (native token) for network ${networkSymbol}`);
+      stakeTokenSymbol = getNativeTokenSymbol(networkSymbol, settings);
+      if (!stakeTokenSymbol) {
+        console.warn(`⚠️ Native token symbol not found for network ${networkSymbol}`);
       }
     }
 
@@ -397,13 +422,20 @@ export const getImportBridgeData = async (provider, bridgeAddress, networkSymbol
       } catch (error) {
         console.warn('Failed to discover stake token symbol:', error);
       }
+    } else if (stakeTokenAddress === ADDRESS_ZERO) {
+      // Zero address means native token - get symbol from settings/config
+      console.log(`🔍 Stake token address is zero address (native token) for network ${networkSymbol}`);
+      stakeTokenSymbol = getNativeTokenSymbol(networkSymbol, settings);
+      if (!stakeTokenSymbol) {
+        console.warn(`⚠️ Native token symbol not found for network ${networkSymbol}`);
+      }
     }
 
     // Convert network names to match config names
     let normalizedHomeNetwork = homeNetwork;
     if (homeNetwork === 'BSC') {
       normalizedHomeNetwork = 'Binance Smart Chain';
-    } else if (homeNetwork === '3dpass') {
+    } else if (homeNetwork === '3dpass' || homeNetwork === '3DPass') {
       normalizedHomeNetwork = '3DPass';
     }
 
@@ -423,6 +455,43 @@ export const getImportBridgeData = async (provider, bridgeAddress, networkSymbol
 };
 
 /**
+ * Get native token symbol for a network from settings or config
+ * @param {string} networkKey - Network key (e.g., 'ETHEREUM', 'THREEDPASS')
+ * @param {Object} settings - Current settings
+ * @returns {string|null} Native token symbol or null if not found
+ */
+export const getNativeTokenSymbol = (networkKey, settings) => {
+  try {
+    // Check in settings first (priority)
+    if (settings && settings[networkKey] && settings[networkKey].tokens) {
+      for (const [tokenSymbol, tokenConfig] of Object.entries(settings[networkKey].tokens)) {
+        if (tokenConfig.isNative === true) {
+          console.log(`✅ Found native token symbol in settings: ${tokenSymbol}`);
+          return tokenSymbol;
+        }
+      }
+    }
+    
+    // Check in default config
+    const networkConfig = NETWORKS[networkKey];
+    if (networkConfig && networkConfig.tokens) {
+      for (const [tokenSymbol, tokenConfig] of Object.entries(networkConfig.tokens)) {
+        if (tokenConfig.isNative === true) {
+          console.log(`✅ Found native token symbol in config: ${tokenSymbol}`);
+          return tokenSymbol;
+        }
+      }
+    }
+    
+    console.log(`❌ Native token not found for network ${networkKey}`);
+    return null;
+  } catch (error) {
+    console.error(`❌ Error getting native token symbol:`, error);
+    return null;
+  }
+};
+
+/**
  * Discover token symbol from network settings or blockchain
  * @param {string} tokenAddress - Token contract address
  * @param {string} networkName - Network name (e.g., 'Ethereum', '3DPass')
@@ -434,11 +503,21 @@ export const discoverTokenSymbol = async (tokenAddress, networkName, settings) =
     console.log(`🔍 Discovering token symbol for ${tokenAddress} on ${networkName}`);
     
     // Step 1: Look up token in settings for the network
-    let networkKey = Object.keys(NETWORKS).find(key => NETWORKS[key].name === networkName);
+    // Normalize network name for case-insensitive lookup
+    let normalizedNetworkName = networkName?.trim();
+    
+    // Handle common network name variations
+    if (normalizedNetworkName?.toLowerCase() === 'binance smart chain') {
+      normalizedNetworkName = 'BSC';
+    }
+    
+    let networkKey = Object.keys(NETWORKS).find(key => 
+      NETWORKS[key].name?.toLowerCase() === normalizedNetworkName?.toLowerCase()
+    );
     
     // If not found by name, try to find by key directly (for cases like 'BSC' vs 'BNB Smart Chain')
     if (!networkKey) {
-      networkKey = Object.keys(NETWORKS).find(key => key === networkName);
+      networkKey = Object.keys(NETWORKS).find(key => key.toLowerCase() === normalizedNetworkName?.toLowerCase());
     }
     
     if (!networkKey) {
@@ -448,6 +527,21 @@ export const discoverTokenSymbol = async (tokenAddress, networkName, settings) =
     }
     
     console.log(`✅ Found network key: ${networkKey} for network: ${networkName}`);
+    
+    // Special handling for 3DPass precompile addresses
+    // Check if this is a 3DPass precompile that should be looked up from 3DPass network config
+    if (networkKey === 'THREEDPASS' && is3DPassPrecompile(tokenAddress, settings)) {
+      console.log(`🔍 Detected 3DPass precompile address: ${tokenAddress}`);
+      
+      // Try to get token info from threedpass.js helper functions
+      const tokenConfig = get3DPassTokenByAddress(tokenAddress, settings);
+      if (tokenConfig && tokenConfig.symbol) {
+        console.log(`✅ Found 3DPass precompile symbol in config: ${tokenConfig.symbol}`);
+        return tokenConfig.symbol;
+      } else {
+        console.log(`⚠️ 3DPass precompile address found but token not in config. Will try blockchain detection.`);
+      }
+    }
     
     // Check if token exists in settings first
     if (settings && settings[networkKey] && settings[networkKey].tokens) {
@@ -504,7 +598,7 @@ export const discoverTokenSymbol = async (tokenAddress, networkName, settings) =
         return null;
       }
       
-      const result = await autoDetectToken(networkProvider, tokenAddress, networkKey);
+      const result = await autoDetectToken(networkProvider, tokenAddress, networkKey, settings);
       
       if (result.success) {
         console.log(`✅ Detected token symbol from blockchain: ${result.tokenInfo.symbol}`);
@@ -530,10 +624,42 @@ export const discoverTokenSymbol = async (tokenAddress, networkName, settings) =
         return result.tokenInfo.symbol;
       } else {
         console.log(`❌ Failed to detect token from blockchain: ${result.message}`);
+        
+        // For 3DPass precompiles, if blockchain detection fails, try to extract asset ID and construct symbol
+        if (networkKey === 'THREEDPASS' && is3DPassPrecompile(tokenAddress, settings)) {
+          console.log(`🔍 Blockchain detection failed for 3DPass precompile, attempting to extract asset ID...`);
+          try {
+            const { getAssetIdFromPrecompile } = await import('./threedpass');
+            const assetId = getAssetIdFromPrecompile(tokenAddress, settings);
+            if (assetId !== null) {
+              // Try to construct symbol from asset ID if we can't fetch it
+              // This is a fallback - ideally the token should be in config
+              console.log(`⚠️ Found asset ID ${assetId} but could not fetch symbol. Token may need to be added to config.`);
+            }
+          } catch (error) {
+            console.warn('Failed to extract asset ID from precompile:', error);
+          }
+        }
+        
         return null;
       }
     } catch (error) {
       console.error(`❌ Error detecting token from blockchain:`, error);
+      
+      // For 3DPass precompiles, if blockchain detection fails, try to extract asset ID and construct symbol
+      if (networkKey === 'THREEDPASS' && is3DPassPrecompile(tokenAddress, settings)) {
+        console.log(`🔍 Blockchain detection error for 3DPass precompile, attempting to extract asset ID...`);
+        try {
+          const { getAssetIdFromPrecompile } = await import('./threedpass');
+          const assetId = getAssetIdFromPrecompile(tokenAddress, settings);
+          if (assetId !== null) {
+            console.log(`⚠️ Found asset ID ${assetId} but could not fetch symbol. Token may need to be added to config.`);
+          }
+        } catch (error) {
+          console.warn('Failed to extract asset ID from precompile:', error);
+        }
+      }
+      
       return null;
     }
     
@@ -636,13 +762,20 @@ export const getImportWrapperBridgeData = async (provider, bridgeAddress, networ
         const p3dSymbol = NETWORKS[networkSymbol]?.tokens?.P3D?.symbol || null;
         stakeTokenSymbol = p3dSymbol;
       }
+    } else if (stakeTokenAddress === ADDRESS_ZERO) {
+      // Zero address means native token - get symbol from settings/config
+      console.log(`🔍 Stake token address is zero address (native token) for network ${networkSymbol}`);
+      stakeTokenSymbol = getNativeTokenSymbol(networkSymbol, settings);
+      if (!stakeTokenSymbol) {
+        console.warn(`⚠️ Native token symbol not found for network ${networkSymbol}`);
+      }
     }
 
     // Convert network names to match config names
     let normalizedHomeNetwork = homeNetwork;
     if (homeNetwork === 'BSC') {
       normalizedHomeNetwork = 'Binance Smart Chain';
-    } else if (homeNetwork === '3dpass') {
+    } else if (homeNetwork === '3dpass' || homeNetwork === '3DPass') {
       normalizedHomeNetwork = '3DPass';
     }
 
