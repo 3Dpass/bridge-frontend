@@ -3,7 +3,7 @@ import { ethers } from 'ethers';
 import { useWeb3 } from '../contexts/Web3Context';
 import { useSettings } from '../contexts/SettingsContext';
 import { useNetworkSwitcher } from '../hooks/useNetworkSwitcher';
-import { NETWORKS, getBridgeDirections, getBridgeAddressesForDirection, getNetworksForDirection } from '../config/networks';
+import { NETWORKS, getBridgeDirections, getBridgeAddressesForDirection } from '../config/networks';
 import { discoverAllBridgeEvents } from '../utils/parallel-bridge-discovery';
 import { aggregateClaimsAndTransfers } from '../utils/aggregate-claims-transfers';
 import { convertActualToDisplay } from '../utils/decimal-converter';
@@ -265,7 +265,6 @@ const ClaimList = ({ activeTab }) => {
   // Load contract settings for all bridges
   const loadContractSettings = useCallback(async () => {
     try {
-      console.log('🔍 Loading contract settings for all bridges...');
       const allBridges = getBridgeInstancesWithSettings();
       const settingsMap = {};
       
@@ -285,12 +284,6 @@ const ClaimList = ({ activeTab }) => {
               min_stake: settings.min_stake,
               large_threshold: settings.large_threshold
             };
-            
-            console.log(`🔍 Loaded settings for bridge ${bridge.address}:`, {
-              min_tx_age: settings.min_tx_age.toString(),
-              counterstake_coef100: settings.counterstake_coef100.toString(),
-              ratio100: settings.ratio100.toString()
-            });
           }
         } catch (error) {
           console.warn(`⚠️ Failed to load settings for bridge ${bridge.address}:`, error);
@@ -298,7 +291,6 @@ const ClaimList = ({ activeTab }) => {
       }
       
       setContractSettings(settingsMap);
-      console.log('🔍 Contract settings loaded for all bridges:', Object.keys(settingsMap));
     } catch (error) {
       console.error('❌ Error loading contract settings:', error);
     }
@@ -361,8 +353,6 @@ const ClaimList = ({ activeTab }) => {
   }, [contractSettings, currentBlock]);
 
   const handleChallenge = useCallback(async (claim) => {
-    console.log('🔘 Challenge button clicked for claim:', getClaimNumber(claim));
-    
     // Check if we need to switch networks first
     const requiredNetwork = getRequiredNetworkForClaim(claim);
     const switchSuccess = await checkAndSwitchNetwork(requiredNetwork);
@@ -824,8 +814,6 @@ const ClaimList = ({ activeTab }) => {
   }, [getTokenDecimals, getStakeTokenDecimals, getTransferTokenSymbol, getStakeTokenSymbol, getTransferTokenAddress, getStakeTokenAddress, formatAmount]);
 
   const handleWithdraw = useCallback(async (claim) => {
-    console.log('🔘 Withdraw button clicked for claim:', getClaimNumber(claim));
-    
     // Check if we need to switch networks first
     const requiredNetwork = getRequiredNetworkForClaim(claim);
     const switchSuccess = await checkAndSwitchNetwork(requiredNetwork);
@@ -841,7 +829,6 @@ const ClaimList = ({ activeTab }) => {
   // Load cached data from browser storage
   const loadCachedData = useCallback(async () => {
     try {
-      console.log('🔍 Loading cached data from browser storage...');
       setCacheStatus(prev => ({ ...prev, isLoadingCached: true }));
       
       const cachedClaims = getCachedClaims();
@@ -850,16 +837,8 @@ const ClaimList = ({ activeTab }) => {
       const cachedSettings = getCachedSettings();
       
       if (cachedClaims || cachedTransfers || cachedAggregated) {
-        console.log('✅ Found cached data:', {
-          claims: cachedClaims?.length || 0,
-          transfers: cachedTransfers?.length || 0,
-          aggregated: !!cachedAggregated
-        });
-        
         // Set cached data immediately, but don't override recently updated claims
         if (cachedClaims) {
-          console.log('🔍 Loading cached claims:', cachedClaims.length, 'claims');
-          
           // Filter out claims that have been recently updated (within last 5 minutes)
           const recentlyUpdatedClaims = new Set();
           Object.keys(claimUpdates.updateTimestamps).forEach(key => {
@@ -875,53 +854,6 @@ const ClaimList = ({ activeTab }) => {
             return !recentlyUpdatedClaims.has(claimKey);
           });
           
-          console.log(`🔍 Filtered cached claims: ${filteredCachedClaims.length} (excluded ${cachedClaims.length - filteredCachedClaims.length} recently updated)`);
-          
-          // Debug: Log first few cached claims to see their structure
-          if (filteredCachedClaims.length > 0) {
-            console.log('🔍 First cached claim structure:', {
-              claimNum: filteredCachedClaims[0].claimNum,
-              actualClaimNum: filteredCachedClaims[0].actualClaimNum,
-              claimNumType: typeof filteredCachedClaims[0].claimNum,
-              actualClaimNumType: typeof filteredCachedClaims[0].actualClaimNum,
-              amount: filteredCachedClaims[0].amount?.toString(),
-              reward: filteredCachedClaims[0].reward?.toString(),
-              yesStake: filteredCachedClaims[0].yesStake?.toString(),
-              noStake: filteredCachedClaims[0].noStake?.toString(),
-              currentOutcome: filteredCachedClaims[0].currentOutcome,
-              finished: filteredCachedClaims[0].finished,
-              withdrawn: filteredCachedClaims[0].withdrawn,
-              txid: filteredCachedClaims[0].txid,
-              blockNumber: filteredCachedClaims[0].blockNumber,
-              claimTransactionHash: filteredCachedClaims[0].claimTransactionHash
-            });
-            
-            // Test getClaimNumber function
-            const testClaimNum = getClaimNumber(filteredCachedClaims[0]);
-            console.log('🔍 getClaimNumber test result:', testClaimNum, 'type:', typeof testClaimNum);
-            
-            // Debug: Check if reward is actually zero or missing
-            console.log('🔍 Reward field analysis:', {
-              reward: filteredCachedClaims[0].reward,
-              rewardType: typeof filteredCachedClaims[0].reward,
-              rewardString: filteredCachedClaims[0].reward?.toString(),
-              isZero: filteredCachedClaims[0].reward === 0 || filteredCachedClaims[0].reward === '0' || filteredCachedClaims[0].reward === '0x0',
-              isNull: filteredCachedClaims[0].reward === null,
-              isUndefined: filteredCachedClaims[0].reward === undefined
-            });
-            
-            // Debug: Check if stakes are actually zero or missing
-            console.log('🔍 Stakes field analysis:', {
-              yesStake: filteredCachedClaims[0].yesStake,
-              yesStakeType: typeof filteredCachedClaims[0].yesStake,
-              yesStakeString: filteredCachedClaims[0].yesStake?.toString(),
-              yesStakeIsZero: filteredCachedClaims[0].yesStake === 0 || filteredCachedClaims[0].yesStake === '0' || filteredCachedClaims[0].yesStake === '0x0',
-              noStake: filteredCachedClaims[0].noStake,
-              noStakeType: typeof filteredCachedClaims[0].noStake,
-              noStakeString: filteredCachedClaims[0].noStake?.toString(),
-              noStakeIsZero: filteredCachedClaims[0].noStake === 0 || filteredCachedClaims[0].noStake === '0' || filteredCachedClaims[0].noStake === '0x0'
-            });
-          }
           setClaims(filteredCachedClaims);
           
           // Try to set currentBlock immediately for cached data
@@ -938,28 +870,21 @@ const ClaimList = ({ activeTab }) => {
                   try {
                     const block = await networkProvider.getBlock('latest');
                     setCurrentBlock(block);
-                    console.log(`🔍 Set current block for cached data from ${networksWithSettings[0].symbol}:`, {
-                      blockNumber: block.number,
-                      timestamp: block.timestamp
-                    });
                   } catch (error) {
-                    console.log(`🔍 Could not get block for cached data:`, error.message);
+                    // Silently fail - currentBlock will be set later
                   }
                 }
               }
             } catch (error) {
-              console.log(`🔍 Error setting current block for cached data:`, error.message);
+              // Silently fail - currentBlock will be set later
             }
           }
         }
         if (cachedAggregated) {
           // We have cached completed transfers, but need to process incomplete data fresh
-          console.log('🔍 Found cached completed transfers:', cachedAggregated.completedTransfers.length);
-          
           // Process all raw data through fresh aggregation to get incomplete/suspicious cases
           let freshAggregated = null;
           if ((cachedClaims && cachedClaims.length > 0) || (cachedTransfers && cachedTransfers.length > 0)) {
-            console.log('🔍 Processing fresh aggregation for incomplete data...');
             try {
               freshAggregated = aggregateClaimsAndTransfers(cachedClaims || [], cachedTransfers || []);
             } catch (error) {
@@ -990,22 +915,18 @@ const ClaimList = ({ activeTab }) => {
             .map(t => t.claim);
           
           if (completedClaims.length > 0) {
-            console.log('🔄 Loading stake information for cached completed claims...');
             loadStakeInformation(completedClaims);
           }
         } else if ((cachedClaims && cachedClaims.length > 0) || (cachedTransfers && cachedTransfers.length > 0)) {
           // If we have claims or transfers but no aggregated data, process them through aggregation
-          console.log('🔍 No cached aggregated data found, processing claims and transfers through aggregation...');
           try {
             const aggregated = aggregateClaimsAndTransfers(cachedClaims || [], cachedTransfers || []);
             setAggregatedData(aggregated);
-            console.log('✅ Successfully processed claims and transfers through aggregation');
           } catch (error) {
             console.error('❌ Error processing transfers through aggregation:', error);
             // Fallback: create a simple aggregated structure with proper token symbols
             // For fallback, we should NOT cache incomplete data
             // Only process through aggregation but don't cache the result
-            console.log('🔍 Processing fallback aggregation (not caching incomplete data)...');
             const fallbackAggregated = aggregateClaimsAndTransfers(cachedClaims || [], cachedTransfers || []);
             setAggregatedData(fallbackAggregated);
             
@@ -1025,10 +946,8 @@ const ClaimList = ({ activeTab }) => {
                 }
               };
               
-              console.log('💾 Caching completed transfers from fallback aggregation:', completedOnlyFallback.completedTransfers.length);
               setCachedData(STORAGE_KEYS.AGGREGATED, completedOnlyFallback);
             } else {
-              console.log('🔍 No completed transfers in fallback aggregation to cache');
               localStorage.removeItem(STORAGE_KEYS.AGGREGATED);
             }
             
@@ -1038,11 +957,8 @@ const ClaimList = ({ activeTab }) => {
               .map(t => t.claim);
             
             if (completedClaims.length > 0) {
-              console.log('🔄 Loading stake information for fallback completed claims...');
               loadStakeInformation(completedClaims);
             }
-            
-            console.log('✅ Created fallback aggregated data structure');
           }
         }
         if (cachedSettings) setContractSettings(cachedSettings);
@@ -1063,7 +979,6 @@ const ClaimList = ({ activeTab }) => {
         
         return true;
       } else {
-        console.log('❌ No cached data found');
         setCacheStatus(prev => ({ ...prev, hasCachedData: false, isShowingCached: false, isLoadingCached: false }));
         return false;
       }
@@ -1082,7 +997,6 @@ const ClaimList = ({ activeTab }) => {
   const loadClaimsAndTransfersParallel = useCallback(async (forceRefresh = false) => {
     // Prevent concurrent executions
     if (loading || isSearching || discoveryState.isDiscovering) {
-      console.log('🔍 loadClaimsAndTransfersParallel: Already loading, skipping duplicate call');
       return;
     }
 
@@ -1095,16 +1009,12 @@ const ClaimList = ({ activeTab }) => {
       }
     }
 
-    console.log('🚀 Starting parallel bridge discovery...');
     setDiscoveryState(prev => ({ ...prev, isDiscovering: true }));
-      setLoading(true);
+    setLoading(true);
     
     try {
       // Step 1: Get bridge configurations for the selected direction
       const bridgeAddresses = bridgeDirection === 'all' ? null : getBridgeAddressesForDirection(bridgeDirection);
-      const targetNetworks = bridgeDirection === 'all' ? null : getNetworksForDirection(bridgeDirection);
-      
-      console.log('🔍 Bridge direction filter:', bridgeDirection, 'Bridge addresses:', bridgeAddresses, 'Target networks:', targetNetworks);
 
       // Get all bridge instances
       const allBridges = getBridgeInstancesWithSettings();
@@ -1145,16 +1055,12 @@ const ClaimList = ({ activeTab }) => {
           };
         });
       
-      console.log(`🔍 Found ${bridgeConfigs.length} bridges to discover`);
-      
       // Step 2: Discover all bridge events in parallel
       const discoveryResults = await discoverAllBridgeEvents(bridgeConfigs, {
         limit: 50,
         includeClaimData: false, // We'll load claim data separately
         rangeHours: rangeHours // Use the selected range
       });
-      
-      console.log('✅ Parallel discovery completed:', discoveryResults.stats);
       
       // Step 3: Update discovery state with raw results
       setDiscoveryState(prev => ({
@@ -1172,8 +1078,6 @@ const ClaimList = ({ activeTab }) => {
       }));
       
       // Step 4: Aggregate transfers and claims using the aggregation utility
-      console.log('🔄 Aggregating transfers and claims...');
-      
       const aggregated = aggregateClaimsAndTransfers(discoveryResults.allClaims, discoveryResults.allTransfers);
       
       // Update state with aggregated results
@@ -1188,8 +1092,6 @@ const ClaimList = ({ activeTab }) => {
           claimDataLoaded: aggregated.completedTransfers.length
         }
       }));
-      
-      console.log('✅ Aggregation completed');
       
       // Step 5: Set aggregated data structure
       const newAggregatedData = {
@@ -1223,10 +1125,8 @@ const ClaimList = ({ activeTab }) => {
           }
         };
         
-        console.log('💾 Caching only completed transfers as aggregated data:', completedOnlyAggregated.completedTransfers.length);
         setCachedData(STORAGE_KEYS.AGGREGATED, completedOnlyAggregated);
       } else {
-        console.log('🔍 No completed transfers to cache as aggregated data');
         // Clear any existing aggregated cache if no completed transfers
         localStorage.removeItem(STORAGE_KEYS.AGGREGATED);
       }
@@ -1237,11 +1137,8 @@ const ClaimList = ({ activeTab }) => {
         .map(t => t.claim);
       
       if (completedClaims.length > 0) {
-        console.log('🔄 Loading stake information for completed claims...');
         loadStakeInformation(completedClaims);
       }
-      
-      console.log('✅ Parallel discovery and aggregation completed');
 
     } catch (error) {
       console.error('❌ Parallel discovery failed:', error);
@@ -1256,7 +1153,6 @@ const ClaimList = ({ activeTab }) => {
 
   // Cache management functions
   const clearCache = useCallback(() => {
-    console.log('🗑️ Clearing browser cache...');
     clearCachedData();
     
     // Clear displayed data from the screen
@@ -1276,7 +1172,6 @@ const ClaimList = ({ activeTab }) => {
 
 
   const searchSelectedDirection = useCallback(async () => {
-    console.log('🔍 Starting parallel discovery for direction:', bridgeDirection);
     setIsSearching(true);
     setCacheStatus(prev => ({ ...prev, isRefreshing: true }));
     
@@ -1289,7 +1184,7 @@ const ClaimList = ({ activeTab }) => {
       setIsSearching(false);
       setCacheStatus(prev => ({ ...prev, isRefreshing: false }));
     }
-  }, [bridgeDirection, loadClaimsAndTransfersParallel]);
+  }, [loadClaimsAndTransfersParallel]);
 
   // Check if a claim was recently updated
   const isClaimRecentlyUpdated = useCallback((claim) => {
@@ -1306,7 +1201,6 @@ const ClaimList = ({ activeTab }) => {
 
   // Callback for when a claim is submitted successfully
   const handleClaimSubmitted = useCallback((claimData) => {
-    console.log('🔍 Claim submitted successfully, refreshing claim list:', claimData);
     // Refresh the claim list to show the new claim
     loadClaimsAndTransfersParallel();
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -1314,7 +1208,6 @@ const ClaimList = ({ activeTab }) => {
 
   // Callback for when a claim is withdrawn successfully
   const handleWithdrawSuccess = useCallback((claimNum) => {
-    console.log(`🔍 Withdraw successful for claim #${claimNum}, clearing cache and refreshing claims...`);
     setShowWithdrawModal(false);
     setSelectedClaim(null);
     // Clear cache to ensure fresh data is fetched
@@ -1326,7 +1219,6 @@ const ClaimList = ({ activeTab }) => {
 
   // Callback for when a claim is challenged successfully
   const handleChallengeSuccess = useCallback((claimNum) => {
-    console.log(`🔍 Challenge successful for claim #${claimNum}, clearing cache and refreshing claims...`);
     setShowChallengeModal(false);
     setSelectedClaim(null);
     // Clear cache to ensure fresh data is fetched
@@ -1354,23 +1246,6 @@ const ClaimList = ({ activeTab }) => {
         updatingClaims: new Set([...prev.updatingClaims, claimKey])
       }));
       
-      console.log(`🔄 Manually updating claim ${claimNum}...`);
-      console.log(`🔍 Original claim data:`, {
-        amount: claim.amount?.toString(),
-        reward: claim.reward?.toString(),
-        yesStake: claim.yesStake?.toString(),
-        noStake: claim.noStake?.toString(),
-        currentOutcome: claim.currentOutcome,
-        finished: claim.finished,
-        withdrawn: claim.withdrawn
-      });
-      console.log(`🔍 Claim details:`, {
-        bridgeAddress: claim.bridgeAddress,
-        bridgeType: claim.bridgeType,
-        networkKey: claim.networkKey,
-        claimNum: claimNum
-      });
-      
       // Get the network configuration for this claim
       const networkConfig = getNetworkWithSettings(claim.networkKey);
       if (!networkConfig?.rpcUrl) {
@@ -1396,12 +1271,6 @@ const ClaimList = ({ activeTab }) => {
       const provider = new ethers.providers.JsonRpcProvider(networkConfig.rpcUrl);
       const block = await provider.getBlock('latest');
       setCurrentBlock(block);
-      console.log(`🔍 Updated current block for claim refresh:`, {
-        blockNumber: block.number,
-        timestamp: block.timestamp
-      });
-
-      console.log(`🔍 Raw claim data from contract:`, claimData);
 
       // Extract claim data fields
       // Based on the ABI: tuple(uint amount, address recipient_address, uint32 txts, uint32 ts, address claimant_address, uint32 expiry_ts, uint16 period_number, uint8 current_outcome, bool is_large, bool withdrawn, bool finished, string sender_address, string data, uint yes_stake, uint no_stake)
@@ -1422,27 +1291,6 @@ const ClaimList = ({ activeTab }) => {
         yes_stake: yesStake,
         no_stake: noStake
       } = claimData;
-
-      console.log(`🔍 Destructured claim data:`, {
-        amount: amount?.toString(),
-        recipientAddress,
-        txts,
-        ts,
-        claimantAddress,
-        expiryTs,
-        periodNumber,
-        currentOutcome,
-        isLarge,
-        withdrawn,
-        finished,
-        senderAddress,
-        data,
-        yesStake: yesStake?.toString(),
-        noStake: noStake?.toString(),
-        yesStakeType: typeof yesStake,
-        noStakeType: typeof noStake,
-        periodNumberType: typeof periodNumber
-      });
 
       // Create updated claim object
       // Note: reward, txid, blockNumber, and claimTransactionHash come from NewClaim events, not from getClaim

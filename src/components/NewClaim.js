@@ -171,7 +171,19 @@ const checkThirdPartyClaim = (account, recipientAddress, reward) => {
   
   // Third-party claim condition: signer != recipient AND reward > 0
   const isDifferentRecipient = account.toLowerCase() !== recipientAddress.toLowerCase();
-  const hasReward = parseFloat(reward || '0') > 0;
+  
+  // Handle reward in wei format - normalize it first
+  let hasReward = false;
+  if (reward) {
+    try {
+      // Normalize reward to wei string and check if it's greater than 0
+      const rewardWei = toWeiString(reward);
+      hasReward = ethers.BigNumber.from(rewardWei || '0').gt(0);
+    } catch (error) {
+      // Fallback to parseFloat if BigNumber conversion fails
+      hasReward = parseFloat(reward || '0') > 0;
+    }
+  }
   
   return isDifferentRecipient && hasReward;
 };
@@ -374,11 +386,35 @@ const NewClaim = ({ isOpen, onClose, selectedToken = null, selectedTransfer = nu
     recipientAddress: false
   });
 
+  // Reset state when dialog closes
+  useEffect(() => {
+    if (!isOpen) {
+      // Reset all state when dialog closes
+      setNeedsApproval(true);
+      setAllowance('0');
+      setSubmitting(false);
+      setUseMaxAllowance(false);
+      setIsRevoking(false);
+      setContractSettings(null);
+      setTokenMetadata(null);
+      setTokenBalance('0');
+      setStakeTokenBalance('0');
+      setRequiredStake('0');
+      setSelectedBridge(null);
+      setAvailableTokens([]);
+      setIsThirdPartyClaim(false);
+      setShowTransactionDetails(false);
+    }
+  }, [isOpen]);
+
   // Initialize form when component mounts or token changes
   useEffect(() => {
     if (isOpen) {
       // Add a small delay to ensure network switch has completed
       const timer = setTimeout(async () => {
+        // Declare matchedBridge at function scope so it's accessible throughout
+        let matchedBridge = null;
+        
         if (selectedTransfer) {
           // Pre-fill form with transfer data
           console.log('🔍 Pre-filling form with transfer data:', selectedTransfer);
@@ -404,7 +440,6 @@ const NewClaim = ({ isOpen, onClose, selectedToken = null, selectedTransfer = nu
           const txtsValue = await calculateTxts();
           // Determine the correct token address by looking up bridges in settings based on transfer type
           let tokenAddress = '';
-          let matchedBridge = null;
 
           try {
             const allBridges = getBridgeInstancesWithSettings();
@@ -547,7 +582,12 @@ const NewClaim = ({ isOpen, onClose, selectedToken = null, selectedTransfer = nu
           }
         }
         // Reset approval state when form opens or token changes
-        setNeedsApproval(true);
+        // But skip this if matchedBridge (from selectedTransfer) is a native token
+        // The native token effect will handle setting needsApproval to false when selectedBridge is set
+        // Check matchedBridge if it was set in this timeout, otherwise reset to true
+        if (!matchedBridge || matchedBridge.stakeTokenAddress !== ethers.constants.AddressZero) {
+          setNeedsApproval(true);
+        }
         
         // Reset custom controls when dialog opens
         setCustomControls({
@@ -1317,7 +1357,17 @@ const NewClaim = ({ isOpen, onClose, selectedToken = null, selectedTransfer = nu
 
   // Check allowance
   const checkAllowance = useCallback(async (stakeAmount = requiredStake) => {
-    if (!selectedBridge || !formData.amount || !provider || !account) return;
+    if (!selectedBridge || !provider || !account) return;
+    
+    // For native tokens (zero address), no allowance check needed - exit early
+    if (selectedBridge.stakeTokenAddress === ethers.constants.AddressZero) {
+      setAllowance('N/A (Native Token)');
+      setNeedsApproval(false);
+      return;
+    }
+    
+    // For non-native tokens, require amount to be set
+    if (!formData.amount) return;
 
     try {
       let currentAllowance;
@@ -1334,40 +1384,20 @@ const NewClaim = ({ isOpen, onClose, selectedToken = null, selectedTransfer = nu
         stakeTokenDecimals = getStakeTokenDecimals(network?.id, selectedBridge.stakeTokenAddress);
       } else {
         // For other networks (like Ethereum), use standard ERC20 allowance
-        // Check if this is a native token (zero address) - for native tokens, no allowance is needed
-        if (selectedBridge.stakeTokenAddress === ethers.constants.AddressZero) {
-          // For native ETH, no allowance check needed - user just needs sufficient balance
-          currentAllowance = "0"; // No allowance concept for native tokens
-          stakeTokenDecimals = getStakeTokenDecimals(network?.id, selectedBridge.stakeTokenAddress); // Use decimals from settings
-        } else {
-          // For ERC20 tokens, check allowance
-          const tokenContract = new ethers.Contract(selectedBridge.stakeTokenAddress, ERC20_ABI, provider);
-          
-          const [allowanceWei, decimals] = await Promise.all([
-            tokenContract.allowance(account, selectedBridge.address),
-            tokenContract.decimals()
-          ]);
-          
-          currentAllowance = ethers.utils.formatUnits(allowanceWei, decimals);
-          stakeTokenDecimals = decimals;
-        }
+        // For ERC20 tokens, check allowance
+        const tokenContract = new ethers.Contract(selectedBridge.stakeTokenAddress, ERC20_ABI, provider);
+        
+        const [allowanceWei, decimals] = await Promise.all([
+          tokenContract.allowance(account, selectedBridge.address),
+          tokenContract.decimals()
+        ]);
+        
+        currentAllowance = ethers.utils.formatUnits(allowanceWei, decimals);
+        stakeTokenDecimals = decimals;
       }
 
       // Parse the required stake with correct decimals
       const stakeWei = ethers.utils.parseUnits(stakeAmount, stakeTokenDecimals);
-      
-      // For native tokens (zero address), no allowance concept exists
-      if (selectedBridge.stakeTokenAddress === ethers.constants.AddressZero) {
-        console.log('🔍 Native token (ETH) - no allowance needed:', {
-          stakeAmount,
-          stakeWei: stakeWei.toString(),
-          stakeTokenDecimals
-        });
-        
-        setAllowance('N/A (Native Token)');
-        setNeedsApproval(false);
-        return;
-      }
       
       const allowanceWei = ethers.utils.parseUnits(currentAllowance, stakeTokenDecimals);
       
@@ -1408,7 +1438,10 @@ const NewClaim = ({ isOpen, onClose, selectedToken = null, selectedTransfer = nu
     } catch (error) {
       console.error('Error checking stake token allowance:', error);
       setAllowance('0');
-      setNeedsApproval(true);
+      // Don't reset needsApproval to true for native tokens (they don't need approval)
+      if (!selectedBridge || selectedBridge.stakeTokenAddress !== ethers.constants.AddressZero) {
+        setNeedsApproval(true);
+      }
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedBridge, formData.amount, provider, account, network?.id]);
@@ -1448,7 +1481,7 @@ const NewClaim = ({ isOpen, onClose, selectedToken = null, selectedTransfer = nu
 
   // Load token metadata and balance when token address changes
   useEffect(() => {
-    if (formData.tokenAddress && provider && account) {
+    if (isOpen && formData.tokenAddress && provider && account) {
       console.log('🔍 Token address changed, loading metadata and determining bridge:', {
         tokenAddress: formData.tokenAddress,
         availableTokensCount: availableTokens.length,
@@ -1458,53 +1491,73 @@ const NewClaim = ({ isOpen, onClose, selectedToken = null, selectedTransfer = nu
       loadTokenBalance();
       determineBridge();
     }
-  }, [formData.tokenAddress, provider, account, loadTokenMetadata, loadTokenBalance, determineBridge, availableTokens]);
+  }, [isOpen, formData.tokenAddress, provider, account, loadTokenMetadata, loadTokenBalance, determineBridge, availableTokens]);
 
   // Load required stake when bridge is determined (even without amount)
   useEffect(() => {
-    if (selectedBridge && provider) {
+    if (isOpen && selectedBridge && provider) {
       // Load stake with a default amount of 1 if no amount is set
       const amountToUse = formData.amount || '1';
       loadRequiredStakeWithAmount(amountToUse);
     }
-  }, [selectedBridge, provider, loadRequiredStakeWithAmount, formData.amount]);
+  }, [isOpen, selectedBridge, provider, loadRequiredStakeWithAmount, formData.amount]);
 
   // Load contract settings when bridge is selected
   useEffect(() => {
-    if (selectedBridge && provider) {
+    if (isOpen && selectedBridge && provider) {
       loadContractSettings();
     }
-  }, [selectedBridge, provider, loadContractSettings]);
+  }, [isOpen, selectedBridge, provider, loadContractSettings]);
 
   // Load stake token balance when bridge is selected
   useEffect(() => {
-    if (selectedBridge && provider && account) {
+    if (isOpen && selectedBridge && provider && account) {
       loadStakeTokenBalance();
     }
-  }, [selectedBridge, provider, account, loadStakeTokenBalance]);
+  }, [isOpen, selectedBridge, provider, account, loadStakeTokenBalance]);
 
 
-  // Check allowance when bridge and amount change
+  // Set needsApproval to false for native tokens (AddressZero stake token) immediately
+  // This effect must run whenever selectedBridge changes to ensure native tokens always have needsApproval=false
+  // Use a separate effect with higher priority to ensure it runs after other effects that might reset needsApproval
   useEffect(() => {
-    if (selectedBridge && formData.amount && provider && account) {
-      checkAllowance();
+    if (isOpen && selectedBridge && selectedBridge.stakeTokenAddress === ethers.constants.AddressZero) {
+      // Native tokens don't need approval - set immediately and keep it false
+      // Use setTimeout to ensure this runs after any synchronous state updates
+      const timer = setTimeout(() => {
+        setNeedsApproval(false);
+        setAllowance('N/A (Native Token)');
+      }, 0);
+      return () => clearTimeout(timer);
     }
-  }, [selectedBridge, formData.amount, provider, account, checkAllowance, isOpen]);
+  }, [isOpen, selectedBridge]);
+
+  // Check allowance when bridge and amount change (only when dialog is open)
+  useEffect(() => {
+    if (isOpen && selectedBridge && formData.amount && provider && account) {
+      // Skip allowance check for native tokens (already handled above)
+      if (selectedBridge.stakeTokenAddress !== ethers.constants.AddressZero) {
+        checkAllowance();
+      }
+    }
+  }, [isOpen, selectedBridge, formData.amount, provider, account, checkAllowance]);
 
   // Check if this is a third-party claim
   useEffect(() => {
-    const isThirdParty = checkThirdPartyClaim(account, formData.recipientAddress, formData.reward);
-    setIsThirdPartyClaim(isThirdParty);
-    
-    if (isThirdParty) {
-      console.log('🔍 Third-party claim detected:', {
-        account: account,
-        recipientAddress: formData.recipientAddress,
-        reward: formData.reward,
-        isThirdParty: isThirdParty
-      });
+    if (isOpen) {
+      const isThirdParty = checkThirdPartyClaim(account, formData.recipientAddress, formData.reward);
+      setIsThirdPartyClaim(isThirdParty);
+      
+      if (isThirdParty) {
+        console.log('🔍 Third-party claim detected:', {
+          account: account,
+          recipientAddress: formData.recipientAddress,
+          reward: formData.reward,
+          isThirdParty: isThirdParty
+        });
+      }
     }
-  }, [account, formData.recipientAddress, formData.reward]);
+  }, [isOpen, account, formData.recipientAddress, formData.reward]);
 
   // Auto-select token when selectedTransfer is provided and availableTokens are loaded
   useEffect(() => {
@@ -3043,10 +3096,10 @@ const NewClaim = ({ isOpen, onClose, selectedToken = null, selectedTransfer = nu
           onClick={(e) => e.stopPropagation()}
         >
           {/* Header */}
-          <div className="flex items-center justify-between p-4 border-b border-secondary-800">
-            <div className="flex items-center gap-3">
-              <ExternalLink className="w-6 h-6 text-primary-500" />
-              <h2 className="text-xl font-bold text-white">
+          <div className="flex items-center justify-between p-3 border-b border-secondary-800">
+            <div className="flex items-center gap-2">
+              <ExternalLink className="w-5 h-5 text-primary-500" />
+              <h2 className="text-lg font-bold text-white">
                 {selectedTransfer ? 'Create Claim from Transfer' : 'Submit New Claim'}
               </h2>
             </div>
@@ -3059,15 +3112,15 @@ const NewClaim = ({ isOpen, onClose, selectedToken = null, selectedTransfer = nu
           </div>
 
           {/* Content */}
-          <div className="p-4 sm:p-6 overflow-y-auto max-h-[calc(96vh-8rem)] sm:max-h-[calc(96vh-10rem)]">
-            <div className="space-y-6">
+          <div className="p-3 sm:p-4 overflow-y-auto max-h-[calc(96vh-8rem)] sm:max-h-[calc(96vh-10rem)]">
+            <div className="space-y-4">
 
-              <form onSubmit={handleSubmit} className="space-y-6">
+              <form onSubmit={handleSubmit} className="space-y-4">
                 {/* Token Selection */}
                 <div className="card">
-                  <div className="flex items-center gap-3 mb-4">
-                    <Coins className="w-5 h-5 text-primary-500" />
-                    <h3 className="text-lg font-semibold text-white">Token to receive</h3>
+                  <div className="flex items-center gap-2 mb-2">
+                    <Coins className="w-4 h-4 text-primary-500" />
+                    <h3 className="text-base font-semibold text-white">Token to receive</h3>
                   </div>
                   
                   {/* Only show token selection if no transfer is pre-selected */}
@@ -3103,9 +3156,9 @@ const NewClaim = ({ isOpen, onClose, selectedToken = null, selectedTransfer = nu
                   
                   {/* Show pre-selected token info when transfer is provided */}
                   {selectedTransfer && formData.tokenAddress && (
-                    <div className="p-3 bg-primary-800/30 rounded-lg border border-primary-700">
-                      <div className="flex items-center gap-2 mb-2">
-                        <CheckCircle className="w-4 h-4 text-primary-400" />
+                    <div className="p-2 bg-primary-800/30 rounded-lg border border-primary-700">
+                      <div className="flex items-center gap-2 mb-1">
+                        <CheckCircle className="w-3 h-3 text-primary-400" />
                         <span className="text-sm font-medium text-primary-300">Token details</span>
                       </div>
                       <div className="text-sm text-secondary-300">
@@ -3117,11 +3170,11 @@ const NewClaim = ({ isOpen, onClose, selectedToken = null, selectedTransfer = nu
 
                   {/* Token Info */}
                   {tokenMetadata && (
-                    <div className="bg-dark-800 border border-secondary-700 rounded-lg p-4 mt-4">
+                    <div className="bg-dark-800 border border-secondary-700 rounded-lg p-3 mt-2">
                       <div className="flex items-center justify-between">
                         <div>
-                          <h3 className="font-medium text-white">{tokenMetadata.symbol}</h3>
-                          <p className="text-sm text-secondary-400">{tokenMetadata.name}</p>
+                          <h3 className="font-medium text-white text-sm">{tokenMetadata.symbol}</h3>
+                          <p className="text-xs text-secondary-400">{tokenMetadata.name}</p>
                         </div>
                         <div className="text-right">
                           <p className="text-sm text-secondary-400">Balance</p>
@@ -3144,11 +3197,11 @@ const NewClaim = ({ isOpen, onClose, selectedToken = null, selectedTransfer = nu
                       
                       {/* Stake Token Balance Display */}
                       {selectedBridge && (
-                        <div className="mt-3 p-3 bg-dark-800 rounded-lg">
+                        <div className="mt-2 p-2 bg-dark-800 rounded-lg">
                           <div className="flex items-center justify-between">
                             <div>
-                              <p className="text-sm text-secondary-400">Stake Token Balance</p>
-                              <p className="text-sm text-white">{selectedBridge.stakeTokenSymbol || 'stake'}</p>
+                              <p className="text-xs text-secondary-400">Stake Token Balance</p>
+                              <p className="text-xs text-white">{selectedBridge.stakeTokenSymbol || 'stake'}</p>
                             </div>
                             <div className="text-right">
                               <p className={`font-medium ${
@@ -3174,15 +3227,15 @@ const NewClaim = ({ isOpen, onClose, selectedToken = null, selectedTransfer = nu
               {/* Bridge Info */}
               {selectedBridge && (
                 <div className="card border-primary-700 bg-primary-900/20">
-                  <div className="flex items-center gap-3 mb-4">
-                    <Info className="w-5 h-5 text-primary-500" />
-                    <h3 className="text-lg font-semibold text-white">Bridge Interaction</h3>
-                    <span className="px-2 py-1 bg-primary-600 text-white text-xs rounded-full capitalize">
+                  <div className="flex items-center gap-2 mb-2">
+                    <Info className="w-4 h-4 text-primary-500" />
+                    <h3 className="text-base font-semibold text-white">Bridge Interaction</h3>
+                    <span className="px-1.5 py-0.5 bg-primary-600 text-white text-xs rounded-full capitalize">
                       {selectedBridge.type.replace('_', ' ')}
                     </span>
                   </div>
                   
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-sm">
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-3 text-sm">
                     <div>
                       <p className="text-secondary-400">Bridge Type</p>
                       <p className="font-medium text-white capitalize">{selectedBridge.type.replace('_', ' ')}</p>
@@ -3247,10 +3300,10 @@ const NewClaim = ({ isOpen, onClose, selectedToken = null, selectedTransfer = nu
                   
                   {/* Contract Settings Info */}
                   {contractSettings && (
-                    <div className="mt-4 p-3 bg-dark-800 rounded-lg">
-                      <div className="space-y-2 text-sm">
+                    <div className="mt-2 p-2 bg-dark-800 rounded-lg">
+                      <div className="space-y-1.5 text-xs">
                         <div className="flex justify-between">
-                          <span className="text-secondary-400">Min Transaction Age:</span>
+                          <span className="text-secondary-400">Min Transfer Transaction Age:</span>
                           <span className="text-white">{contractSettings.min_tx_age.toString()}s</span>
                         </div>
                         <div className="flex justify-between">
@@ -3270,21 +3323,21 @@ const NewClaim = ({ isOpen, onClose, selectedToken = null, selectedTransfer = nu
               {/* Third-Party Claim Warning */}
               {isThirdPartyClaim && selectedBridge && (
                 <div className="card border-primary-700 bg-primary-900/20">
-                  <div className="flex items-center gap-3 mb-4">
-                    <Info className="w-5 h-5 text-primary-500" />
-                    <h3 className="text-lg font-semibold text-white">Third-Party Claim</h3>
-                    <span className="px-2 py-1 bg-warning-600 text-white text-xs rounded-full">
+                  <div className="flex items-center gap-2 mb-2">
+                    <Info className="w-4 h-4 text-primary-500" />
+                    <h3 className="text-base font-semibold text-white">Third-Party Claim</h3>
+                    <span className="px-1.5 py-0.5 bg-warning-600 text-white text-xs rounded-full">
                       Extra Token Required
                     </span>
                   </div>
                   
-                  <div className="space-y-3">
+                  <div className="space-y-2">
                     <p className="text-sm text-secondary-400">
                       You are about to claim on behalf of the sender to speed up the transfer and get rewarded for that.
                     </p>
                     
-                    <div className="bg-dark-800 border border-secondary-700 rounded-lg p-3">
-                      <div className="space-y-2 text-sm">
+                    <div className="bg-dark-800 border border-secondary-700 rounded-lg p-2">
+                      <div className="space-y-1.5 text-xs">
                         <div className="flex justify-between">
                           <span className="text-secondary-400">Claim Amount:</span>
                           <span className="font-medium text-white">
@@ -3343,27 +3396,17 @@ const NewClaim = ({ isOpen, onClose, selectedToken = null, selectedTransfer = nu
                               
                               const tokenDecimals = getTokenDecimals(network?.id, formData.tokenAddress);
                               
-                              // Handle amount (should be in wei format)
-                              let amountWei;
-                              const amountInput = toWeiString(formData.amount);
-                              if (parseFloat(amountInput) > 1000000000000) {
-                                amountWei = ethers.BigNumber.from(amountInput);
-                              } else {
-                                amountWei = ethers.utils.parseUnits(amountInput, tokenDecimals);
-                              }
-                              
-                              // Handle reward (use as-is from event)
-                              let rewardWei;
-                              const rewardInput = toWeiString(formData.reward);
-                              if (parseFloat(rewardInput) > 1000000000000) {
-                                // Reward is in wei format
-                                rewardWei = ethers.BigNumber.from(rewardInput);
-                              } else {
-                                // Reward is in human-readable format
-                                rewardWei = ethers.utils.parseUnits(rewardInput, tokenDecimals);
-                              }
+                              // Amount and reward from transfer events are always in wei format
+                              const amountWei = ethers.BigNumber.from(toWeiString(formData.amount));
+                              const rewardWei = ethers.BigNumber.from(toWeiString(formData.reward));
                               
                               const transferWei = amountWei.sub(rewardWei);
+                              
+                              // Ensure we don't get negative values
+                              if (transferWei.lt(0)) {
+                                return '0';
+                              }
+                              
                               let humanReadableTransfer = ethers.utils.formatUnits(transferWei, tokenDecimals);
                               
                               // Apply display multiplier for P3D tokens
@@ -3387,25 +3430,17 @@ const NewClaim = ({ isOpen, onClose, selectedToken = null, selectedTransfer = nu
                               
                               const tokenDecimals = getTokenDecimals(network?.id, formData.tokenAddress);
                               
-                              // Handle amount (should be in wei format)
-                              let amountWei;
-                              const amountInput2 = toWeiString(formData.amount);
-                              if (parseFloat(amountInput2) > 1000000000000) {
-                                amountWei = ethers.BigNumber.from(amountInput2);
-                              } else {
-                                amountWei = ethers.utils.parseUnits(amountInput2, tokenDecimals);
-                              }
-                              
-                              // Handle reward (use as-is from event)
-                              let rewardWei;
-                              const rewardInput2 = toWeiString(formData.reward);
-                              if (parseFloat(rewardInput2) > 1000000000000) {
-                                rewardWei = ethers.BigNumber.from(rewardInput2);
-                              } else {
-                                rewardWei = ethers.utils.parseUnits(rewardInput2, tokenDecimals);
-                              }
+                              // Amount and reward from transfer events are always in wei format
+                              const amountWei = ethers.BigNumber.from(toWeiString(formData.amount));
+                              const rewardWei = ethers.BigNumber.from(toWeiString(formData.reward));
                               
                               const transferWei = amountWei.sub(rewardWei);
+                              
+                              // Ensure we don't get negative values
+                              if (transferWei.lt(0)) {
+                                return false; // Can't check insufficiency if transfer is negative
+                              }
+                              
                               const balanceWei = ethers.utils.parseUnits(tokenBalance, tokenDecimals);
                               
                               return transferWei.gt(balanceWei);
@@ -3430,25 +3465,17 @@ const NewClaim = ({ isOpen, onClose, selectedToken = null, selectedTransfer = nu
                               
                               const tokenDecimals = getTokenDecimals(network?.id, formData.tokenAddress);
                               
-                              // Handle amount (should be in wei format)
-                              let amountWei;
-                              const amountInput3 = toWeiString(formData.amount);
-                              if (parseFloat(amountInput3) > 1000000000000) {
-                                amountWei = ethers.BigNumber.from(amountInput3);
-                              } else {
-                                amountWei = ethers.utils.parseUnits(amountInput3, tokenDecimals);
-                              }
-                              
-                              // Handle reward (use as-is from event)
-                              let rewardWei;
-                              const rewardInput3 = toWeiString(formData.reward);
-                              if (parseFloat(rewardInput3) > 1000000000000) {
-                                rewardWei = ethers.BigNumber.from(rewardInput3);
-                              } else {
-                                rewardWei = ethers.utils.parseUnits(rewardInput3, tokenDecimals);
-                              }
+                              // Amount and reward from transfer events are always in wei format
+                              const amountWei = ethers.BigNumber.from(toWeiString(formData.amount));
+                              const rewardWei = ethers.BigNumber.from(toWeiString(formData.reward));
                               
                               const transferWei = amountWei.sub(rewardWei);
+                              
+                              // Ensure we don't get negative values
+                              if (transferWei.lt(0)) {
+                                return null; // Don't show insufficiency if transfer is negative
+                              }
+                              
                               const balanceWei = ethers.utils.parseUnits(tokenBalance, tokenDecimals);
                               
                               return transferWei.gt(balanceWei) ? (
@@ -3468,26 +3495,29 @@ const NewClaim = ({ isOpen, onClose, selectedToken = null, selectedTransfer = nu
                         
                         const tokenDecimals = getTokenDecimals(network?.id, formData.tokenAddress);
                         
-                        // Handle amount (should be in wei format)
-                        let amountWei;
-                        const amountInput4 = toWeiString(formData.amount);
-                        if (parseFloat(amountInput4) > 1000000000000) {
-                          amountWei = ethers.BigNumber.from(amountInput4);
-                        } else {
-                          amountWei = ethers.utils.parseUnits(amountInput4, tokenDecimals);
-                        }
-                        
-                        // Handle reward (use as-is from event)
-                        let rewardWei;
-                        const rewardInput4 = toWeiString(formData.reward);
-                        if (parseFloat(rewardInput4) > 1000000000000) {
-                          rewardWei = ethers.BigNumber.from(rewardInput4);
-                        } else {
-                          rewardWei = ethers.utils.parseUnits(rewardInput4, tokenDecimals);
-                        }
+                        // Amount and reward from transfer events are always in wei format
+                        const amountWei = ethers.BigNumber.from(toWeiString(formData.amount));
+                        const rewardWei = ethers.BigNumber.from(toWeiString(formData.reward));
                         
                         const transferWei = amountWei.sub(rewardWei);
-                        return ethers.utils.formatUnits(transferWei, tokenDecimals);
+                        
+                        // Ensure we don't get negative values
+                        if (transferWei.lt(0)) {
+                          return '0';
+                        }
+                        
+                        let humanReadableTransfer = ethers.utils.formatUnits(transferWei, tokenDecimals);
+                        
+                        // Apply display multiplier for P3D tokens
+                        if (tokenMetadata?.symbol === 'P3D') {
+                          const multiplier = getStakeTokenDisplayMultiplier(NETWORKS.THREEDPASS.id);
+                          const numericAmount = parseFloat(humanReadableTransfer);
+                          if (!isNaN(numericAmount)) {
+                            return (numericAmount * multiplier).toString();
+                          }
+                        }
+                        
+                        return humanReadableTransfer;
                       })()} {tokenMetadata?.symbol} excluding the reward and transfer it to the recipient. 
                       After the challenge period expires, you will be able to withdraw both the stake 
                       and the transferred amount back to your balance, as long as you win the counterstake.
@@ -3498,10 +3528,10 @@ const NewClaim = ({ isOpen, onClose, selectedToken = null, selectedTransfer = nu
 
               {/* Form Fields */}
               <div className="card">
-                <div className="flex items-center justify-between mb-4">
-                  <div className="flex items-center gap-3">
-                    <ExternalLink className="w-5 h-5 text-primary-500" />
-                    <h3 className="text-lg font-semibold text-white">Transaction Details</h3>
+                <div className="flex items-center justify-between mb-2">
+                  <div className="flex items-center gap-2">
+                    <ExternalLink className="w-4 h-4 text-primary-500" />
+                    <h3 className="text-base font-semibold text-white">Transaction Details</h3>
                   </div>
                   <button
                     type="button"
@@ -3523,8 +3553,8 @@ const NewClaim = ({ isOpen, onClose, selectedToken = null, selectedTransfer = nu
                 </div>
                 
                 {showTransactionDetails && (
-                  <div className="space-y-4">
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div className="space-y-3">
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                   <div>
                     <div className="flex items-center justify-between mb-2">
                       <label className="block text-sm font-medium text-secondary-300">
@@ -3746,27 +3776,27 @@ const NewClaim = ({ isOpen, onClose, selectedToken = null, selectedTransfer = nu
               {/* Approval Section */}
               {needsApproval && selectedBridge && selectedBridge.stakeTokenAddress !== ethers.constants.AddressZero && (
                 <div className="card">
-                  <div className="flex items-center gap-3 mb-4">
-                    <AlertCircle className="w-5 h-5 text-warning-500" />
-                    <h3 className="text-lg font-semibold text-white">{selectedBridge?.stakeTokenSymbol || 'Stake Token'} Approval Required</h3>
+                  <div className="flex items-center gap-2 mb-2">
+                    <AlertCircle className="w-4 h-4 text-warning-500" />
+                    <h3 className="text-base font-semibold text-white">{selectedBridge?.stakeTokenSymbol || 'Stake Token'} Approval Required</h3>
                   </div>
                   
-                  <p className="text-sm text-secondary-400 mb-4">
+                  <p className="text-xs text-secondary-400 mb-2">
                     The bridge needs permission to spend your {selectedBridge?.stakeTokenSymbol || 'stake'} tokens for staking.
                   </p>
                   
-                  <div className="bg-warning-900/20 border border-warning-700 rounded-lg p-3 mb-4">
-                    <p className="text-sm text-warning-200">
+                  <div className="bg-warning-900/20 border border-warning-700 rounded-lg p-2 mb-2">
+                    <p className="text-xs text-warning-200">
                       <strong>Required:</strong> {formatStakeTokenForDisplay(requiredStake, network?.id, selectedBridge?.stakeTokenAddress)} {selectedBridge?.stakeTokenSymbol || 'stake'} for staking
                     </p>
-                    <p className="text-sm text-warning-200">
+                    <p className="text-xs text-warning-200 mt-1">
                       <strong>Current allowance:</strong> {allowance === 'Max' ? 'Max' : formatStakeTokenForDisplay(allowance, network?.id, selectedBridge?.stakeTokenAddress)} {selectedBridge?.stakeTokenSymbol || 'stake'}
                     </p>
                   </div>
                   
                   {/* Max Allowance Option */}
-                  <div className="border-t border-warning-700 pt-3 mb-4">
-                    <label className="flex items-center space-x-3 cursor-pointer">
+                  <div className="border-t border-warning-700 pt-2 mb-2">
+                    <label className="flex items-center space-x-2 cursor-pointer">
                       <input
                         type="checkbox"
                         checked={useMaxAllowance}
@@ -3777,14 +3807,14 @@ const NewClaim = ({ isOpen, onClose, selectedToken = null, selectedTransfer = nu
                         <span className="text-warning-300 text-sm font-medium">
                           Set maximum allowance (∞)
                         </span>
-                        <p className="text-warning-400 text-xs mt-1">
+                        <p className="text-warning-400 text-xs mt-0.5">
                           Approve unlimited spending to avoid future approval transactions.
                         </p>
                       </div>
                     </label>
                   </div>
                   
-                  <div className="space-y-3">
+                  <div className="space-y-2">
                     <button
                       type="button"
                       onClick={handleApproval}
@@ -3822,29 +3852,29 @@ const NewClaim = ({ isOpen, onClose, selectedToken = null, selectedTransfer = nu
               {/* Approved Section */}
               {!needsApproval && selectedBridge && selectedBridge.stakeTokenAddress !== ethers.constants.AddressZero && (
                 <div className="card">
-                  <div className="flex items-center gap-3 mb-4">
-                    <CheckCircle className="w-5 h-5 text-success-500" />
-                    <h3 className="text-lg font-semibold text-white">{selectedBridge?.stakeTokenSymbol || 'Stake Token'} Approval Complete</h3>
+                  <div className="flex items-center gap-2 mb-2">
+                    <CheckCircle className="w-4 h-4 text-success-500" />
+                    <h3 className="text-base font-semibold text-white">{selectedBridge?.stakeTokenSymbol || 'Stake Token'} Approval Complete</h3>
                   </div>
                   
-                  <p className="text-success-300 text-sm mb-4">
+                  <p className="text-success-300 text-xs mb-2">
                     Bridge contract is now approved to spend your {selectedBridge?.stakeTokenSymbol || 'stake'} tokens for staking.
                   </p>
                   
-                  <div className="bg-success-900/20 border border-success-700 rounded-lg p-3">
-                    <div className="space-y-2">
+                  <div className="bg-success-900/20 border border-success-700 rounded-lg p-2">
+                    <div className="space-y-1.5">
                       <div className="flex justify-between">
-                        <span className="text-success-300 text-sm">Current allowance:</span>
-                        <span className="text-success-400 font-medium text-sm">
+                        <span className="text-success-300 text-xs">Current allowance:</span>
+                        <span className="text-success-400 font-medium text-xs">
                           {allowance === 'Max' ? 'Max' : formatStakeTokenForDisplay(allowance, network?.id, selectedBridge?.stakeTokenAddress)} {selectedBridge?.stakeTokenSymbol || 'stake'}
                         </span>
                       </div>
                       <div className="flex justify-between">
-                        <span className="text-success-300 text-sm">Required for staking:</span>
-                        <span className="text-success-400 font-medium text-sm">{formatStakeTokenForDisplay(requiredStake, network?.id, selectedBridge?.stakeTokenAddress)} {selectedBridge?.stakeTokenSymbol || 'stake'}</span>
+                        <span className="text-success-300 text-xs">Required for staking:</span>
+                        <span className="text-success-400 font-medium text-xs">{formatStakeTokenForDisplay(requiredStake, network?.id, selectedBridge?.stakeTokenAddress)} {selectedBridge?.stakeTokenSymbol || 'stake'}</span>
                       </div>
                       {allowance === 'Max' && (
-                        <div className="text-xs text-success-300 mt-2 p-2 bg-success-800/30 rounded border border-success-700">
+                        <div className="text-xs text-success-300 mt-1.5 p-1.5 bg-success-800/30 rounded border border-success-700">
                           ✅ Maximum allowance set - no future approvals needed for this token
                         </div>
                       )}
@@ -3857,7 +3887,7 @@ const NewClaim = ({ isOpen, onClose, selectedToken = null, selectedTransfer = nu
                       type="button"
                       onClick={handleRevokeAllowance}
                       disabled={isRevoking}
-                      className="btn-secondary w-full flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed mt-4"
+                      className="btn-secondary w-full flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed mt-2"
                     >
                       {isRevoking ? (
                         <Loader2 className="w-4 h-4 animate-spin" />
@@ -3871,7 +3901,7 @@ const NewClaim = ({ isOpen, onClose, selectedToken = null, selectedTransfer = nu
               )}
 
               {/* Action Buttons */}
-              <div className="flex gap-3 pt-6">
+              <div className="flex gap-2 pt-4">
                 <button
                   type="button"
                   onClick={onClose}
