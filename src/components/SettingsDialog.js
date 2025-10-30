@@ -26,11 +26,15 @@ import {
   Coins,
   Link,
   Users,
-  RefreshCw
+  RefreshCw,
+  ChevronDown,
+  ChevronUp,
+  HelpCircle
 } from 'lucide-react';
 import CreateNewAssistant from './CreateNewAssistant';
 import CreateNewBridge from './CreateNewBridge';
 import DeployNewOracle from './DeployNewOracle';
+import SettingsHowTo from './SettingsHowTo';
 import { motion, AnimatePresence } from 'framer-motion';
 import toast from 'react-hot-toast';
 
@@ -71,8 +75,44 @@ const SettingsDialog = ({ isOpen, onClose }) => {
   const [checkingBridgeStatus, setCheckingBridgeStatus] = useState({});
   const [checkingAssistantStatus, setCheckingAssistantStatus] = useState({});
   const [discoveringFromRegistry, setDiscoveringFromRegistry] = useState({});
+  const [expandedNetworks, setExpandedNetworks] = useState({});
+  const [expandedSections, setExpandedSections] = useState({});
+  const [showHowTo, setShowHowTo] = useState(false);
 
-  // Check if an oracle with given address already exists
+  // Calculate counts for a network
+  const getNetworkCounts = useCallback((networkKey, networkConfig) => {
+    const bridges = getBridgeInstancesWithSettings();
+    const bridgeCount = Object.values(bridges).filter(bridge => {
+      // For export bridges: show under home network
+      if (bridge.type === 'export') {
+        return bridge.homeNetwork === networkConfig.name;
+      }
+      // For import and import_wrapper bridges: show under foreign network
+      if (bridge.type === 'import' || bridge.type === 'import_wrapper') {
+        return bridge.foreignNetwork === networkConfig.name;
+      }
+      return false;
+    }).length;
+
+    const assistants = getAssistantContractsWithSettings();
+    const networkAssistants = networkConfig.assistants || {};
+    const assistantKeys = Object.keys(networkAssistants);
+    const assistantCount = Object.keys(assistants).filter(key => 
+      assistantKeys.includes(key) || 
+      (settings[networkKey]?.assistants && key in settings[networkKey].assistants)
+    ).length;
+
+    const oracles = {
+      ...NETWORKS[networkKey]?.oracles || {},
+      ...settings[networkKey]?.oracles || {}
+    };
+    const oracleCount = Object.keys(oracles).length;
+
+    const tokens = settings[networkKey]?.tokens || {};
+    const tokenCount = Object.keys(tokens).length;
+
+    return { bridgeCount, assistantCount, oracleCount, tokenCount };
+  }, [getBridgeInstancesWithSettings, getAssistantContractsWithSettings, settings]);
   const findExistingOracleByAddress = (networkKey, oracleAddress) => {
     const networkWithSettings = getNetworkWithSettings(networkKey);
     const existingOracles = networkWithSettings?.oracles || {};
@@ -1220,6 +1260,13 @@ const SettingsDialog = ({ isOpen, onClose }) => {
             <div className="flex items-center gap-3">
               <Settings className="w-6 h-6 text-primary-500" />
               <h2 className="text-xl font-bold text-white">Settings</h2>
+              <button
+                onClick={() => setShowHowTo(!showHowTo)}
+                className="text-secondary-400 hover:text-primary-400 transition-colors p-1"
+                aria-label="Show help"
+              >
+                <HelpCircle className="w-5 h-5" />
+              </button>
             </div>
             <button
               onClick={onClose}
@@ -1232,18 +1279,49 @@ const SettingsDialog = ({ isOpen, onClose }) => {
           {/* Content */}
           <div className="p-4 sm:p-6 overflow-y-auto max-h-[calc(96vh-8rem)] sm:max-h-[calc(96vh-10rem)]">
             <div className="space-y-6">
+              {/* HowTo Section */}
+              <SettingsHowTo isOpen={showHowTo} />
+
               {/* Network Settings */}
               {Object.entries(NETWORKS).map(([networkKey, networkConfig]) => (
                 <div key={networkKey} className="card">
                   <div className="flex items-center justify-between mb-4">
                     <div className="flex items-center gap-3">
-                      <Network className="w-5 h-5 text-primary-500" />
-                      <h3 className="text-lg font-semibold text-white">{networkConfig.name}</h3>
-                      {network?.symbol === networkConfig.symbol && (
-                        <span className="px-2 py-1 bg-primary-600 text-white text-xs rounded-full">
-                          Active
-                        </span>
-                      )}
+                      <button
+                        onClick={() => setExpandedNetworks(prev => ({
+                          ...prev,
+                          [networkKey]: !prev[networkKey]
+                        }))}
+                        className="flex items-center gap-2 hover:text-primary-400 transition-colors"
+                      >
+                        {expandedNetworks[networkKey] ? (
+                          <ChevronUp className="w-4 h-4 text-secondary-400" />
+                        ) : (
+                          <ChevronDown className="w-4 h-4 text-secondary-400" />
+                        )}
+                        <Network className="w-5 h-5 text-primary-500" />
+                        <h3 className="text-lg font-semibold text-white">
+                          {networkConfig.name}
+                          {!expandedNetworks[networkKey] && (() => {
+                            const counts = getNetworkCounts(networkKey, networkConfig);
+                            const parts = [];
+                            if (counts.bridgeCount > 0) parts.push(`${counts.bridgeCount} bridge${counts.bridgeCount !== 1 ? 's' : ''}`);
+                            if (counts.assistantCount > 0) parts.push(`${counts.assistantCount} Assistant${counts.assistantCount !== 1 ? 's' : ''}`);
+                            if (counts.oracleCount > 0) parts.push(`${counts.oracleCount} Oracle${counts.oracleCount !== 1 ? 's' : ''}`);
+                            if (counts.tokenCount > 0) parts.push(`${counts.tokenCount} Token${counts.tokenCount !== 1 ? 's' : ''}`);
+                            return parts.length > 0 ? (
+                              <span className="hidden md:inline text-sm font-normal text-secondary-400 ml-2">
+                                ({parts.join(', ')})
+                              </span>
+                            ) : null;
+                          })()}
+                        </h3>
+                        {network?.symbol === networkConfig.symbol && (
+                          <span className="px-2 py-1 bg-primary-600 text-white text-xs rounded-full">
+                            Active
+                          </span>
+                        )}
+                      </button>
                     </div>
                     {hasBridgesRegistry(networkKey) && (
                       <button
@@ -1258,7 +1336,10 @@ const SettingsDialog = ({ isOpen, onClose }) => {
                     )}
                   </div>
 
-                  {/* RPC URL Settings */}
+                  {/* Network Settings Content - Collapsible */}
+                  {expandedNetworks[networkKey] && (
+                    <>
+                      {/* RPC URL Settings */}
                   <div className="mb-4">
                     <div className="flex items-center justify-between mb-2">
                       <label className="text-sm font-medium text-secondary-300">
@@ -1387,7 +1468,7 @@ const SettingsDialog = ({ isOpen, onClose }) => {
                   <div className="mb-4">
                     <div className="flex items-center justify-between mb-2">
                       <label className="text-sm font-medium text-secondary-300">
-                        Contract Addresses
+                        Factory Addresses
                       </label>
                       <div className="flex items-center gap-2">
                         <input
@@ -1449,10 +1530,23 @@ const SettingsDialog = ({ isOpen, onClose }) => {
                   <div className="mb-4">
                     <div className="flex items-center justify-between mb-2">
                       <div className="flex items-center gap-2">
-                        <Coins className="w-4 h-4 text-primary-500" />
-                        <label className="text-sm font-medium text-secondary-300">
-                          Token Management
-                        </label>
+                        <button
+                          onClick={() => setExpandedSections(prev => ({
+                            ...prev,
+                            [`${networkKey}_tokens`]: !prev[`${networkKey}_tokens`]
+                          }))}
+                          className="flex items-center gap-2 hover:text-primary-400 transition-colors"
+                        >
+                          {expandedSections[`${networkKey}_tokens`] ? (
+                            <ChevronUp className="w-4 h-4 text-secondary-400" />
+                          ) : (
+                            <ChevronDown className="w-4 h-4 text-secondary-400" />
+                          )}
+                          <Coins className="w-4 h-4 text-primary-500" />
+                          <label className="text-sm font-medium text-secondary-300">
+                            Token Management
+                          </label>
+                        </button>
                       </div>
                       <div className="flex items-center gap-2">
                         <input
@@ -1468,8 +1562,10 @@ const SettingsDialog = ({ isOpen, onClose }) => {
                       </div>
                     </div>
 
-                    {/* Existing Tokens */}
-                    <div className="space-y-2 mb-3">
+                    {expandedSections[`${networkKey}_tokens`] && (
+                      <>
+                        {/* Existing Tokens */}
+                        <div className="space-y-2 mb-3">
                       {Object.entries(settings[networkKey]?.tokens || {}).map(([tokenSymbol, tokenConfig]) => (
                         <div key={tokenSymbol} className="flex items-center gap-2 p-2 bg-dark-800 rounded border border-secondary-700">
                           <div className="flex-1 min-w-0">
@@ -1812,16 +1908,31 @@ const SettingsDialog = ({ isOpen, onClose }) => {
                         )}
                       </div>
                     )}
+                      </>
+                    )}
                   </div>
 
                   {/* Bridge Instances for this Network */}
                   <div className="mb-4">
                     <div className="flex items-center justify-between mb-2">
                       <div className="flex items-center gap-2">
-                        <Link className="w-4 h-4 text-primary-500" />
-                        <label className="text-sm font-medium text-secondary-300">
-                          Bridge Instances
-                        </label>
+                        <button
+                          onClick={() => setExpandedSections(prev => ({
+                            ...prev,
+                            [`${networkKey}_bridges`]: !prev[`${networkKey}_bridges`]
+                          }))}
+                          className="flex items-center gap-2 hover:text-primary-400 transition-colors"
+                        >
+                          {expandedSections[`${networkKey}_bridges`] ? (
+                            <ChevronUp className="w-4 h-4 text-secondary-400" />
+                          ) : (
+                            <ChevronDown className="w-4 h-4 text-secondary-400" />
+                          )}
+                          <Link className="w-4 h-4 text-primary-500" />
+                          <label className="text-sm font-medium text-secondary-300">
+                            Bridge Instances
+                          </label>
+                        </button>
                       </div>
                       <div className="flex items-center gap-2">
                         <input
@@ -1837,7 +1948,9 @@ const SettingsDialog = ({ isOpen, onClose }) => {
                       </div>
                     </div>
 
-                    {/* Existing Bridge Instances for this Network */}
+                    {expandedSections[`${networkKey}_bridges`] && (
+                      <>
+                        {/* Existing Bridge Instances for this Network */}
                     <div className="space-y-2 mb-3">
                       {Object.entries({ 
                         ...getBridgeInstancesWithSettings(), 
@@ -2477,19 +2590,34 @@ const SettingsDialog = ({ isOpen, onClose }) => {
                             )}
 
                           </div>
+                        )}
+                      </div>
+                    )}
+                      </>
                     )}
                   </div>
-                )}
-              </div>
 
                   {/* Oracles for this Network */}
                   <div className="mb-4">
                     <div className="flex items-center justify-between mb-2">
                       <div className="flex items-center gap-2">
-                        <Link className="w-4 h-4 text-primary-500" />
-                        <label className="text-sm font-medium text-secondary-300">
-                          Oracles
-                        </label>
+                        <button
+                          onClick={() => setExpandedSections(prev => ({
+                            ...prev,
+                            [`${networkKey}_oracles`]: !prev[`${networkKey}_oracles`]
+                          }))}
+                          className="flex items-center gap-2 hover:text-primary-400 transition-colors"
+                        >
+                          {expandedSections[`${networkKey}_oracles`] ? (
+                            <ChevronUp className="w-4 h-4 text-secondary-400" />
+                          ) : (
+                            <ChevronDown className="w-4 h-4 text-secondary-400" />
+                          )}
+                          <Link className="w-4 h-4 text-primary-500" />
+                          <label className="text-sm font-medium text-secondary-300">
+                            Oracles
+                          </label>
+                        </button>
                       </div>
                       <div className="flex items-center gap-2">
                         <input
@@ -2505,7 +2633,9 @@ const SettingsDialog = ({ isOpen, onClose }) => {
                       </div>
                     </div>
 
-                    {/* Existing Oracles */}
+                    {expandedSections[`${networkKey}_oracles`] && (
+                      <>
+                        {/* Existing Oracles */}
                     <div className="space-y-2 mb-3">
                       {Object.entries({ 
                         ...NETWORKS[networkKey]?.oracles || {}, 
@@ -2737,19 +2867,34 @@ const SettingsDialog = ({ isOpen, onClose }) => {
                               </p>
                             )}
                           </div>
+                        )}
+                      </div>
+                    )}
+                      </>
                     )}
                   </div>
-                )}
-              </div>
 
                   {/* Assistant Contracts for this Network */}
                   <div className="mb-4">
                     <div className="flex items-center justify-between mb-2">
                       <div className="flex items-center gap-2">
-                        <Users className="w-4 h-4 text-primary-500" />
-                        <label className="text-sm font-medium text-secondary-300">
-                          Assistant Contracts
-                        </label>
+                        <button
+                          onClick={() => setExpandedSections(prev => ({
+                            ...prev,
+                            [`${networkKey}_assistants`]: !prev[`${networkKey}_assistants`]
+                          }))}
+                          className="flex items-center gap-2 hover:text-primary-400 transition-colors"
+                        >
+                          {expandedSections[`${networkKey}_assistants`] ? (
+                            <ChevronUp className="w-4 h-4 text-secondary-400" />
+                          ) : (
+                            <ChevronDown className="w-4 h-4 text-secondary-400" />
+                          )}
+                          <Users className="w-4 h-4 text-primary-500" />
+                          <label className="text-sm font-medium text-secondary-300">
+                            Assistant Contracts
+                          </label>
+                        </button>
                       </div>
                       <div className="flex items-center gap-2">
                         <input
@@ -2763,9 +2908,11 @@ const SettingsDialog = ({ isOpen, onClose }) => {
                           Custom
                         </label>
                       </div>
-                </div>
+                    </div>
 
-                    {/* Existing Assistant Contracts for this Network */}
+                    {expandedSections[`${networkKey}_assistants`] && (
+                      <>
+                        {/* Existing Assistant Contracts for this Network */}
                     <div className="space-y-2 mb-3">
                       {Object.entries({ 
                         ...getAssistantContractsWithSettings(), 
@@ -3189,10 +3336,12 @@ const SettingsDialog = ({ isOpen, onClose }) => {
                       </p>
                             )}
                           </div>
+                        )}
+                      </div>
+                    )}
+                      </>
                     )}
                   </div>
-                )}
-              </div>
 
                   {/* Network Info */}
                   <div className="mt-4 pt-4 border-t border-secondary-800">
@@ -3215,17 +3364,11 @@ const SettingsDialog = ({ isOpen, onClose }) => {
                       </div>
                     </div>
                   </div>
+                </>
+              )}
                 </div>
               ))}
 
-            </div>
-
-            {/* Global Settings */}
-            <div className="card">
-              <div className="flex items-center gap-3 mb-4">
-                <Settings className="w-5 h-5 text-primary-500" />
-                <h3 className="text-lg font-semibold text-white">Global Settings</h3>
-              </div>
             </div>
           </div>
 

@@ -181,18 +181,84 @@ export const detectAssistantType = async (provider, assistantAddress, bridgeAddr
     
     // Now check if the assistant has approvePrecompile function to determine if it's a wrapper
     // Use the actual function signature from the ABI: "function approvePrecompile()"
+    // IMPORTANT: We need to verify the function can actually be called, not just check bytecode
     const possibleSignatures = [
       'function approvePrecompile()', // Try the correct ABI format first
       'approvePrecompile()' // Fallback to simple format
     ];
     
     let hasApprovePrecompile = false;
-    for (const signature of possibleSignatures) {
-      console.log(`🔍 Checking signature: ${signature}`);
-      hasApprovePrecompile = await hasFunctionSelector(provider, assistantAddress, signature);
-      if (hasApprovePrecompile) {
-        console.log(`  ✅ Found approvePrecompile with signature: ${signature}`);
-        break;
+    
+    // Try direct contract call first (most reliable - verifies it actually works)
+    // Regular ExportAssistant does NOT have approvePrecompile(), so we need to be strict
+    try {
+      const assistantContract = new ethers.Contract(assistantAddress, [
+        'function approvePrecompile()'
+      ], provider);
+      // Try to call it - if it succeeds (even with a revert), the function exists
+      // But we need to distinguish between "function doesn't exist" vs "function exists but reverts"
+      try {
+        // Try static call - if it succeeds without reverting, function definitely exists
+        await assistantContract.callStatic.approvePrecompile();
+        hasApprovePrecompile = true;
+        console.log(`  ✅ Found approvePrecompile() via direct contract call (static call succeeded)`);
+      } catch (staticError) {
+        // If it reverts with onlyManager or similar, the function exists
+        // But we need to be careful - if it's a CALL_EXCEPTION with empty data, function might not exist
+        if (staticError.code === 'CALL_EXCEPTION' && 
+            (!staticError.data || staticError.data === '0x')) {
+          // Empty data usually means function doesn't exist
+          console.log(`  ⚠️ approvePrecompile() call failed - function likely doesn't exist: ${staticError.message}`);
+        } else if (staticError.message.includes('onlyManager') || 
+                   staticError.message.includes('caller is not the manager') ||
+                   staticError.message.includes('execution reverted')) {
+          // Has revert reason - function exists but requires manager
+          hasApprovePrecompile = true;
+          console.log(`  ✅ Found approvePrecompile() via direct contract call (reverted as expected)`);
+        } else {
+          console.log(`  ⚠️ approvePrecompile() call failed: ${staticError.message}`);
+        }
+      }
+    } catch (error) {
+      console.log(`  ⚠️ approvePrecompile() not callable: ${error.message}`);
+    }
+    
+    // Only check bytecode if direct call failed (fallback)
+    if (!hasApprovePrecompile) {
+      for (const signature of possibleSignatures) {
+        console.log(`🔍 Checking signature: ${signature}`);
+        const found = await hasFunctionSelector(provider, assistantAddress, signature);
+        if (found) {
+          // Double-check by trying to call it
+          try {
+            const assistantContract = new ethers.Contract(assistantAddress, [
+              'function approvePrecompile()'
+            ], provider);
+            try {
+              await assistantContract.callStatic.approvePrecompile();
+              hasApprovePrecompile = true;
+              console.log(`  ✅ Verified approvePrecompile() works (static call succeeded)`);
+              break;
+            } catch (staticError) {
+              // Check if it's a CALL_EXCEPTION with empty data (function doesn't exist)
+              if (staticError.code === 'CALL_EXCEPTION' && 
+                  (!staticError.data || staticError.data === '0x')) {
+                console.log(`  ⚠️ approvePrecompile() found in bytecode but not callable (function doesn't exist): ${staticError.message}`);
+                continue; // Try next signature
+              } else if (staticError.message.includes('onlyManager') || 
+                        staticError.message.includes('caller is not the manager') ||
+                        staticError.message.includes('execution reverted')) {
+                hasApprovePrecompile = true;
+                console.log(`  ✅ Verified approvePrecompile() works (reverted as expected)`);
+                break;
+              } else {
+                console.log(`  ⚠️ approvePrecompile() found in bytecode but not callable: ${staticError.message}`);
+              }
+            }
+          } catch (callError) {
+            console.log(`  ⚠️ approvePrecompile() found in bytecode but not callable: ${callError.message}`);
+          }
+        }
       }
     }
     
@@ -200,33 +266,55 @@ export const detectAssistantType = async (provider, assistantAddress, bridgeAddr
     
     // Also check if the assistant has precompileAddress() function (for Import Wrapper assistants)
     // ImportWrapperAssistant has precompileAddress() as a public variable
-    const precompileAddressSignatures = [
-      'function precompileAddress() view returns (address)',
-      'function precompileAddress() returns (address)',
-      'function precompileAddress()'
-    ];
-    
+    // IMPORTANT: For IMPORT bridges, we need to actually verify the function can be called,
+    // not just check if it exists in bytecode, as regular Import assistants might have
+    // similar function signatures but not actually implement precompileAddress()
     let hasPrecompileAddress = false;
-    for (const signature of precompileAddressSignatures) {
-      console.log(`🔍 Checking for precompileAddress(): ${signature}`);
-      hasPrecompileAddress = await hasFunctionSelector(provider, assistantAddress, signature);
-      if (hasPrecompileAddress) {
-        console.log(`  ✅ Found precompileAddress() with signature: ${signature}`);
-        break;
+    
+    // Try direct contract call first (most reliable - verifies it actually works)
+    try {
+      const assistantContract = new ethers.Contract(assistantAddress, [
+        'function precompileAddress() view returns (address)'
+      ], provider);
+      const precompileAddr = await assistantContract.precompileAddress();
+      // Verify it returns a valid address (not zero address)
+      if (precompileAddr && precompileAddr !== ethers.constants.AddressZero) {
+        hasPrecompileAddress = true;
+        console.log(`  ✅ Found precompileAddress() via direct contract call: ${precompileAddr}`);
+      } else {
+        console.log(`  ⚠️ precompileAddress() returns zero address, not a valid ImportWrapper assistant`);
       }
+    } catch (error) {
+      console.log(`  ⚠️ precompileAddress() not callable: ${error.message}`);
     }
     
-    // Also try direct contract call as it's a public variable
+    // Only check bytecode if direct call failed (fallback)
     if (!hasPrecompileAddress) {
-      try {
-        const assistantContract = new ethers.Contract(assistantAddress, [
-          'function precompileAddress() view returns (address)'
-        ], provider);
-        await assistantContract.precompileAddress();
-        hasPrecompileAddress = true;
-        console.log(`  ✅ Found precompileAddress() via direct contract call`);
-      } catch (error) {
-        console.log(`  ⚠️ precompileAddress() not found via direct call: ${error.message}`);
+      const precompileAddressSignatures = [
+        'function precompileAddress() view returns (address)',
+        'function precompileAddress() returns (address)',
+        'function precompileAddress()'
+      ];
+      
+      for (const signature of precompileAddressSignatures) {
+        console.log(`🔍 Checking for precompileAddress() in bytecode: ${signature}`);
+        const found = await hasFunctionSelector(provider, assistantAddress, signature);
+        if (found) {
+          // Double-check by trying to call it
+          try {
+            const assistantContract = new ethers.Contract(assistantAddress, [
+              'function precompileAddress() view returns (address)'
+            ], provider);
+            const precompileAddr = await assistantContract.precompileAddress();
+            if (precompileAddr && precompileAddr !== ethers.constants.AddressZero) {
+              hasPrecompileAddress = true;
+              console.log(`  ✅ Verified precompileAddress() works: ${precompileAddr}`);
+              break;
+            }
+          } catch (callError) {
+            console.log(`  ⚠️ precompileAddress() found in bytecode but not callable: ${callError.message}`);
+          }
+        }
       }
     }
     
@@ -234,12 +322,15 @@ export const detectAssistantType = async (provider, assistantAddress, bridgeAddr
     
     // Determine assistant type based on bridge type and function checks
     if (bridgeType === 'export') {
+      // Regular ExportAssistant DOES have approvePrecompile()
+      // Export Wrapper assistants do NOT have approvePrecompile()
+      // So if approvePrecompile() exists and can be called, it's a regular Export
       if (hasApprovePrecompile) {
+        console.log(`  ✅ Regular EXPORT assistant detected! (has approvePrecompile)`);
+        return ASSISTANT_TYPES.EXPORT;
+      } else {
         console.log(`  ✅ EXPORT_WRAPPER assistant detected!`);
         return 'export_wrapper';
-      } else {
-        console.log(`  ✅ Regular EXPORT assistant detected!`);
-        return ASSISTANT_TYPES.EXPORT;
       }
     } else if (bridgeType === 'import_wrapper') {
       // For import_wrapper bridges, the assistant is always import_wrapper type
@@ -247,11 +338,19 @@ export const detectAssistantType = async (provider, assistantAddress, bridgeAddr
       console.log(`  ✅ IMPORT_WRAPPER assistant detected!`);
       return 'import_wrapper';
     } else if (bridgeType === 'import') {
-      // Check both approvePrecompile (for ImportWrapperAssistant) and precompileAddress
-      // ImportWrapperAssistant has precompileAddress() public variable
-      if (hasPrecompileAddress || hasApprovePrecompile) {
-        console.log(`  ✅ IMPORT_WRAPPER assistant detected! (has precompileAddress: ${hasPrecompileAddress}, has approvePrecompile: ${hasApprovePrecompile})`);
+      // For IMPORT bridges, only classify as IMPORT_WRAPPER if precompileAddress() can actually be called
+      // Regular Import assistants might have approvePrecompile() but not precompileAddress()
+      // The presence of precompileAddress() that can be called is the key differentiator
+      if (hasPrecompileAddress) {
+        console.log(`  ✅ IMPORT_WRAPPER assistant detected! (has precompileAddress: ${hasPrecompileAddress})`);
         return 'import_wrapper';
+      } else if (hasApprovePrecompile) {
+        // If it has approvePrecompile but not precompileAddress, it might still be an ImportWrapper
+        // but we'll be conservative and check if precompileAddress exists on the bridge
+        // Actually, let's be more conservative: if only approvePrecompile exists, treat as regular IMPORT
+        console.log(`  ⚠️ Has approvePrecompile() but not precompileAddress() - treating as regular IMPORT`);
+        console.log(`  ✅ Regular IMPORT assistant detected!`);
+        return ASSISTANT_TYPES.IMPORT;
       } else {
         console.log(`  ✅ Regular IMPORT assistant detected!`);
         return ASSISTANT_TYPES.IMPORT;
