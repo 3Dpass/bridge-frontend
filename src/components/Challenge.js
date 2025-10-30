@@ -3,6 +3,7 @@ import { ethers } from 'ethers';
 import { useWeb3 } from '../contexts/Web3Context';
 import { useSettings } from '../contexts/SettingsContext';
 import { ADDRESS_ZERO } from '../config/networks';
+import { convertActualToDisplay, convertDisplayToActual } from '../utils/decimal-converter';
 import { 
   createCounterstakeContract
 } from '../utils/bridge-contracts';
@@ -23,7 +24,7 @@ const getMaxAllowance = () => {
 
 const Challenge = ({ claim, onChallengeSuccess, onClose }) => {
   const { account, provider, network, checkNetwork, switchToRequiredNetwork } = useWeb3();
-  const { get3DPassTokenDecimalsDisplayMultiplier, getAllNetworksWithSettings } = useSettings();
+  const { getTokenDecimalsDisplayMultiplier, getAllNetworksWithSettings } = useSettings();
 
   
   const [loading, setLoading] = useState(false);
@@ -34,26 +35,58 @@ const Challenge = ({ claim, onChallengeSuccess, onClose }) => {
   const [currentAllowance, setCurrentAllowance] = useState(null);
   const [isRevoking, setIsRevoking] = useState(false);
 
+  // Helper function to convert BigNumber (live or serialized) to string
+  const convertBigNumberToString = (value) => {
+    if (!value) return 'Unknown';
+    
+    // Handle live ethers BigNumber
+    if (ethers.BigNumber.isBigNumber(value)) {
+      return value.toString();
+    }
+    
+    // Handle serialized BigNumber objects (from localStorage/cache)
+    if (typeof value === 'object' && value.type === 'BigNumber' && value.hex) {
+      try {
+        return ethers.BigNumber.from(value.hex).toString();
+      } catch (e) {
+        console.error('Error parsing serialized BigNumber:', e);
+        return 'Unknown';
+      }
+    }
+    
+    // Handle hex strings
+    if (typeof value === 'string' && value.startsWith('0x')) {
+      try {
+        return ethers.BigNumber.from(value).toString();
+      } catch (e) {
+        return value;
+      }
+    }
+    
+    // Fallback to string conversion
+    return String(value);
+  };
+
   // Get actual claim number from the claim object (not the display number)
   // Convert BigNumber objects to strings
   const actualClaimNum = claim.actualClaimNum || claim.claim_num || claim.debug_claim_num;
-  const actualClaimNumString = ethers.BigNumber.isBigNumber(actualClaimNum) ? actualClaimNum.toString() : String(actualClaimNum || 'Unknown');
+  const actualClaimNumString = convertBigNumberToString(actualClaimNum);
   
   // For display, use the display number that matches what the user sees
   // Ensure it's converted to string to avoid React rendering issues
-  const displayClaimNum = claim.claimNum ? 
-    (ethers.BigNumber.isBigNumber(claim.claimNum) ? claim.claimNum.toString() : String(claim.claimNum)) : 
-    'Unknown';
+  // Fall back to actualClaimNumString if claimNum doesn't exist or is invalid
+  let displayClaimNum = 'Unknown';
+  if (claim.claimNum !== undefined && claim.claimNum !== null) {
+    displayClaimNum = convertBigNumberToString(claim.claimNum);
+  } else {
+    // Fall back to actualClaimNumString if claimNum is not available
+    displayClaimNum = actualClaimNumString;
+  }
 
   // Get the required network and stake token information
   const getRequiredNetworkAndStakeToken = useCallback(() => {
     try {
       const networks = getAllNetworksWithSettings();
-      
-      console.log('🔍 getAllNetworksWithSettings() returned:', networks);
-      console.log('🔍 Type of networks:', typeof networks);
-      console.log('🔍 Is array:', Array.isArray(networks));
-      console.log('🔍 Looking for bridge address:', claim.bridgeAddress);
       
       // Check if networks is an object (not array)
       if (typeof networks !== 'object' || Array.isArray(networks)) {
@@ -62,14 +95,10 @@ const Challenge = ({ claim, onChallengeSuccess, onClose }) => {
       }
       
       // Find the network that contains this bridge
-      for (const [networkKey, networkConfig] of Object.entries(networks)) {
-        console.log(`🔍 Checking network: ${networkKey}`);
+      for (const [, networkConfig] of Object.entries(networks)) {
         if (networkConfig && networkConfig.bridges) {
-          console.log(`🔍 Network ${networkKey} has bridges:`, Object.keys(networkConfig.bridges));
-          for (const [bridgeKey, bridge] of Object.entries(networkConfig.bridges)) {
-            console.log(`🔍 Checking bridge ${bridgeKey}:`, bridge.address, 'vs', claim.bridgeAddress);
+          for (const [, bridge] of Object.entries(networkConfig.bridges)) {
             if (bridge && bridge.address && bridge.address.toLowerCase() === claim.bridgeAddress.toLowerCase()) {
-              console.log('🔍 Found bridge configuration:', bridge);
               
               // Get the stake token information
               const stakeTokenAddress = bridge.stakeTokenAddress;
@@ -86,7 +115,6 @@ const Challenge = ({ claim, onChallengeSuccess, onClose }) => {
               }
               
               if (stakeToken) {
-                console.log('🔍 Found stake token:', stakeToken);
                 return {
                   network: networkConfig,
                   stakeToken: stakeTokenAddress,
@@ -109,7 +137,6 @@ const Challenge = ({ claim, onChallengeSuccess, onClose }) => {
       }
       
       console.warn('Bridge not found in any network configuration:', claim.bridgeAddress);
-      console.log('🔍 Available bridges across all networks:');
       for (const [networkKey, networkConfig] of Object.entries(networks)) {
         if (networkConfig && networkConfig.bridges) {
           for (const [bridgeKey, bridge] of Object.entries(networkConfig.bridges)) {
@@ -132,94 +159,34 @@ const Challenge = ({ claim, onChallengeSuccess, onClose }) => {
     return stakeInfo.stakeTokenAddress.toLowerCase() === ADDRESS_ZERO.toLowerCase();
   }, [stakeInfo?.stakeTokenAddress]);
   
-  // Convert from display amount (with multiplier) to actual amount (for contract)
-  const convertDisplayToActual = useCallback((displayAmount, decimals, tokenAddress) => {
-    try {
-      if (!displayAmount || parseFloat(displayAmount) === 0) return '0';
-      
-      const num = parseFloat(displayAmount);
-      
-      // Check if this is a P3D token and remove the multiplier
-      if (tokenAddress) {
-        const decimalsDisplayMultiplier = get3DPassTokenDecimalsDisplayMultiplier(tokenAddress);
-        if (decimalsDisplayMultiplier) {
-          // Remove the multiplier: 1.0 / 1000000 = 0.000001
-          const actualNumber = num / decimalsDisplayMultiplier;
-          // Format to the correct number of decimal places to avoid precision issues
-          return actualNumber.toFixed(decimals);
-        }
-      }
-      
-      return displayAmount;
-    } catch (error) {
-      return '0';
-    }
-  }, [get3DPassTokenDecimalsDisplayMultiplier]);
+  // Wrapper functions using the centralized decimal converter utilities
+  // These wrap the utility functions with the correct getTokenDecimalsDisplayMultiplier function
+  const convertDisplayToActualWrapper = useCallback((displayAmount, decimals, tokenAddress) => {
+    return convertDisplayToActual(displayAmount, decimals, tokenAddress, getTokenDecimalsDisplayMultiplier);
+  }, [getTokenDecimalsDisplayMultiplier]);
 
-  // Convert from actual amount (from contract) to display amount (with multiplier)
-  const convertActualToDisplay = useCallback((actualAmount, decimals, tokenAddress) => {
-    try {
-      if (!actualAmount || parseFloat(actualAmount) === 0) return '0';
-      
-      const num = parseFloat(actualAmount);
-      
-      // Check if this is a P3D token and apply the multiplier
-      if (tokenAddress) {
-        const decimalsDisplayMultiplier = get3DPassTokenDecimalsDisplayMultiplier(tokenAddress);
-        if (decimalsDisplayMultiplier) {
-          // Apply the multiplier: 0.000001 * 1000000 = 1.0
-          const displayNumber = num * decimalsDisplayMultiplier;
-          return displayNumber.toFixed(6).replace(/\.?0+$/, '') || '0';
-        }
-      }
-      
-      return actualAmount;
-    } catch (error) {
-      return '0';
-    }
-  }, [get3DPassTokenDecimalsDisplayMultiplier]);
+  const convertActualToDisplayWrapper = useCallback((actualAmount, decimals, tokenAddress) => {
+    return convertActualToDisplay(actualAmount, decimals, tokenAddress, getTokenDecimalsDisplayMultiplier);
+  }, [getTokenDecimalsDisplayMultiplier]);
   
-  // Debug logging to see what we're getting
-  console.log('🔍 Challenge component - Full claim object:', claim);
-  console.log('🔍 Challenge component - Claim number values:', {
-    claim_actualClaimNum: claim.actualClaimNum,
-    claim_claim_num: claim.claim_num,
-    claim_debug_claim_num: claim.debug_claim_num,
-    actualClaimNum: actualClaimNum,
-    displayClaimNum: displayClaimNum
-  });
-
   const calculateRequiredStake = useCallback(async () => {
     try {
       if (!claim.bridgeAddress || !provider) return;
 
-      console.log('🔍 Full claim object for stake calculation:', claim);
-      console.log('🔍 Claim stake values:', {
-        yesStake: claim.yesStake,
-        yesStakeString: claim.yesStake?.toString(),
-        yes_stake: claim.yes_stake,
-        yes_stakeString: claim.yes_stake?.toString(),
-        noStake: claim.noStake,
-        noStakeString: claim.noStake?.toString(),
-        no_stake: claim.no_stake,
-        no_stakeString: claim.no_stake?.toString(),
-        currentOutcome: claim.currentOutcome,
-        current_outcome: claim.current_outcome
-      });
 
       // const contract = await createCounterstakeContract(provider, claim.bridgeAddress);
       
       // Get the current outcome (0 = NO, 1 = YES)
       const currentOutcome = claim.currentOutcome || claim.current_outcome;
       
-      // Calculate required stake for the opposite outcome
-      // If current outcome is YES (1), we need stake for NO (0)
-      // If current outcome is NO (0), we need stake for YES (1)
-      const oppositeOutcome = currentOutcome === 1 ? 0 : 1;
+      // Calculate required stake to challenge the current outcome
+      // To challenge, we need to stake MORE than the current stake of the outcome being challenged
+      // If current outcome is YES (1), we need to beat the YES stake to flip it to NO (0)
+      // If current outcome is NO (0), we need to beat the NO stake to flip it to YES (1)
       
-      // Get the current stake for the outcome we're challenging against
-      // If current outcome is YES (1), we challenge with NO (0) - so we need to stake against the YES stake
-      // If current outcome is NO (0), we challenge with YES (1) - so we need to stake against the NO stake
+      // Get the current stake for the outcome we're challenging
+      // If current outcome is YES, we challenge YES by staking on NO - so we need to beat the YES stake
+      // If current outcome is NO, we challenge NO by staking on YES - so we need to beat the NO stake
       const currentStakeRaw = currentOutcome === 1 ? 
         (claim.yesStake || claim.yes_stake || 0) : 
         (claim.noStake || claim.no_stake || 0);
@@ -229,50 +196,22 @@ const Challenge = ({ claim, onChallengeSuccess, onClose }) => {
         currentStakeRaw : 
         ethers.BigNumber.from(currentStakeRaw || 0);
       
-      console.log('🔍 Challenge stake calculation:', {
-        currentOutcome,
-        oppositeOutcome,
-        currentStakeRaw,
-        currentStake: currentStake.toString(),
-        isBigNumber: ethers.BigNumber.isBigNumber(currentStake),
-        explanation: `Challenging ${currentOutcome === 1 ? 'YES' : 'NO'} outcome with ${oppositeOutcome === 1 ? 'YES' : 'NO'} stake`
-      });
-      
       // Calculate required stake (1.5x current stake + 1 unit)
       const requiredStakeWei = currentStake.mul(150).div(100).add(1);
-      
-      console.log('🔍 Required stake calculation:', {
-        currentStake: currentStake.toString(),
-        requiredStakeWei: requiredStakeWei.toString(),
-        calculation: `${currentStake.toString()} * 1.5 + 1 = ${requiredStakeWei.toString()}`
-      });
-      
       // Convert to human readable format using decimals from bridge settings
       const stakeTokenAddress = stakeInfo?.stakeTokenAddress;
       const stakeDecimals = stakeInfo?.stakeTokenDecimals || 18;
       const requiredStakeFormatted = ethers.utils.formatUnits(requiredStakeWei, stakeDecimals);
       
-      console.log('🔍 Stake formatting:', {
-        requiredStakeWei: requiredStakeWei.toString(),
-        stakeDecimals,
-        stakeTokenAddress,
-        requiredStakeFormatted
-      });
-      
       // Apply multiplier for display if it's a P3D token
-      const requiredStakeDisplay = convertActualToDisplay(requiredStakeFormatted, stakeDecimals, stakeTokenAddress);
-      
-      console.log('🔍 Final required stake display:', {
-        requiredStakeFormatted,
-        requiredStakeDisplay
-      });
+      const requiredStakeDisplay = convertActualToDisplayWrapper(requiredStakeFormatted, stakeDecimals, stakeTokenAddress);
       
       setRequiredStake(requiredStakeDisplay);
     } catch (error) {
       console.error('Error calculating required stake:', error);
       toast.error('Failed to calculate required stake');
     }
-  }, [claim, provider, stakeInfo, convertActualToDisplay]);
+  }, [claim, provider, stakeInfo, convertActualToDisplayWrapper]);
 
   const getUserStakeTokenBalance = useCallback(async () => {
     try {
@@ -284,9 +223,7 @@ const Challenge = ({ claim, onChallengeSuccess, onClose }) => {
 
       // Handle native tokens (zero address) differently
       if (isNativeStakeToken()) {
-        console.log('🔍 Getting native token balance for account:', account);
         balance = await provider.getBalance(account);
-        console.log('🔍 Native token balance (Wei):', balance.toString());
       } else {
         // Handle ERC20 tokens
         const stakeTokenAbi = [
@@ -298,26 +235,19 @@ const Challenge = ({ claim, onChallengeSuccess, onClose }) => {
         
         const stakeTokenContract = new ethers.Contract(stakeTokenAddress, stakeTokenAbi, provider);
         balance = await stakeTokenContract.balanceOf(account);
-        console.log('🔍 ERC20 token balance (Wei):', balance.toString());
       }
       
       // Format balance using decimals from bridge settings
       const balanceFormatted = ethers.utils.formatUnits(balance, stakeDecimals);
       
       // Apply multiplier for display if it's a P3D token
-      const balanceDisplay = convertActualToDisplay(balanceFormatted, stakeDecimals, stakeTokenAddress);
-      console.log('🔍 Final balance display:', {
-        balanceFormatted,
-        balanceDisplay,
-        isNativeToken: isNativeStakeToken(),
-        stakeTokenSymbol: stakeInfo.stakeTokenSymbol
-      });
+      const balanceDisplay = convertActualToDisplayWrapper(balanceFormatted, stakeDecimals, stakeTokenAddress);
       setUserStakeTokenBalance(balanceDisplay);
     } catch (error) {
       console.error('Error getting stake token balance:', error);
       toast.error('Failed to get stake token balance');
     }
-  }, [provider, account, stakeInfo, convertActualToDisplay, isNativeStakeToken]);
+  }, [provider, account, stakeInfo, convertActualToDisplayWrapper, isNativeStakeToken]);
 
   const getCurrentAllowance = useCallback(async () => {
     try {
@@ -325,7 +255,6 @@ const Challenge = ({ claim, onChallengeSuccess, onClose }) => {
 
       // Skip allowance check for native tokens (zero address)
       if (isNativeStakeToken()) {
-        console.log('🔍 Native stake token detected, skipping allowance check');
         setCurrentAllowance('N/A'); // Not applicable for native tokens
         return;
       }
@@ -345,17 +274,7 @@ const Challenge = ({ claim, onChallengeSuccess, onClose }) => {
       // Also check for very large numbers that might be close to MaxUint256
       const isVeryLargeNumber = allowance.gt(ethers.utils.parseUnits('1000000000', 18)); // 1 billion tokens
       
-      console.log('🔍 Allowance comparison:', {
-        allowance: allowance.toString(),
-        maxAllowance: maxAllowance.toString(),
-        isMaxAllowance,
-        isVeryLargeNumber,
-        allowanceHex: allowance.toHexString(),
-        maxAllowanceHex: maxAllowance.toHexString()
-      });
-      
       if (isMaxAllowance || isVeryLargeNumber) {
-        console.log('🔍 Setting allowance to Max (detected as maximum or very large)');
         setCurrentAllowance('Max');
       } else {
         // Use decimals from bridge settings
@@ -363,8 +282,7 @@ const Challenge = ({ claim, onChallengeSuccess, onClose }) => {
         const allowanceFormatted = ethers.utils.formatUnits(allowance, stakeDecimals);
         
         // Apply multiplier for display if it's a P3D token
-        const allowanceDisplay = convertActualToDisplay(allowanceFormatted, stakeDecimals, stakeTokenAddress);
-        console.log('🔍 Setting allowance to calculated value:', allowanceDisplay);
+        const allowanceDisplay = convertActualToDisplayWrapper(allowanceFormatted, stakeDecimals, stakeTokenAddress);
         setCurrentAllowance(allowanceDisplay);
       }
     } catch (error) {
@@ -372,7 +290,7 @@ const Challenge = ({ claim, onChallengeSuccess, onClose }) => {
       toast.error('Failed to get current allowance');
       setCurrentAllowance('0');
     }
-  }, [provider, account, claim.bridgeAddress, stakeInfo, convertActualToDisplay, isNativeStakeToken]);
+  }, [provider, account, claim.bridgeAddress, stakeInfo, convertActualToDisplayWrapper, isNativeStakeToken]);
 
   useEffect(() => {
     if (claim && provider && account) {
@@ -451,28 +369,13 @@ const Challenge = ({ claim, onChallengeSuccess, onClose }) => {
       // Convert display amount to actual amount and then to Wei
       const stakeTokenAddress = stakeInfo.stakeTokenAddress;
       const stakeDecimals = stakeInfo.stakeTokenDecimals || 18;
-      const actualStakeAmount = convertDisplayToActual(stakeAmount, stakeDecimals, stakeTokenAddress);
+      const actualStakeAmount = convertDisplayToActualWrapper(stakeAmount, stakeDecimals, stakeTokenAddress);
       
-      console.log('🔍 Stake amount conversion for transaction:', {
-        displayAmount: stakeAmount,
-        actualAmount: actualStakeAmount,
-        stakeDecimals,
-        stakeTokenAddress,
-        stakeTokenSymbol: stakeInfo.stakeTokenSymbol
-      });
       
       // Ensure the actual amount is a valid decimal string
       const validActualAmount = parseFloat(actualStakeAmount).toFixed(stakeDecimals);
       const stakeAmountWei = ethers.utils.parseUnits(validActualAmount, stakeDecimals);
       
-      console.log('🔍 Challenge stake conversion:', {
-        displayAmount: stakeAmount,
-        actualAmount: actualStakeAmount,
-        stakeAmountWei: stakeAmountWei.toString(),
-        stakeDecimals,
-        isNativeToken: isNativeStakeToken(),
-        stakeTokenAddress: stakeTokenAddress
-      });
       
       // Skip approval for native tokens (zero address)
       if (!isNativeStakeToken()) {
@@ -526,13 +429,8 @@ const Challenge = ({ claim, onChallengeSuccess, onClose }) => {
       // Add value for native tokens (zero address)
       if (isNativeStakeToken()) {
         txOptions.value = stakeAmountWei;
-        console.log('🔍 Native token detected, adding value to transaction:', {
-          value: stakeAmountWei.toString(),
-          valueInEth: ethers.utils.formatEther(stakeAmountWei)
-        });
       } else {
         txOptions.value = 0; // Explicitly set value to 0 for ERC20 tokens
-        console.log('🔍 ERC20 token detected, setting value to 0');
       }
       
       try {
@@ -600,7 +498,6 @@ const Challenge = ({ claim, onChallengeSuccess, onClose }) => {
 
       // Skip revocation for native tokens (zero address)
       if (isNativeStakeToken()) {
-        console.log('🔍 Native stake token detected, skipping allowance revocation');
         toast.info('Native tokens do not require allowance management');
         return;
       }
@@ -670,23 +567,24 @@ const Challenge = ({ claim, onChallengeSuccess, onClose }) => {
     try {
       if (!amount) return '0';
       
-      // Convert BigNumber to string if needed
-      const amountString = ethers.BigNumber.isBigNumber(amount) ? amount.toString() : String(amount);
-      
-      const formatted = ethers.utils.formatUnits(amountString, decimals);
-      const num = parseFloat(formatted);
-      
-      // Check if this is a P3D token and apply decimalsDisplayMultiplier
-      if (tokenAddress) {
-        const decimalsDisplayMultiplier = get3DPassTokenDecimalsDisplayMultiplier(tokenAddress);
-        if (decimalsDisplayMultiplier) {
-          // Apply the multiplier: 0.000001 * 1000000 = 1.0
-          const multipliedNumber = num * decimalsDisplayMultiplier;
-          return multipliedNumber.toFixed(6).replace(/\.?0+$/, '') || '0';
-        }
+      // Convert BigNumber (live or serialized) to string
+      let amountString;
+      if (ethers.BigNumber.isBigNumber(amount)) {
+        amountString = amount.toString();
+      } else if (typeof amount === 'object' && amount?.type === 'BigNumber' && amount?.hex) {
+        // Handle serialized BigNumber objects (from localStorage/cache)
+        amountString = ethers.BigNumber.from(amount.hex).toString();
+      } else if (typeof amount === 'object' && amount?.hex) {
+        // Handle other hex objects
+        amountString = ethers.BigNumber.from(amount.hex).toString();
+      } else {
+        amountString = String(amount);
       }
       
-      return formatted;
+      const formatted = ethers.utils.formatUnits(amountString, decimals);
+      
+      // Use the centralized utility to apply multiplier (only once)
+      return convertActualToDisplayWrapper(formatted, decimals, tokenAddress);
     } catch (error) {
       console.error('Error formatting amount:', error);
       return '0';
@@ -706,6 +604,80 @@ const Challenge = ({ claim, onChallengeSuccess, onClose }) => {
     }
     
     return network?.symbol || 'Unknown';
+  };
+
+  const getTransferTokenAddress = () => {
+    let tokenAddress = null;
+    // For import bridges: claim is on foreign network, amount is foreignTokenAddress (the token being received)
+    // For export bridges: claim is on home network, amount is homeTokenAddress (the token being sent)
+    if (claim.bridgeType === 'import' || claim.bridgeType === 'import_wrapper') {
+      tokenAddress = claim.foreignTokenAddress || null;
+    } else if (claim.bridgeType === 'export') {
+      tokenAddress = claim.homeTokenAddress || null;
+    }
+    
+    // If token addresses are not in the claim object, look them up from bridge configuration
+    if (!tokenAddress && claim.bridgeAddress) {
+      try {
+        const networks = getAllNetworksWithSettings();
+        for (const network of Object.values(networks)) {
+          if (network.bridges) {
+            for (const bridge of Object.values(network.bridges)) {
+              if (bridge.address?.toLowerCase() === claim.bridgeAddress?.toLowerCase()) {
+                // Found the bridge configuration
+                if (claim.bridgeType === 'import' || claim.bridgeType === 'import_wrapper') {
+                  tokenAddress = bridge.foreignTokenAddress || null;
+                } else if (claim.bridgeType === 'export') {
+                  tokenAddress = bridge.homeTokenAddress || null;
+                }
+                break;
+              }
+            }
+          }
+        }
+      } catch (error) {
+        console.warn('Error looking up bridge configuration:', error);
+      }
+    }
+    
+    return tokenAddress;
+  };
+
+  const getTransferTokenDecimals = () => {
+    // Try to get decimals from claim data first
+    // For import bridges: use foreignTokenDecimals (token being received)
+    // For export bridges: use homeTokenDecimals (token being sent)
+    if (claim.bridgeType === 'import' || claim.bridgeType === 'import_wrapper') {
+      if (claim.foreignTokenDecimals) {
+        return claim.foreignTokenDecimals;
+      }
+    } else if (claim.bridgeType === 'export') {
+      if (claim.homeTokenDecimals) {
+        return claim.homeTokenDecimals;
+      }
+    }
+    
+    // Try to get from network settings
+    const tokenAddress = getTransferTokenAddress();
+    if (tokenAddress) {
+      try {
+        const networks = getAllNetworksWithSettings();
+        for (const network of Object.values(networks)) {
+          if (network.tokens) {
+            for (const token of Object.values(network.tokens)) {
+              if (token.address?.toLowerCase() === tokenAddress.toLowerCase()) {
+                return token.decimals || 18;
+              }
+            }
+          }
+        }
+      } catch (error) {
+        console.warn('Error getting token decimals:', error);
+      }
+    }
+    
+    // Default to 18 for most tokens (P3D, ETH, etc.)
+    return 18;
   };
 
   // If stakeInfo is not available, show error message with more details
@@ -793,7 +765,7 @@ const Challenge = ({ claim, onChallengeSuccess, onClose }) => {
               <div className="flex justify-between">
                 <span className="text-secondary-400">Amount:</span>
                 <span className="text-white">
-                  {formatAmount(claim.amount, 6)} {getTransferTokenSymbol()}
+                  {formatAmount(claim.amount, getTransferTokenDecimals(), getTransferTokenAddress())} {getTransferTokenSymbol()}
                 </span>
               </div>
               <div className="flex justify-between">
@@ -817,7 +789,7 @@ const Challenge = ({ claim, onChallengeSuccess, onClose }) => {
 
           {/* Challenge Outcome Selection */}
           <div className="mb-6">
-            <h3 className="text-lg font-semibold text-white mb-3">Outcome</h3>
+            <h3 className="text-lg font-semibold text-white mb-3">Your Vote</h3>
             <div className="grid grid-cols-2 gap-3">
               <button
                 onClick={() => setSelectedOutcome(1)}

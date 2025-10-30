@@ -1258,6 +1258,11 @@ const ClaimList = ({ activeTab }) => {
   const clearCache = useCallback(() => {
     console.log('🗑️ Clearing browser cache...');
     clearCachedData();
+    
+    // Clear displayed data from the screen
+    setClaims([]);
+    setAggregatedData(null);
+    setUserStakes({});
     setCacheStatus({
       hasCachedData: false,
       isShowingCached: false,
@@ -1265,6 +1270,7 @@ const ClaimList = ({ activeTab }) => {
       lastUpdated: null,
       cacheAge: null
     });
+    
     toast.success('Cache cleared successfully');
   }, []);
 
@@ -1874,9 +1880,63 @@ const ClaimList = ({ activeTab }) => {
   return (
     <div className="max-w-4xl mx-auto">
       {/* Header */}
-      <div className="flex items-center justify-between mb-6">
-        <div className="flex items-center gap-3">
-          {/* Filter Toggle */}
+      <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-4 mb-6">
+        {/* Search Controls - appears first on mobile */}
+        <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2 w-full sm:w-auto order-1 sm:order-2">
+          <select
+            value={bridgeDirection}
+            onChange={(e) => setBridgeDirection(e.target.value)}
+            className="bg-dark-800 border border-dark-700 rounded-md px-3 py-2 text-sm text-white focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-transparent w-full sm:w-auto sm:min-w-[200px]"
+          >
+            <option value="all">All Bridges</option>
+            {getBridgeDirections().map((direction) => (
+              <option key={direction.id} value={direction.id}>
+                {direction.name}
+              </option>
+            ))}
+          </select>
+          
+          <select
+            value={rangeHours}
+            onChange={(e) => setRangeHours(parseInt(e.target.value))}
+            className="bg-dark-800 border border-dark-700 rounded-md px-3 py-2 text-sm text-white focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-transparent w-full sm:w-auto sm:min-w-[140px]"
+            title="Select time range for data discovery"
+          >
+            <option value={6}>Last 6 hours</option>
+            <option value={12}>Last 12 hours</option>
+            <option value={24}>Last 24 hours</option>
+            <option value={48}>Last 48 hours</option>
+            <option value={72}>Last 72 hours</option>
+            <option value={96}>Last 4 days</option>
+            <option value={120}>Last 5 days</option>
+            <option value={168}>Last week</option>
+            <option value={240}>Last 10 days</option>
+            <option value={336}>Last 2 weeks</option>
+          </select>
+          
+          <button
+            onClick={searchSelectedDirection}
+            disabled={isSearching}
+            className={`flex items-center justify-center gap-2 px-3 py-2 rounded-md text-sm font-medium transition-colors w-full sm:w-auto ${
+              isSearching
+                ? 'bg-dark-700 text-secondary-500 cursor-not-allowed'
+                : 'bg-primary-600 text-white hover:bg-primary-700 cursor-pointer'
+            }`}
+            title="Search for claims and transfers in selected direction"
+          >
+            {isSearching ? (
+              'Searching...'
+            ) : (
+              <>
+                <RefreshCw className="w-4 h-4" />
+                Search
+              </>
+            )}
+          </button>
+        </div>
+
+        {/* Filter Toggle - appears below on mobile */}
+        <div className="flex items-center gap-3 order-2 sm:order-1">
           <div className="flex bg-dark-800 rounded-lg p-1">
             <button
               onClick={() => setFilter('all')}
@@ -1931,118 +1991,70 @@ const ClaimList = ({ activeTab }) => {
               <AlertTriangle className="w-4 h-4" />
             </button>
           </div>
-          
-          {/* Bridge Direction Selector */}
-          <div className="flex items-center gap-2">
-            <select
-              value={bridgeDirection}
-              onChange={(e) => setBridgeDirection(e.target.value)}
-              className="bg-dark-800 border border-dark-700 rounded-md px-3 py-2 text-sm text-white focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-transparent min-w-[200px]"
-            >
-              <option value="all">All Bridges</option>
-              {getBridgeDirections().map((direction) => (
-                <option key={direction.id} value={direction.id}>
-                  {direction.name}
-                </option>
-              ))}
-            </select>
-            
-            {/* Range Hours Selector */}
-            <select
-              value={rangeHours}
-              onChange={(e) => setRangeHours(parseInt(e.target.value))}
-              className="bg-dark-800 border border-dark-700 rounded-md px-3 py-2 text-sm text-white focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-transparent min-w-[140px]"
-              title="Select time range for data discovery"
-            >
-              <option value={6}>Last 6 hours</option>
-              <option value={12}>Last 12 hours</option>
-              <option value={24}>Last 24 hours</option>
-              <option value={48}>Last 48 hours</option>
-              <option value={72}>Last 72 hours</option>
-              <option value={96}>Last 4 days</option>
-              <option value={120}>Last 5 days</option>
-              <option value={168}>Last week</option>
-              <option value={240}>Last 10 days</option>
-              <option value={336}>Last 2 weeks</option>
-            </select>
-            
-            <button
-              onClick={searchSelectedDirection}
-              disabled={isSearching}
-              className={`flex items-center gap-2 px-3 py-2 rounded-md text-sm font-medium transition-colors ${
-                isSearching
-                  ? 'bg-dark-700 text-secondary-500 cursor-not-allowed'
-                  : 'bg-primary-600 text-white hover:bg-primary-700 cursor-pointer'
-              }`}
-              title="Search for claims and transfers in selected direction"
-            >
-              {isSearching ? (
-                <>
-                  <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
-                  Searching...
-                </>
-              ) : (
-                <>
-                  <RefreshCw className="w-4 h-4" />
-                  Search
-                </>
-              )}
-            </button>
-          </div>
-          
         </div>
       </div>
 
       {/* Prominent update notification removed - using green link in cache status instead */}
 
       {/* Cache Status */}
-      {cacheStatus.hasCachedData && (
-        <div className="mb-4 p-3">
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-2 text-sm">
-              <span className="text-secondary-400">Data Status:</span>
-              {cacheStatus.isShowingCached ? (
-                <>
-                  {cacheStatus.lastUpdated && (
-              <span className="text-secondary-400">
-                      (Updated {Math.round((Date.now() - cacheStatus.lastUpdated.getTime()) / 60000)}m ago)
-              </span>
-                  )}
-                </>
-              ) : (
-                <span className="text-green-400">Fresh data loaded</span>
-              )}
-              <span className="text-secondary-400">•</span>
-              <span className="text-blue-400">Range: {rangeHours}h</span>
-            </div>
-            <div className="flex items-center gap-2">
-              {cacheStatus.isRefreshing ? (
-                <>
-                  <div className="w-2 h-2 bg-yellow-500 rounded-full animate-pulse"></div>
-                  <span className="text-xs text-yellow-400">Refreshing...</span>
-                </>
-              ) : cacheStatus.isShowingCached ? (
-                <>
-                  <div className="w-2 h-2 bg-blue-500 rounded-full"></div>
-                  <span className="text-xs text-blue-400">Cached</span>
-                </>
-              ) : (
-                <>
-              <div className="w-2 h-2 bg-green-500 rounded-full"></div>
-                  <span className="text-xs text-green-400">Fresh</span>
-                </>
-              )}
-              <button
-                onClick={clearCache}
-                className="text-xs text-red-400 hover:text-red-300 underline"
-                title="Clear cache"
-              >
-                Clear Cache
-              </button>
+      {(() => {
+        // Check if there's actual cached data in storage
+        const cachedClaims = getCachedClaims();
+        const cachedTransfers = getCachedTransfers();
+        const cachedAggregated = getCachedAggregated();
+        const hasActualCache = (cachedClaims && cachedClaims.length > 0) || 
+                              (cachedTransfers && cachedTransfers.length > 0) || 
+                              (cachedAggregated && cachedAggregated.completedTransfers && cachedAggregated.completedTransfers.length > 0);
+        
+        // Only show cache status if there's actual cached data
+        return hasActualCache && (
+          <div className="mb-4 p-3">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2 text-sm">
+                <span className="text-secondary-400">Data Status:</span>
+                {cacheStatus.isShowingCached ? (
+                  <>
+                    {cacheStatus.lastUpdated && (
+                <span className="text-secondary-400">
+                        (Updated {Math.round((Date.now() - cacheStatus.lastUpdated.getTime()) / 60000)}m ago)
+                </span>
+                    )}
+                  </>
+                ) : (
+                  <span className="text-green-400">Fresh data loaded</span>
+                )}
+                <span className="text-secondary-400">•</span>
+                <span className="text-blue-400">Range: {rangeHours}h</span>
+              </div>
+              <div className="flex items-center gap-2">
+                {cacheStatus.isRefreshing ? (
+                  <>
+                    <div className="w-2 h-2 bg-yellow-500 rounded-full animate-pulse"></div>
+                    <span className="text-xs text-yellow-400">Refreshing...</span>
+                  </>
+                ) : cacheStatus.isShowingCached ? (
+                  <>
+                    <div className="w-2 h-2 bg-blue-500 rounded-full"></div>
+                    <span className="text-xs text-blue-400">Cached</span>
+                  </>
+                ) : (
+                  <>
+                <div className="w-2 h-2 bg-green-500 rounded-full"></div>
+                    <span className="text-xs text-green-400">Fresh</span>
+                  </>
+                )}
+                <button
+                  onClick={clearCache}
+                  className="text-xs text-red-400 hover:text-red-300 underline"
+                  title="Clear cache"
+                >
+                  Clear Cache
+                </button>
+              </div>
             </div>
           </div>
-        </div>
-      )}
+        );
+      })()}
 
 
       {/* Parallel Discovery Progress removed per request */}
@@ -2063,31 +2075,54 @@ const ClaimList = ({ activeTab }) => {
       )}
 
       {/* Empty State */}
-      {!loading && !isSearching && !cacheStatus.isLoadingCached && !cacheStatus.isShowingCached && (!aggregatedData || (aggregatedData.completedTransfers.length === 0 && aggregatedData.suspiciousClaims.length === 0 && aggregatedData.pendingTransfers.length === 0)) && (
-        <div className="text-center py-12">
-          <div className="text-secondary-400 mb-4">
-            <Clock className="w-12 h-12 mx-auto mb-4" />
-            <h3 className="text-lg font-semibold text-white mb-2">
-              {filter === 'suspicious' ? 'No Suspicious Claims Found' :
-               filter === 'pending' ? 'No Pending Transfers Found' :
-               filter === 'active' ? 'No Active Claims Found' :
-               'No Transactions Found'}
-            </h3>
-            <p className="text-secondary-400 mb-6">
-              {filter === 'my' 
-                ? (account ? 'You don\'t have any claims in the selected bridge direction' : 'Connect your wallet to see your claims')
-                : filter === 'suspicious'
-                ? 'No suspicious claims detected in the selected bridge direction'
-                : filter === 'pending'
-                ? 'No pending transfers found in the selected bridge direction'
-                : filter === 'active'
-                ? 'No active claims found in the selected bridge direction'
-                : 'Select a bridge direction and click Search to discover transactions'
-              }
-            </p>
+      {(() => {
+        // Check if we're not loading or searching
+        const isNotLoading = !loading && !isSearching && !cacheStatus.isLoadingCached;
+        
+        // Check if there's no aggregated data OR if aggregatedData exists but has no items
+        const hasNoAggregatedData = !aggregatedData || (
+          aggregatedData.completedTransfers.length === 0 && 
+          aggregatedData.suspiciousClaims.length === 0 && 
+          aggregatedData.pendingTransfers.length === 0
+        );
+        
+        // Check if there's no cached data in storage
+        const cachedClaims = getCachedClaims();
+        const cachedTransfers = getCachedTransfers();
+        const cachedAggregated = getCachedAggregated();
+        const hasNoCachedData = (!cachedClaims || cachedClaims.length === 0) && 
+                                (!cachedTransfers || cachedTransfers.length === 0) && 
+                                (!cachedAggregated || !cachedAggregated.completedTransfers || cachedAggregated.completedTransfers.length === 0);
+        
+        // Show empty state if not loading and there's no data from either source
+        const shouldShowEmpty = isNotLoading && hasNoAggregatedData && hasNoCachedData;
+        
+        return shouldShowEmpty && (
+          <div className="text-center py-12">
+            <div className="text-secondary-400 mb-4">
+              <Clock className="w-12 h-12 mx-auto mb-4" />
+              <h3 className="text-lg font-semibold text-white mb-2">
+                {filter === 'suspicious' ? 'No Suspicious Claims Found' :
+                 filter === 'pending' ? 'No Pending Transfers Found' :
+                 filter === 'active' ? 'No Active Claims Found' :
+                 'No Transactions Found'}
+              </h3>
+              <p className="text-secondary-400 mb-6">
+                {filter === 'my' 
+                  ? (account ? 'You don\'t have any claims in the selected bridge direction' : 'Connect your wallet to see your claims')
+                  : filter === 'suspicious'
+                  ? 'No suspicious claims detected in the selected bridge direction'
+                  : filter === 'pending'
+                  ? 'No pending transfers found in the selected bridge direction'
+                  : filter === 'active'
+                  ? 'No active claims found in the selected bridge direction'
+                  : 'Select a bridge direction and click Search to discover transactions'
+                }
+              </p>
+            </div>
           </div>
-        </div>
-      )}
+        );
+      })()}
 
       {/* Claims List */}
       <AnimatePresence>

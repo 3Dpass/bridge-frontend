@@ -26,10 +26,10 @@ function App() {
     return (
     <Web3Provider>
       <SettingsProvider>
-        <div className="min-h-screen bg-dark-950">
+        <div className="min-h-screen bg-dark-950 flex flex-col">
           <Header onNavClick={handleNavClick} activeTab={activeTab} />
 
-          <main className="pt-8 pb-16">
+          <main className="pt-8 pb-16 flex-1">
           
 
           {/* Bridge Form Section */}
@@ -180,7 +180,7 @@ function App() {
         </main>
 
         {/* Footer */}
-        <footer className="bg-dark-900 border-t border-secondary-800 py-8">
+        <footer className="bg-dark-900 border-t border-secondary-800 py-8 mt-auto">
           <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
             <div className="text-center space-y-4">
               <div className="flex items-center justify-center space-x-6">
