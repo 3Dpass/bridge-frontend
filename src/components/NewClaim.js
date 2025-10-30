@@ -998,7 +998,7 @@ const NewClaim = ({ isOpen, onClose, selectedToken = null, selectedTransfer = nu
         
         return {
           isValid: false,
-          message: `Claim is too early. Please wait ${timeMessage} more (min_tx_age: ${minTxAge}s)`
+          message: `Claim is too early. Please wait ${timeMessage} more. Min time since transfer: ${minTxAge}s`
         };
       }
 
