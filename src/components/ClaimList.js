@@ -1768,8 +1768,13 @@ const ClaimList = ({ activeTab }) => {
   // Load cached data when tab becomes active
   useEffect(() => {
     if (activeTab === 'transfers') {
-      // Only load cached data if we don't already have fresh data
-      if (!aggregatedData || aggregatedData.completedTransfers.length === 0) {
+      // Only load cached data if there is no data at all
+      // Avoid reloading when we have only pending transfers or suspicious claims
+      if (!aggregatedData || (
+        aggregatedData.completedTransfers.length === 0 &&
+        aggregatedData.suspiciousClaims.length === 0 &&
+        aggregatedData.pendingTransfers.length === 0
+      )) {
         loadCachedData();
       }
     }
