@@ -1,0 +1,1 @@
+pnpm test -- --no-watch --passWithNoTests --watchAll=false
