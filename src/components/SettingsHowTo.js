@@ -8,7 +8,7 @@ Creating new bridges:
 ---------------------------------------------------------------------------------------------
 1. Deploy Oracle on both source and destination blockchains
 2. Add home token to the tokens configuration under the chain it is going to be exported from
-3. Set up initial stake tokne prices to the oracles (required: Token_address/_NATIVE_, token_symbol/_NATIVE_, _NATIVE_/Token_symbol)
+3. Set up initial stake token prices to the oracles (required: Token_address/_NATIVE_, token_symbol/_NATIVE_, _NATIVE_/Token_symbol)
 4. Create Import bridge instance on the destination blockchain using the Oracle address and the home token address
 5. Add foreign token from Import bridge to the tokens configuration (For Import Wrapper type the foreign token address must be added before the instance creation)
 6. Add Import bridge instance to the bridges configuration under the chain it is deployed to

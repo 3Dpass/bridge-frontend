@@ -41,6 +41,9 @@ async function discoverBridgeEvents(bridgeConfig, options = {}) {
     
     console.log(`✅ ${networkKey}: Found ${eventResult.eventCount} events in ${eventResult.blockNumbers.length} blocks`);
     
+    // Check for 402 error flag in result
+    const is402Error = eventResult.has402Error || false;
+    
     if (eventResult.eventCount === 0) {
       return {
         bridgeAddress,
@@ -52,7 +55,8 @@ async function discoverBridgeEvents(bridgeConfig, options = {}) {
         transfers: [],
         claims: [],
         matchedTransfers: [],
-        error: null
+        error: null,
+        is402Error: is402Error
       };
     }
     
@@ -103,7 +107,8 @@ async function discoverBridgeEvents(bridgeConfig, options = {}) {
       events: decodedEvents,
       transfers: [...expatriations, ...repatriations],
       claims,
-      error: null
+      error: null,
+      is402Error: is402Error
     };
     
   } catch (error) {
@@ -117,7 +122,8 @@ async function discoverBridgeEvents(bridgeConfig, options = {}) {
       events: [],
       transfers: [],
       claims: [],
-      error: error.message
+      error: error.message,
+      is402Error: error.is402Error || false
     };
   }
 }

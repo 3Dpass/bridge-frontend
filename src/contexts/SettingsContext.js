@@ -4,6 +4,7 @@ import {
   is3DPassPrecompile as is3DPassPrecompileFromThreedpass,
   isP3DPrecompile as isP3DPrecompileFromThreedpass
 } from '../utils/threedpass';
+import { updateProviderSettings } from '../utils/provider-manager';
 
 const SettingsContext = createContext();
 
@@ -879,10 +880,16 @@ export const SettingsProvider = ({ children }) => {
   }, []);
 
   // Initialize on mount
-
   useEffect(() => {
     initializeSettings();
   }, [initializeSettings]);
+
+  // Update provider manager when settings change
+  useEffect(() => {
+    if (isInitialized && settings && Object.keys(settings).length > 0) {
+      updateProviderSettings(settings);
+    }
+  }, [settings, isInitialized]);
 
   const value = {
     // State

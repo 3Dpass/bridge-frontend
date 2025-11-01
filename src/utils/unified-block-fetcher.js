@@ -7,6 +7,7 @@
 
 import { NETWORKS } from '../config/networks.js';
 import { estimateBlocksFromHours, getBlockTime } from './block-estimator.js';
+import { getProvider } from './provider-manager.js';
 
 // Event topic signatures
 const NEW_CLAIM_TOPIC = '0xb4096a3b39efa6fa23e55edafbb26c619699ce4eb0b8f8c0178b1a4919ac6736';
@@ -124,7 +125,19 @@ async function getEventLogsViaRPC(networkKey, bridgeAddress, eventType, options 
   console.log(`🔍 Getting ${eventType} events via eth_getLogs for ${networkKey} bridge ${bridgeAddress}`);
   
   try {
-    // Get network configuration
+    // Get provider from provider manager (uses custom RPC if configured)
+    const provider = getProvider(networkKey);
+    
+    // Get RPC URL from provider (prioritizes custom settings)
+    const rpcUrl = provider?.connection?.url || NETWORKS[networkKey]?.rpcUrl;
+    
+    if (!rpcUrl) {
+      throw new Error(`RPC URL not found for network ${networkKey}`);
+    }
+    
+    console.log(`📡 Using RPC URL for ${networkKey}: ${rpcUrl}`);
+    
+    // Get network configuration for other settings
     const networkConfig = NETWORKS[networkKey];
     if (!networkConfig) {
       throw new Error(`Network configuration not found for ${networkKey}`);
@@ -157,20 +170,26 @@ async function getEventLogsViaRPC(networkKey, bridgeAddress, eventType, options 
     let chunkRanges = [];
     
     if (fromBlock === '0x0') {
-      // Get latest block number first
-      const latestBlockResponse = await fetch(networkConfig.rpcUrl, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          jsonrpc: "2.0",
-          method: "eth_blockNumber",
-          params: [],
-          id: 1
-        })
-      });
-      
-      const latestBlockResult = await latestBlockResponse.json();
-      const latestBlock = parseInt(latestBlockResult.result, 16);
+      // Get latest block number first using provider
+      let latestBlock;
+      try {
+        latestBlock = await provider.getBlockNumber();
+      } catch (error) {
+        // Fallback to direct RPC call if provider fails
+        const latestBlockResponse = await fetch(rpcUrl, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            jsonrpc: "2.0",
+            method: "eth_blockNumber",
+            params: [],
+            id: 1
+          })
+        });
+        
+        const latestBlockResult = await latestBlockResponse.json();
+        latestBlock = parseInt(latestBlockResult.result, 16);
+      }
       
       // Use rangeHours parameter (default: 24 hours)
       const rangeHours = options.rangeHours || 24;
@@ -188,6 +207,7 @@ async function getEventLogsViaRPC(networkKey, bridgeAddress, eventType, options 
     }
 
     let allLogs = [];
+    let has402Error = false;
     
     if (useChunking) {
       // Process each chunk sequentially to avoid overwhelming the RPC
@@ -212,7 +232,7 @@ async function getEventLogsViaRPC(networkKey, bridgeAddress, eventType, options 
         };
 
         try {
-          const response = await fetch(networkConfig.rpcUrl, {
+          const response = await fetch(rpcUrl, {
             method: 'POST',
             headers: {
               'Content-Type': 'application/json',
@@ -221,7 +241,13 @@ async function getEventLogsViaRPC(networkKey, bridgeAddress, eventType, options 
           });
 
           if (!response.ok) {
-            throw new Error(`HTTP error! status: ${response.status}`);
+            const error = new Error(`HTTP error! status: ${response.status}`);
+            error.statusCode = response.status;
+            error.is402Error = response.status === 402;
+            if (response.status === 402) {
+              has402Error = true;
+            }
+            throw error;
           }
 
           const result = await response.json();
@@ -242,8 +268,18 @@ async function getEventLogsViaRPC(networkKey, bridgeAddress, eventType, options 
     
   } catch (error) {
           console.warn(`   ⚠️ Chunk ${i + 1} failed: ${error.message}`);
+          if (error.is402Error) {
+            has402Error = true;
+          }
           // Continue with other chunks even if one fails
         }
+      }
+      
+      // If any chunk failed with 402, mark it (even if some succeeded)
+      // This allows the UI to show a warning while still returning partial results
+      if (has402Error) {
+        // Store 402 error flag in the result object
+        // We'll check for this in the calling code
       }
       
       console.log(`   ✅ Found ${allLogs.length} total events across ${chunkRanges.length} chunks`);
@@ -263,7 +299,7 @@ async function getEventLogsViaRPC(networkKey, bridgeAddress, eventType, options 
         id: 1
       };
 
-      const response = await fetch(networkConfig.rpcUrl, {
+      const response = await fetch(rpcUrl, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -272,7 +308,10 @@ async function getEventLogsViaRPC(networkKey, bridgeAddress, eventType, options 
       });
 
       if (!response.ok) {
-        throw new Error(`HTTP error! status: ${response.status}`);
+        const error = new Error(`HTTP error! status: ${response.status}`);
+        error.statusCode = response.status;
+        error.is402Error = response.status === 402;
+        throw error;
       }
 
       const result = await response.json();
@@ -335,11 +374,16 @@ async function getEventLogsViaRPC(networkKey, bridgeAddress, eventType, options 
       source: 'eth_getLogs',
       eventType: eventType,
       events: filteredEvents,
-      eventBreakdown: eventBreakdown
+      eventBreakdown: eventBreakdown,
+      has402Error: has402Error || false
     };
     
   } catch (error) {
     console.error(`   ❌ Error getting events via eth_getLogs:`, error.message);
+    // Preserve 402 error flag when re-throwing
+    if (error.is402Error) {
+      error.is402Error = true;
+    }
     throw error;
   }
 }

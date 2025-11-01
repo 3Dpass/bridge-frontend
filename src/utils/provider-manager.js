@@ -82,9 +82,20 @@ class ProviderManager {
    * @param {Object} settings - Current settings
    */
   updateSettings(settings) {
+    console.log('🔄 Updating provider manager settings:', settings);
     this.settings = settings;
-    this.providers.clear(); // Clear cached providers when settings change
-    this.updateFallbackProviders(); // Update fallback providers to respect new settings
+    // Clear ALL cached providers to force recreation with new settings
+    this.providers.clear();
+    console.log('✅ Provider cache cleared');
+    // Update fallback providers to respect new settings
+    this.updateFallbackProviders();
+    
+    // Log which networks will use custom RPC URLs
+    Object.keys(NETWORKS).forEach(networkKey => {
+      if (settings && settings[networkKey] && settings[networkKey].customRpc && settings[networkKey].rpcUrl) {
+        console.log(`📝 ${networkKey} will use custom RPC: ${settings[networkKey].rpcUrl}`);
+      }
+    });
   }
 
   /**
@@ -101,7 +112,29 @@ class ProviderManager {
 
     // Check if provider is already cached
     if (this.providers.has(networkKey)) {
-      return this.providers.get(networkKey);
+      // Even if cached, check if settings have changed and clear cache if needed
+      const cachedProvider = this.providers.get(networkKey);
+      const cachedUrl = cachedProvider?.connection?.url;
+      
+      // Determine what the RPC URL should be based on current settings
+      const networkConfig = NETWORKS[networkKey];
+      let expectedRpcUrl = networkConfig?.rpcUrl;
+      
+      if (this.settings && 
+          this.settings[networkKey] && 
+          this.settings[networkKey].customRpc && 
+          this.settings[networkKey].rpcUrl) {
+        expectedRpcUrl = this.settings[networkKey].rpcUrl;
+      }
+      
+      // If cached provider URL doesn't match expected URL, clear cache and recreate
+      if (cachedUrl && expectedRpcUrl && cachedUrl !== expectedRpcUrl) {
+        console.log(`🔄 RPC URL changed for ${networkKey}, clearing cache: ${cachedUrl} -> ${expectedRpcUrl}`);
+        this.providers.delete(networkKey);
+      } else {
+        // Return cached provider if URL matches
+        return cachedProvider;
+      }
     }
 
     const networkConfig = NETWORKS[networkKey];
@@ -110,13 +143,30 @@ class ProviderManager {
     }
 
     let rpcUrl = networkConfig.rpcUrl;
+    let isCustom = false;
 
-    // Use custom RPC URL if available in settings
+    // PRIORITIZE custom RPC URL from settings if available
+    // Check if custom RPC is enabled and has a URL
     if (this.settings && 
-        this.settings[networkKey] && 
-        this.settings[networkKey].customRpc && 
-        this.settings[networkKey].rpcUrl) {
-      rpcUrl = this.settings[networkKey].rpcUrl;
+        this.settings[networkKey]) {
+      const networkSettings = this.settings[networkKey];
+      
+      // Check if custom RPC is enabled (explicitly true)
+      if (networkSettings.customRpc === true && networkSettings.rpcUrl) {
+        rpcUrl = networkSettings.rpcUrl;
+        isCustom = true;
+        console.log(`✅ Using custom RPC URL for ${networkKey}: ${rpcUrl}`);
+      } else {
+        console.log(`📡 Using default RPC URL for ${networkKey}: ${rpcUrl}`);
+        if (networkSettings.customRpc !== true) {
+          console.log(`   (customRpc is ${networkSettings.customRpc}, not enabled)`);
+        }
+        if (!networkSettings.rpcUrl) {
+          console.log(`   (rpcUrl is missing: ${networkSettings.rpcUrl})`);
+        }
+      }
+    } else {
+      console.log(`📡 Using default RPC URL for ${networkKey}: ${rpcUrl} (no custom settings)`);
     }
 
     // Check if RPC URL is a placeholder
@@ -126,8 +176,14 @@ class ProviderManager {
       throw new Error(`RPC URL for ${networkKey} is not configured. Please set a valid RPC URL in settings.`);
     }
     
+    console.log(`🔌 Creating provider for ${networkKey} with ${isCustom ? 'custom' : 'default'} RPC: ${rpcUrl}`);
+    
     // Create provider with circuit breaker
     const provider = this.createProviderWithCircuitBreaker(networkKey, rpcUrl, useFallback);
+    
+    // Verify the provider was created with the correct URL
+    const providerUrl = provider?.connection?.url || 'unknown';
+    console.log(`✅ Provider created for ${networkKey}, URL: ${providerUrl}`);
     
     // Cache the provider
     this.providers.set(networkKey, provider);

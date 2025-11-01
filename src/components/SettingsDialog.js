@@ -389,8 +389,19 @@ const SettingsDialog = ({ isOpen, onClose }) => {
   const handleSaveSettings = async () => {
     setIsSaving(true);
     try {
+      // Log settings before saving to debug
+      console.log('💾 Saving settings:', settings);
+      Object.keys(settings).forEach(networkKey => {
+        if (settings[networkKey]?.customRpc) {
+          console.log(`  ${networkKey}: customRpc=${settings[networkKey].customRpc}, rpcUrl=${settings[networkKey].rpcUrl}`);
+        }
+      });
+      
       const result = await saveSettings(settings);
       if (result.success) {
+        // Update provider manager with new settings to clear cached providers
+        console.log('🔄 Updating provider manager with saved settings');
+        updateProviderSettings(settings);
         toast.success('Settings saved successfully!');
         onClose();
       } else {

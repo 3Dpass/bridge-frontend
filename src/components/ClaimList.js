@@ -11,6 +11,7 @@ import { normalizeAmount } from '../utils/data-normalizer';
 import { fetchClaimDetails } from '../utils/claim-details-fetcher.js';
 import { getBridgeABI, getCounterstakeABI, createContract } from '../utils/contract-factory.js';
 import { clearAllCachedEvents, getCachedTransfers, getCachedClaims, getCachedAggregated, getCachedSettings, getCacheTimestamp, setCachedData, STORAGE_KEYS } from '../utils/unified-event-cache';
+import { getProvider } from '../utils/provider-manager';
 import {
   Clock, 
   CheckCircle, 
@@ -212,6 +213,8 @@ const ClaimList = ({ activeTab }) => {
   const [selectedClaim, setSelectedClaim] = useState(null);
   const [contractSettings, setContractSettings] = useState({});
   const [userStakes, setUserStakes] = useState({}); // Cache for user stake information
+  const [show402ErrorDialog, setShow402ErrorDialog] = useState(false);
+  const [networkNamesWith402Error, setNetworkNamesWith402Error] = useState([]);
   
   // Cache status tracking
   const [cacheStatus, setCacheStatus] = useState({
@@ -262,6 +265,38 @@ const ClaimList = ({ activeTab }) => {
     }
   }, []);
 
+  // Helper function to convert network name to network key
+  const getNetworkKeyFromName = useCallback((networkName) => {
+    if (!networkName) return null;
+    
+    // Try to find by name first
+    const networkKey = Object.keys(NETWORKS).find(key => 
+      NETWORKS[key].name?.toLowerCase() === networkName.toLowerCase()
+    );
+    
+    if (networkKey) return networkKey;
+    
+    // Try to find by symbol
+    const networkKeyBySymbol = Object.keys(NETWORKS).find(key => 
+      NETWORKS[key].symbol?.toLowerCase() === networkName.toLowerCase()
+    );
+    
+    if (networkKeyBySymbol) return networkKeyBySymbol;
+    
+    // If already a network key, return as-is
+    if (NETWORKS[networkName]) return networkName;
+    
+    // Handle special cases
+    if (networkName.toLowerCase() === 'binance smart chain' || networkName.toLowerCase() === 'bsc') {
+      return 'BSC';
+    }
+    if (networkName.toLowerCase() === '3dpass') {
+      return 'THREEDPASS';
+    }
+    
+    return null;
+  }, []);
+
   // Load contract settings for all bridges
   const loadContractSettings = useCallback(async () => {
     try {
@@ -270,21 +305,30 @@ const ClaimList = ({ activeTab }) => {
       
       for (const [, bridge] of Object.entries(allBridges)) {
         try {
-          const networkConfig = getNetworkWithSettings(bridge.homeNetwork);
-          if (networkConfig?.rpcUrl) {
-            const provider = new ethers.providers.JsonRpcProvider(networkConfig.rpcUrl);
-            const bridgeABI = getBridgeABIWithFallback(bridge.type);
-            const bridgeContract = createContract(bridge.address, bridgeABI, provider);
-            
-            const settings = await bridgeContract.settings();
-            settingsMap[bridge.address] = {
-              min_tx_age: settings.min_tx_age,
-              counterstake_coef100: settings.counterstake_coef100,
-              ratio100: settings.ratio100,
-              min_stake: settings.min_stake,
-              large_threshold: settings.large_threshold
-            };
+          // For export bridges, contract is deployed on homeNetwork
+          // For import and import_wrapper bridges, contract is deployed on foreignNetwork
+          const networkName = bridge.type === 'export' 
+            ? bridge.homeNetwork 
+            : bridge.foreignNetwork;
+          
+          const networkKey = getNetworkKeyFromName(networkName);
+          if (!networkKey) {
+            console.warn(`⚠️ Could not find network key for: ${networkName}`);
+            continue;
           }
+          
+          const provider = getProvider(networkKey);
+          const bridgeABI = getBridgeABIWithFallback(bridge.type);
+          const bridgeContract = createContract(bridge.address, bridgeABI, provider);
+          
+          const settings = await bridgeContract.settings();
+          settingsMap[bridge.address] = {
+            min_tx_age: settings.min_tx_age,
+            counterstake_coef100: settings.counterstake_coef100,
+            ratio100: settings.ratio100,
+            min_stake: settings.min_stake,
+            large_threshold: settings.large_threshold
+          };
         } catch (error) {
           console.warn(`⚠️ Failed to load settings for bridge ${bridge.address}:`, error);
         }
@@ -294,7 +338,7 @@ const ClaimList = ({ activeTab }) => {
     } catch (error) {
       console.error('❌ Error loading contract settings:', error);
     }
-  }, [getBridgeInstancesWithSettings, getNetworkWithSettings, getBridgeABIWithFallback]);
+  }, [getBridgeInstancesWithSettings, getBridgeABIWithFallback, getNetworkKeyFromName]);
 
   // Check if a transfer is ready to be claimed based on min_tx_age
   const isTransferReadyToClaim = useCallback((transfer) => {
@@ -613,14 +657,16 @@ const ClaimList = ({ activeTab }) => {
         return false;
       }
 
-      // Get the network configuration for this claim
-      const networkConfig = getNetworkWithSettings(claim.networkKey);
-      if (!networkConfig?.rpcUrl) {
+      // Get the network key for this claim
+      const networkKey = claim.networkKey && NETWORKS[claim.networkKey] 
+        ? claim.networkKey 
+        : getNetworkKeyFromName(claim.networkKey || claim.networkName);
+      if (!networkKey) {
         return false;
       }
 
-      // Create provider and contract instance
-      const provider = new ethers.providers.JsonRpcProvider(networkConfig.rpcUrl);
+      // Get provider from provider manager (uses custom RPC if configured)
+      const provider = getProvider(networkKey);
       const bridgeABI = getBridgeABIWithFallback(claim.bridgeType);
       const contract = createContract(claim.bridgeAddress, bridgeABI, provider);
 
@@ -642,7 +688,7 @@ const ClaimList = ({ activeTab }) => {
       console.error('🔍 Error checking user stakes:', error);
       return false;
     }
-  }, [getNetworkWithSettings, getBridgeABIWithFallback]);
+  }, [getBridgeABIWithFallback, getNetworkKeyFromName]);
 
   // Function to load stake information for all claims
   const loadStakeInformation = useCallback(async (claims) => {
@@ -864,10 +910,12 @@ const ClaimList = ({ activeTab }) => {
               );
               
               if (networksWithSettings.length > 0) {
-                const networkConfig = getNetworkWithSettings(networksWithSettings[0].symbol);
-                if (networkConfig?.rpcUrl) {
-                  const networkProvider = new ethers.providers.JsonRpcProvider(networkConfig.rpcUrl);
+                const networkKey = Object.keys(NETWORKS).find(key => 
+                  NETWORKS[key].symbol === networksWithSettings[0].symbol
+                );
+                if (networkKey) {
                   try {
+                    const networkProvider = getProvider(networkKey);
                     const block = await networkProvider.getBlock('latest');
                     setCurrentBlock(block);
                   } catch (error) {
@@ -1062,6 +1110,22 @@ const ClaimList = ({ activeTab }) => {
         rangeHours: rangeHours // Use the selected range
       });
       
+      // Check for 402 errors in bridge results
+      const has402Error = discoveryResults.bridgeResults.some(result => result.is402Error);
+      if (has402Error) {
+        // Collect network names that had 402 errors
+        const networksWith402Error = discoveryResults.bridgeResults
+          .filter(result => result.is402Error)
+          .map(result => {
+            const networkConfig = getNetworkWithSettings(result.networkKey);
+            return networkConfig?.name || result.networkKey || 'Unknown';
+          })
+          .filter((name, index, self) => self.indexOf(name) === index); // Remove duplicates
+        
+        setNetworkNamesWith402Error(networksWith402Error);
+        setShow402ErrorDialog(true);
+      }
+      
       // Step 3: Update discovery state with raw results
       setDiscoveryState(prev => ({
         ...prev,
@@ -1147,7 +1211,7 @@ const ClaimList = ({ activeTab }) => {
       setLoading(false);
       setDiscoveryState(prev => ({ ...prev, isDiscovering: false }));
       }
-  }, [bridgeDirection, rangeHours, getBridgeInstancesWithSettings, loading, isSearching, discoveryState.isDiscovering, isInitialLoad, loadCachedData, loadStakeInformation]);
+  }, [bridgeDirection, rangeHours, getBridgeInstancesWithSettings, getNetworkWithSettings, loading, isSearching, discoveryState.isDiscovering, isInitialLoad, loadCachedData, loadStakeInformation]);
 
   // Legacy discovery system removed - using only parallel discovery system
 
@@ -1246,20 +1310,32 @@ const ClaimList = ({ activeTab }) => {
         updatingClaims: new Set([...prev.updatingClaims, claimKey])
       }));
       
-      // Get the network configuration for this claim
-      const networkConfig = getNetworkWithSettings(claim.networkKey);
-      if (!networkConfig?.rpcUrl) {
+      // Get the network key for this claim
+      const networkKey = claim.networkKey && NETWORKS[claim.networkKey] 
+        ? claim.networkKey 
+        : getNetworkKeyFromName(claim.networkKey || claim.networkName);
+      if (!networkKey) {
         toast.error('Could not find network configuration for this claim');
+        return;
+      }
+
+      // Get provider from provider manager (uses custom RPC if configured)
+      const provider = getProvider(networkKey);
+      
+      // Get RPC URL from provider for fetchClaimDetails
+      const rpcUrl = provider?.connection?.url || NETWORKS[networkKey]?.rpcUrl;
+      if (!rpcUrl) {
+        toast.error('Could not find RPC URL for this network');
         return;
       }
 
       // Fetch fresh claim data using centralized fetcher
       const claimData = await fetchClaimDetails({
-        provider: new ethers.providers.JsonRpcProvider(networkConfig.rpcUrl),
+        provider: provider,
         contractAddress: claim.bridgeAddress,
         bridgeType: claim.bridgeType,
         claimNum: claimNum,
-        rpcUrl: networkConfig.rpcUrl
+        rpcUrl: rpcUrl
       });
 
       if (!claimData) {
@@ -1268,7 +1344,6 @@ const ClaimList = ({ activeTab }) => {
       }
 
       // Update currentBlock to ensure button states are correct
-      const provider = new ethers.providers.JsonRpcProvider(networkConfig.rpcUrl);
       const block = await provider.getBlock('latest');
       setCurrentBlock(block);
 
@@ -1402,7 +1477,7 @@ const ClaimList = ({ activeTab }) => {
         updatingClaims: new Set([...prev.updatingClaims].filter(key => key !== claimKey))
       }));
     }
-  }, [getNetworkWithSettings]);
+  }, [getNetworkKeyFromName]);
 
   // getTimeSinceUpdate function removed - no longer needed since Updated badge was removed
 
@@ -2943,6 +3018,71 @@ const ClaimList = ({ activeTab }) => {
             setSelectedClaim(null);
           }}
         />
+      )}
+
+      {/* 402 Error Dialog */}
+      {show402ErrorDialog && (
+        <AnimatePresence>
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 bg-black/50 backdrop-blur-sm z-[9999] flex items-center justify-center p-4"
+            onClick={() => {
+              setShow402ErrorDialog(false);
+              setNetworkNamesWith402Error([]);
+            }}
+          >
+            <motion.div
+              initial={{ scale: 0.95, opacity: 0, y: -20 }}
+              animate={{ scale: 1, opacity: 1, y: 0 }}
+              exit={{ scale: 0.95, opacity: 0, y: -20 }}
+              transition={{ type: "spring", damping: 25, stiffness: 300 }}
+              className="bg-dark-900 border border-yellow-500/50 rounded-xl shadow-2xl w-full max-w-md overflow-hidden relative"
+              onClick={(e) => e.stopPropagation()}
+            >
+              {/* Header */}
+              <div className="flex items-center justify-between p-4 border-b border-yellow-500/20">
+                <div className="flex items-center gap-3">
+                  <AlertTriangle className="w-6 h-6 text-yellow-500" />
+                  <h2 className="text-xl font-bold text-white">Free request limit exceeded!</h2>
+                </div>
+                <button
+                  onClick={() => {
+                    setShow402ErrorDialog(false);
+                    setNetworkNamesWith402Error([]);
+                  }}
+                  className="text-secondary-400 hover:text-white transition-colors"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+
+              {/* Content */}
+              <div className="p-6">
+                <p className="text-secondary-300 mb-6">
+                  {networkNamesWith402Error.length > 0 
+                    ? networkNamesWith402Error.length === 1
+                      ? `Set up your ${networkNamesWith402Error[0]} RPC provider in the Settings.`
+                      : `Set up your ${networkNamesWith402Error.join(' or ')} RPC provider in the Settings.`
+                    : 'Set up your RPC provider in the Settings.'}
+                </p>
+                
+                <div className="flex justify-end gap-3">
+                  <button
+                    onClick={() => {
+                      setShow402ErrorDialog(false);
+                      setNetworkNamesWith402Error([]);
+                    }}
+                    className="px-4 py-2 bg-dark-800 text-white rounded-md hover:bg-dark-700 transition-colors"
+                  >
+                    Close
+                  </button>
+                </div>
+              </div>
+            </motion.div>
+          </motion.div>
+        </AnimatePresence>
       )}
     </div>
   );
