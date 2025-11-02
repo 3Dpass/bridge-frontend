@@ -8,6 +8,7 @@ import { parseAndValidateReward } from '../utils/safe-reward-handler';
 import { addTransferEventToStorage, createTransferEventData } from '../utils/unified-event-cache';
 import { getBlockTimestamp } from '../utils/bridge-contracts';
 import { parseTransactionError } from '../utils/error-parser';
+import { NETWORKS } from '../config/networks';
 
 // Safely convert to EIP-55 checksum if it's an EVM address
 const toChecksumAddress = (address) => {
@@ -16,6 +17,39 @@ const toChecksumAddress = (address) => {
   } catch (e) {
     return address;
   }
+};
+
+// Get network key from network name (e.g., "Ethereum" -> "ETHEREUM", "3dpass" -> "THREEDPASS")
+const getNetworkKeyFromName = (networkName) => {
+  if (!networkName) return null;
+  
+  // Try to find by name first
+  const networkKey = Object.keys(NETWORKS).find(key => 
+    NETWORKS[key].name?.toLowerCase() === networkName.toLowerCase()
+  );
+  
+  if (networkKey) return networkKey;
+  
+  // Try to find by symbol
+  const networkKeyBySymbol = Object.keys(NETWORKS).find(key => 
+    NETWORKS[key].symbol?.toLowerCase() === networkName.toLowerCase()
+  );
+  
+  if (networkKeyBySymbol) return networkKeyBySymbol;
+  
+  // If already a network key, return as-is
+  if (NETWORKS[networkName]) return networkName;
+  
+  // Handle special cases
+  const lowerName = networkName.toLowerCase();
+  if (lowerName === 'binance smart chain' || lowerName === 'bsc') {
+    return 'BSC';
+  }
+  if (lowerName === '3dpass' || lowerName === '3dpass network') {
+    return 'THREEDPASS';
+  }
+  
+  return null;
 };
 
 const Repatriation = ({ 
@@ -152,6 +186,10 @@ const Repatriation = ({
       
       // Add NewRepatriation event to browser storage for immediate visibility
       try {
+        // Get the network key by matching network name to NETWORKS configuration
+        // This ensures we use the proper key (THREEDPASS, ETHEREUM, BSC) instead of lowercase name
+        const networkKey = getNetworkKeyFromName(bridgeInstance.foreignNetwork) || bridgeInstance.foreignNetwork;
+        
         const eventData = createTransferEventData({
           eventType: 'NewRepatriation',
           senderAddress: await signer.getAddress(),
@@ -169,7 +207,7 @@ const Repatriation = ({
           foreignNetwork: bridgeInstance.foreignNetwork,
           homeTokenSymbol: bridgeInstance.homeTokenSymbol,
           foreignTokenSymbol: bridgeInstance.foreignTokenSymbol,
-          networkKey: bridgeInstance.foreignNetwork.toLowerCase(),
+          networkKey: networkKey,
           networkName: bridgeInstance.foreignNetwork
         });
         

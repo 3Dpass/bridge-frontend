@@ -631,14 +631,14 @@ const NewClaim = ({ isOpen, onClose, selectedToken = null, selectedTransfer = nu
         });
         
         // For export bridges: 
-        // - On 3DPass: foreignTokenAddress is the token on 3DPass side (where we are)
-        // - On Ethereum: homeTokenAddress is the token on Ethereum side (where we are for repatriation claims)
+        // - On 3DPass: homeTokenAddress is the token on 3DPass side (where we are)
+        // - On Ethereum/BSC: homeTokenAddress is the token on Ethereum/BSC side (where we are for repatriation claims)
         if (bridge.type === 'export') {
           if (network?.id === NETWORKS.THREEDPASS.id) {
-            // On 3DPass: load foreignTokenAddress (token on 3DPass side)
-            if (bridge.foreignTokenAddress) {
-              tokenAddresses.add(bridge.foreignTokenAddress.toLowerCase());
-              console.log('✅ Added export bridge foreign token (3DPass):', bridge.foreignTokenAddress);
+            // On 3DPass: load homeTokenAddress (token on 3DPass side)
+            if (bridge.homeTokenAddress) {
+              tokenAddresses.add(bridge.homeTokenAddress.toLowerCase());
+              console.log('✅ Added export bridge home token (3DPass):', bridge.homeTokenAddress);
             }
           } else if (network?.id === NETWORKS.ETHEREUM.id) {
             // On Ethereum: only load homeTokenAddress if the bridge's homeNetwork is Ethereum
@@ -653,11 +653,24 @@ const NewClaim = ({ isOpen, onClose, selectedToken = null, selectedTransfer = nu
                 currentNetwork: network?.name
               });
             }
+          } else if (network?.id === NETWORKS.BSC.id) {
+            // On BSC: only load homeTokenAddress if the bridge's homeNetwork is BSC
+            if (bridge.homeNetwork === 'BSC' && bridge.homeTokenAddress) {
+              tokenAddresses.add(bridge.homeTokenAddress.toLowerCase());
+              console.log('✅ Added export bridge home token (BSC):', bridge.homeTokenAddress);
+            } else {
+              console.log('⏭️ Skipping export bridge - homeNetwork is not BSC:', {
+                bridgeType: bridge.type,
+                homeNetwork: bridge.homeNetwork,
+                foreignNetwork: bridge.foreignNetwork,
+                currentNetwork: network?.name
+              });
+            }
           }
         }
         // For import wrapper bridges: 
         // - On 3DPass: foreignTokenAddress is the token on 3DPass side (where we are)
-        // - On Ethereum: homeTokenAddress is the token on Ethereum side (where we are for repatriation claims)
+        // - On Ethereum/BSC: homeTokenAddress is the token on Ethereum/BSC side (where we are for repatriation claims)
         else if (bridge.type === 'import_wrapper') {
           console.log('🔍 Found import_wrapper bridge, checking token addresses:', {
             bridgeType: bridge.type,
@@ -685,22 +698,46 @@ const NewClaim = ({ isOpen, onClose, selectedToken = null, selectedTransfer = nu
             } else {
               console.log('❌ Import_wrapper bridge has no homeTokenAddress');
             }
+          } else if (network?.id === NETWORKS.BSC.id) {
+            // On BSC: use homeTokenAddress (token on BSC side for repatriation claims)
+            if (bridge.homeTokenAddress) {
+              tokenAddresses.add(bridge.homeTokenAddress.toLowerCase());
+              console.log('✅ Added import_wrapper bridge home token (BSC):', bridge.homeTokenAddress);
+            } else {
+              console.log('❌ Import_wrapper bridge has no homeTokenAddress');
+            }
           }
         }
-        // For import bridges: homeTokenAddress is the token on Ethereum side (where we are for repatriation claims)
+        // For import bridges:
+        // - On 3DPass: foreignTokenAddress is the token on 3DPass side (where bridge is deployed)
+        // - On Ethereum/BSC: homeTokenAddress is the token on Ethereum/BSC side (where tokens come from)
         else if (bridge.type === 'import') {
-          console.log('🔍 Found import bridge, checking homeTokenAddress:', {
+          console.log('🔍 Found import bridge, checking token addresses:', {
             bridgeType: bridge.type,
             homeTokenAddress: bridge.homeTokenAddress,
+            foreignTokenAddress: bridge.foreignTokenAddress,
             hasHomeToken: !!bridge.homeTokenAddress,
+            hasForeignToken: !!bridge.foreignTokenAddress,
             currentNetwork: network?.name,
             currentNetworkId: network?.id
           });
-          if (bridge.homeTokenAddress) {
-            tokenAddresses.add(bridge.homeTokenAddress.toLowerCase());
-            console.log('✅ Added import bridge token:', bridge.homeTokenAddress);
-          } else {
-            console.log('❌ Import bridge has no homeTokenAddress');
+          
+          if (network?.id === NETWORKS.THREEDPASS.id) {
+            // On 3DPass: use foreignTokenAddress (token on 3DPass side where bridge is deployed)
+            if (bridge.foreignTokenAddress) {
+              tokenAddresses.add(bridge.foreignTokenAddress.toLowerCase());
+              console.log('✅ Added import bridge foreign token (3DPass):', bridge.foreignTokenAddress);
+            } else {
+              console.log('❌ Import bridge has no foreignTokenAddress');
+            }
+          } else if (network?.id === NETWORKS.ETHEREUM.id || network?.id === NETWORKS.BSC.id) {
+            // On Ethereum/BSC: use homeTokenAddress (token on Ethereum/BSC side where tokens come from)
+            if (bridge.homeTokenAddress) {
+              tokenAddresses.add(bridge.homeTokenAddress.toLowerCase());
+              console.log(`✅ Added import bridge home token (${network?.name}):`, bridge.homeTokenAddress);
+            } else {
+              console.log('❌ Import bridge has no homeTokenAddress');
+            }
           }
         } else {
           console.log('❌ Bridge not processed:', {
@@ -1078,18 +1115,35 @@ const NewClaim = ({ isOpen, onClose, selectedToken = null, selectedTransfer = nu
     if (selectedTransfer && selectedTransfer.eventType === 'NewRepatriation') {
       console.log('🔍 Repatriation detected - looking for export bridge first');
       
+      // Get foreignTokenAddress from transfer address field
+      // For NewRepatriation, the address field represents the token/bridge address on the foreign network
+      // This is the primary source - foreignTokenAddress is not available in NewRepatriation cases
+      const foreignTokenAddress = selectedTransfer.address;
+      
+      if (!foreignTokenAddress) {
+        console.warn('⚠️ No address available in transfer for NewRepatriation');
+        return;
+      }
+      
       // Look for export bridge for this token (for repatriation claims)
+      // CRITICAL: Strict match by foreignTokenAddress only - no fallbacks
       const exportBridge = Object.values(allBridges).find(bridge => {
-        const matches = bridge.type === 'export' && 
-          bridge.homeTokenAddress?.toLowerCase() === formData.tokenAddress.toLowerCase();
+        // Strict matching: only bridge.type === 'export' AND foreignTokenAddress matches
+        if (bridge.type !== 'export') {
+          return false;
+        }
+        
+        if (!bridge.foreignTokenAddress) {
+          return false;
+        }
+        
+        const matches = bridge.foreignTokenAddress?.toLowerCase() === foreignTokenAddress?.toLowerCase();
         
         console.log('🔍 Checking export bridge for repatriation:', {
           bridgeType: bridge.type,
-          bridgeHomeTokenAddress: bridge.homeTokenAddress,
           bridgeForeignTokenAddress: bridge.foreignTokenAddress,
-          bridgeHomeNetwork: bridge.homeNetwork,
           bridgeForeignNetwork: bridge.foreignNetwork,
-          formDataTokenAddress: formData.tokenAddress,
+          transferAddress: foreignTokenAddress,
           matches
         });
         
@@ -2848,6 +2902,33 @@ const NewClaim = ({ isOpen, onClose, selectedToken = null, selectedTransfer = nu
           // Continue with event data only if claim details fetch fails
         }
         
+        // Get the network key by matching network ID to NETWORKS configuration
+        // This ensures we use the proper key (THREEDPASS, ETHEREUM, BSC) instead of ID or lowercase name
+        let networkKey = null;
+        if (network?.id) {
+          networkKey = Object.keys(NETWORKS).find(key => NETWORKS[key].id === network.id);
+        }
+        // Fallback to network name lookup if ID match fails
+        if (!networkKey && network?.name) {
+          networkKey = Object.keys(NETWORKS).find(key => 
+            NETWORKS[key].name?.toLowerCase() === network.name.toLowerCase()
+          );
+        }
+        // Handle special cases
+        if (!networkKey && network?.name) {
+          const lowerName = network.name.toLowerCase();
+          if (lowerName === '3dpass' || lowerName === '3dpass network') {
+            networkKey = 'THREEDPASS';
+          } else if (lowerName === 'bsc' || lowerName === 'binance smart chain') {
+            networkKey = 'BSC';
+          }
+        }
+        
+        if (!networkKey) {
+          console.warn('⚠️ Could not determine network key for claim, using network name as fallback:', network?.name);
+          networkKey = network?.name || 'Unknown';
+        }
+        
         // Create the complete event data structure using unified format
         const eventData = createClaimEventData({
           claimNum: claimNum,
@@ -2871,7 +2952,7 @@ const NewClaim = ({ isOpen, onClose, selectedToken = null, selectedTransfer = nu
           foreignNetwork: selectedBridge.foreignNetwork,
           homeTokenSymbol: selectedBridge.homeTokenSymbol,
           foreignTokenSymbol: selectedBridge.foreignTokenSymbol,
-          networkKey: network?.id?.toString() || network?.name?.toLowerCase(),
+          networkKey: networkKey,
           networkName: network?.name || 'Unknown'
         });
         
