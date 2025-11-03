@@ -13,7 +13,7 @@ import AssignNewManager from './AssignNewManager';
 import { IPRECOMPILE_ERC20_ABI } from '../contracts/abi';
 
 const AssistantsList = () => {
-  const { getAssistantContractsWithSettings, getAllNetworksWithSettings, get3DPassTokenDecimalsDisplayMultiplier } = useSettings();
+  const { getAssistantContractsWithSettings, getAllNetworksWithSettings, get3DPassTokenDecimalsDisplayMultiplier, getTokenByAddress } = useSettings();
   const { account } = useWeb3();
   const { getRequiredNetworkForAssistant, checkAndSwitchNetwork } = useNetworkSwitcher();
   const [assistants, setAssistants] = useState([]);
@@ -292,14 +292,10 @@ const AssistantsList = () => {
         chainId: networkConfig.id
       });
       
-      // For native tokens, check against known native token addresses from settings
-      const isNativeToken = Object.values(networks).some(network => {
-        if (network.tokens) {
-          return Object.values(network.tokens).some(token => 
-            token.isNative && token.address.toLowerCase() === tokenAddress.toLowerCase()
-          );
-        }
-        return false;
+      // For native tokens, check against known native token addresses using SettingsContext
+      const isNativeToken = Object.keys(networks).some(networkKey => {
+        const token = getTokenByAddress(networkKey, tokenAddress);
+        return token && token.isNative && token.address.toLowerCase() === tokenAddress.toLowerCase();
       });
 
       if (isNativeToken) {
@@ -402,7 +398,7 @@ const AssistantsList = () => {
       console.warn(`Error getting foreign token balance for ${tokenAddress} on ${networkKey}:`, error.message);
       return '0';
     }
-  }, [getAllNetworksWithSettings, isKnownPrecompile, formatBalance]);
+  }, [getAllNetworksWithSettings, isKnownPrecompile, formatBalance, getTokenByAddress]);
 
   const getForeignTokenDecimals = useCallback(async (assistant, tokenAddress, networkKey) => {
     if (!tokenAddress || tokenAddress === '0x0000000000000000000000000000000000000000') {

@@ -57,6 +57,7 @@ const SettingsDialog = ({ isOpen, onClose }) => {
     validateTokenConfig,
     getBridgeInstancesWithSettings,
     getAssistantContractsWithSettings,
+    getNetworkTokens,
   } = useSettings();
   const [copiedField, setCopiedField] = useState(null);
   const [isSaving, setIsSaving] = useState(false);
@@ -123,29 +124,29 @@ const SettingsDialog = ({ isOpen, onClose }) => {
   };
 
   // Get all tokens with settings (local function)
+  // Uses SettingsContext methods to get tokens with settings applied
   const getTokensWithSettings = () => {
     const allTokens = {};
     
-    Object.entries(NETWORKS).forEach(([networkKey, networkConfig]) => {
-      // Add config tokens
-      if (networkConfig.tokens) {
-        Object.entries(networkConfig.tokens).forEach(([tokenKey, tokenConfig]) => {
-          allTokens[tokenKey] = {
-            ...tokenConfig,
-            isConfigToken: true
-          };
-        });
-      }
+    Object.keys(NETWORKS).forEach((networkKey) => {
+      // Use SettingsContext to get tokens (includes both config and custom tokens)
+      const tokensObj = getNetworkTokens(networkKey);
       
-      // Add custom tokens from settings
-      if (settings[networkKey]?.tokens) {
-        Object.entries(settings[networkKey].tokens).forEach(([tokenKey, tokenConfig]) => {
-          allTokens[tokenKey] = {
-            ...tokenConfig,
-            isConfigToken: false
-          };
-        });
-      }
+      // Determine which tokens are from config vs custom settings
+      const configTokens = NETWORKS[networkKey]?.tokens || {};
+      const customTokens = settings[networkKey]?.tokens || {};
+      
+      Object.entries(tokensObj).forEach(([tokenKey, tokenConfig]) => {
+        // Check if token exists in config (isConfigToken) or only in settings (isCustomToken)
+        const isConfigToken = configTokens.hasOwnProperty(tokenKey);
+        const isCustomToken = customTokens.hasOwnProperty(tokenKey);
+        
+        allTokens[tokenKey] = {
+          ...tokenConfig,
+          isConfigToken: isConfigToken,
+          isCustomToken: isCustomToken && !isConfigToken
+        };
+      });
     });
     
     return allTokens;
@@ -655,6 +656,8 @@ const SettingsDialog = ({ isOpen, onClose }) => {
       }
     }
 
+    // Preserve all bridge properties including bridgeId, isIssuerBurner, and oracleAddress
+    // bridgeId is critical for bridge pairing validation - it must match between Export and Import bridges
     addCustomBridgeInstanceForNetwork(networkKey, bridgeKey, {
       address: bridge.address,
       type: bridge.type,
@@ -667,6 +670,9 @@ const SettingsDialog = ({ isOpen, onClose }) => {
       stakeTokenSymbol: bridge.stakeTokenSymbol || 'P3D',
       stakeTokenAddress: bridge.stakeTokenAddress,
       description: bridge.description || `${bridge.homeTokenSymbol} ${bridge.type} Bridge`,
+      bridgeId: bridge.bridgeId, // Preserve bridgeId if present - required for bridge pairing validation
+      isIssuerBurner: bridge.isIssuerBurner, // Preserve isIssuerBurner if present - required for Import bridges
+      oracleAddress: bridge.oracleAddress, // Preserve oracleAddress if present - required for Import bridges
       upToDate: true, // Mark as up to date after update
     });
 
@@ -1032,6 +1038,9 @@ const SettingsDialog = ({ isOpen, onClose }) => {
     const bridgeKey = `${bridgeConfig.homeAsset}_${bridgeConfig.foreignAsset}_${bridgeConfig.type.toUpperCase()}`;
     
     // Add the bridge to settings
+    // Note: bridgeConfig from CreateNewBridge may not include bridgeId as it's assigned by the contract
+    // bridgeId should be added manually or retrieved from the contract after deployment
+    // The bridgeConfig object will preserve bridgeId if it's present
     addCustomBridgeInstanceForNetwork(networkKey, bridgeKey, bridgeConfig);
     
     toast.success(`Bridge ${bridgeKey} added to settings`);

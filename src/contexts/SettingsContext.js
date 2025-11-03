@@ -5,6 +5,17 @@ import {
   isP3DPrecompile as isP3DPrecompileFromThreedpass
 } from '../utils/threedpass';
 import { updateProviderSettings } from '../utils/provider-manager';
+import {
+  getNetworkTokens as getNetworkTokensHelper,
+  getTokenByAddress as getTokenByAddressHelper,
+  getTokensBySymbol as getTokensBySymbolHelper,
+  getTokenBySymbol as getTokenBySymbolHelper,
+  generateTokenKey,
+  getTokenAddresses as getTokenAddressesHelper,
+  getTokenSymbols as getTokenSymbolsHelper,
+  findTokenKeyByAddress,
+  findTokenKeyBySymbol,
+} from '../utils/token-helpers';
 
 const SettingsContext = createContext();
 
@@ -183,14 +194,22 @@ export const SettingsProvider = ({ children }) => {
   }, []);
 
   // Update token configuration for a network
+  // Uses address-based key generation for consistency
   const updateTokenConfig = useCallback((networkKey, tokenSymbol, tokenConfig) => {
+    if (!tokenConfig.address) {
+      console.error('Token address is required for updateTokenConfig');
+      return;
+    }
+
+    const tokenKey = generateTokenKey(tokenConfig.address);
+    
     setSettings(prev => ({
       ...prev,
       [networkKey]: {
         ...prev[networkKey],
         tokens: {
           ...prev[networkKey]?.tokens,
-          [tokenSymbol]: {
+          [tokenKey]: {
             address: tokenConfig.address,
             symbol: tokenConfig.symbol,
             name: tokenConfig.name,
@@ -200,6 +219,7 @@ export const SettingsProvider = ({ children }) => {
             isPrecompile: tokenConfig.isPrecompile || false,
             isTestToken: tokenConfig.isTestToken || false,
             assetId: tokenConfig.assetId || null,
+            decimalsDisplayMultiplier: tokenConfig.decimalsDisplayMultiplier || null,
           },
         },
         customTokens: true,
@@ -208,14 +228,22 @@ export const SettingsProvider = ({ children }) => {
   }, []);
 
   // Add a new custom token to a network
+  // Uses address-based key generation for consistency
   const addCustomToken = useCallback((networkKey, tokenSymbol, tokenConfig) => {
+    if (!tokenConfig.address) {
+      console.error('Token address is required for addCustomToken');
+      return;
+    }
+
+    const tokenKey = generateTokenKey(tokenConfig.address);
+    
     setSettings(prev => ({
       ...prev,
       [networkKey]: {
         ...prev[networkKey],
         tokens: {
           ...prev[networkKey]?.tokens,
-          [tokenSymbol]: {
+          [tokenKey]: {
             address: tokenConfig.address,
             symbol: tokenConfig.symbol,
             name: tokenConfig.name,
@@ -225,6 +253,7 @@ export const SettingsProvider = ({ children }) => {
             isPrecompile: NETWORKS[networkKey]?.erc20Precompile ? (tokenConfig.isPrecompile || false) : false,
             isTestToken: tokenConfig.isTestToken || false,
             ...(NETWORKS[networkKey]?.erc20Precompile && { assetId: tokenConfig.assetId || null }),
+            decimalsDisplayMultiplier: tokenConfig.decimalsDisplayMultiplier || null,
           },
         },
         customTokens: true,
@@ -233,10 +262,30 @@ export const SettingsProvider = ({ children }) => {
   }, []);
 
   // Remove a custom token from a network
-  const removeCustomToken = useCallback((networkKey, tokenSymbol) => {
+  // Accepts either token address (preferred) or token symbol (for backward compatibility)
+  const removeCustomToken = useCallback((networkKey, tokenIdentifier) => {
     setSettings(prev => {
       const newTokens = { ...prev[networkKey]?.tokens };
-      delete newTokens[tokenSymbol];
+      
+      // Try to find token key by address first (address-based keys)
+      let tokenKey = null;
+      if (tokenIdentifier && tokenIdentifier.startsWith('0x')) {
+        tokenKey = generateTokenKey(tokenIdentifier);
+        if (!newTokens[tokenKey]) {
+          // Fallback: search by address
+          tokenKey = findTokenKeyByAddress(networkKey, tokenIdentifier, prev);
+        }
+      } else {
+        // Try to find by symbol (backward compatibility)
+        tokenKey = findTokenKeyBySymbol(networkKey, tokenIdentifier, prev);
+      }
+      
+      if (tokenKey && newTokens[tokenKey]) {
+        delete newTokens[tokenKey];
+      } else {
+        // Fallback: try direct key deletion (for legacy symbol-based keys)
+        delete newTokens[tokenIdentifier];
+      }
       
       return {
         ...prev,
@@ -575,16 +624,29 @@ export const SettingsProvider = ({ children }) => {
   }, [settings]);
 
   // Get available tokens for a network with custom settings applied
+  // Uses token-helpers as source of truth
   const getNetworkTokens = useCallback((networkKey) => {
-    const network = getNetworkWithSettings(networkKey);
-    return network ? network.tokens : {};
-  }, [getNetworkWithSettings]);
+    return getNetworkTokensHelper(networkKey, settings);
+  }, [settings]);
 
-  // Get a specific token for a network with custom settings applied
+  // Get a specific token for a network by symbol (backward compatibility)
+  // Returns first token matching the symbol if multiple exist
+  // Uses token-helpers as source of truth
   const getNetworkToken = useCallback((networkKey, tokenSymbol) => {
-    const tokens = getNetworkTokens(networkKey);
-    return tokens[tokenSymbol] || null;
-  }, [getNetworkTokens]);
+    return getTokenBySymbolHelper(networkKey, tokenSymbol, settings);
+  }, [settings]);
+
+  // Get token by address (preferred method)
+  // Uses token-helpers as source of truth
+  const getTokenByAddress = useCallback((networkKey, address) => {
+    return getTokenByAddressHelper(networkKey, address, settings);
+  }, [settings]);
+
+  // Get all tokens matching a symbol (handles duplicates)
+  // Uses token-helpers as source of truth
+  const getTokensBySymbol = useCallback((networkKey, symbol) => {
+    return getTokensBySymbolHelper(networkKey, symbol, settings);
+  }, [settings]);
 
   // Check if network has custom settings
   const hasCustomSettings = useCallback((networkKey) => {
@@ -647,38 +709,16 @@ export const SettingsProvider = ({ children }) => {
   }, []);
 
   // Get 3DPass token by address
+  // Uses token-helpers as source of truth
   const get3DPassTokenByAddress = useCallback((tokenAddress) => {
-    if (!tokenAddress) return null;
-    
-    const network = getNetworkWithSettings('THREEDPASS');
-    if (!network || !network.tokens) return null;
-    
-    const address = tokenAddress.toLowerCase();
-    
-    // Check if it's P3D
-    if (address === P3D_PRECOMPILE_ADDRESS.toLowerCase()) {
-      return network.tokens.P3D;
-    }
-    
-    // Check other tokens by address
-    for (const [, token] of Object.entries(network.tokens)) {
-      if (token.address.toLowerCase() === address) {
-        return token;
-      }
-    }
-    
-    return null;
-  }, [getNetworkWithSettings]);
+    return getTokenByAddressHelper('THREEDPASS', tokenAddress, settings);
+  }, [settings]);
 
-  // Get 3DPass token by symbol
+  // Get 3DPass token by symbol (returns first match)
+  // Uses token-helpers as source of truth
   const get3DPassTokenBySymbol = useCallback((symbol) => {
-    if (!symbol) return null;
-    
-    const network = getNetworkWithSettings('THREEDPASS');
-    if (!network || !network.tokens) return null;
-    
-    return network.tokens[symbol] || null;
-  }, [getNetworkWithSettings]);
+    return getTokenBySymbolHelper('THREEDPASS', symbol, settings);
+  }, [settings]);
 
   // Validate token configuration
   const validateTokenConfig = useCallback((tokenConfig) => {
@@ -727,45 +767,34 @@ export const SettingsProvider = ({ children }) => {
   }, [get3DPassTokenByAddress]);
 
   // Get token by address across all networks (for P3D tokens that exist on multiple networks)
-  const getTokenByAddress = useCallback((tokenAddress) => {
+  // Uses token-helpers as source of truth, searches all networks
+  const getTokenByAddressGlobal = useCallback((tokenAddress) => {
     if (!tokenAddress) return null;
     
-    const address = tokenAddress.toLowerCase();
-    
-    // First, search through custom settings
-    for (const [, network] of Object.entries(settings)) {
-      if (network && network.tokens) {
-        for (const [, token] of Object.entries(network.tokens)) {
-          if (token.address && token.address.toLowerCase() === address) {
-            return token;
-          }
-        }
+    // Search through all networks
+    for (const networkKey of Object.keys(NETWORKS)) {
+      const token = getTokenByAddressHelper(networkKey, tokenAddress, settings);
+      if (token) {
+        return token;
       }
     }
     
-    // If not found in custom settings, search through default network configurations
+    // Also check nativeCurrency for tokens like P3D on 3DPass
     for (const [, network] of Object.entries(NETWORKS)) {
-      if (network && network.tokens) {
-        for (const [, token] of Object.entries(network.tokens)) {
-          if (token.address && token.address.toLowerCase() === address) {
-            return token;
-          }
-        }
-      }
-      
-      // Also check nativeCurrency for tokens like P3D on 3DPass
       if (network.nativeCurrency && network.nativeCurrency.symbol) {
-        const nativeToken = {
-          address: network.nativeCurrency.symbol === 'P3D' ? P3D_PRECOMPILE_ADDRESS : '0x0000000000000000000000000000000000000000',
-          symbol: network.nativeCurrency.symbol,
-          name: network.nativeCurrency.name,
-          decimals: network.nativeCurrency.decimals,
-          isNative: true,
-          ...network.nativeCurrency // Include any additional properties like decimalsDisplayMultiplier
-        };
+        const nativeTokenAddress = network.nativeCurrency.symbol === 'P3D' 
+          ? P3D_PRECOMPILE_ADDRESS 
+          : '0x0000000000000000000000000000000000000000';
         
-        if (nativeToken.address && nativeToken.address.toLowerCase() === address) {
-          return nativeToken;
+        if (nativeTokenAddress.toLowerCase() === tokenAddress.toLowerCase()) {
+          return {
+            address: nativeTokenAddress,
+            symbol: network.nativeCurrency.symbol,
+            name: network.nativeCurrency.name,
+            decimals: network.nativeCurrency.decimals,
+            isNative: true,
+            ...network.nativeCurrency // Include any additional properties like decimalsDisplayMultiplier
+          };
         }
       }
     }
@@ -775,27 +804,27 @@ export const SettingsProvider = ({ children }) => {
 
   // Get token decimals display multiplier across all networks
   const getTokenDecimalsDisplayMultiplier = useCallback((tokenAddress) => {
-    const token = getTokenByAddress(tokenAddress);
+    const token = getTokenByAddressGlobal(tokenAddress);
     return token ? token.decimalsDisplayMultiplier : null;
-  }, [getTokenByAddress]);
+  }, [getTokenByAddressGlobal]);
 
   // Get all 3DPass tokens
+  // Uses token-helpers as source of truth
   const getAll3DPassTokens = useCallback(() => {
-    const network = getNetworkWithSettings('THREEDPASS');
-    return network ? network.tokens : {};
-  }, [getNetworkWithSettings]);
+    return getNetworkTokensHelper('THREEDPASS', settings);
+  }, [settings]);
 
   // Get all 3DPass token addresses
+  // Uses token-helpers as source of truth
   const getAll3DPassTokenAddresses = useCallback(() => {
-    const tokens = getAll3DPassTokens();
-    return Object.values(tokens).map(token => token.address);
-  }, [getAll3DPassTokens]);
+    return getTokenAddressesHelper('THREEDPASS', settings);
+  }, [settings]);
 
-  // Get all 3DPass token symbols
+  // Get all 3DPass token symbols (may include duplicates)
+  // Uses token-helpers as source of truth
   const getAll3DPassTokenSymbols = useCallback(() => {
-    const tokens = getAll3DPassTokens();
-    return Object.keys(tokens);
-  }, [getAll3DPassTokens]);
+    return getTokenSymbolsHelper('THREEDPASS', settings);
+  }, [settings]);
 
   // Get bridge instances by network with structure compatibility
   const getBridgeInstancesByNetwork = useCallback((networkSymbol) => {
@@ -923,6 +952,8 @@ export const SettingsProvider = ({ children }) => {
     getAssistantContractsWithSettings,
     getNetworkTokens,
     getNetworkToken,
+    getTokenByAddress,
+    getTokensBySymbol,
     hasCustomSettings,
     getAllCustomTokens,
     getAllCustomBridgeInstances,
@@ -954,7 +985,7 @@ export const SettingsProvider = ({ children }) => {
     get3DPassTokenAssetId,
     get3DPassTokenDecimals,
     get3DPassTokenDecimalsDisplayMultiplier,
-    getTokenByAddress,
+    getTokenByAddressGlobal,
     getTokenDecimalsDisplayMultiplier,
     getAll3DPassTokens,
     getAll3DPassTokenAddresses,

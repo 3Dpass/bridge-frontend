@@ -16,7 +16,7 @@ import { handleTransactionError } from '../utils/error-handler';
 const Deposit = ({ assistant, onClose, onSuccess }) => {
   console.log('🎯 Deposit component rendered for assistant:', assistant.address);
   const { account, provider, signer, network } = useWeb3();
-  const { getAllNetworksWithSettings, get3DPassTokenDecimals, get3DPassTokenDecimalsDisplayMultiplier } = useSettings();
+  const { getAllNetworksWithSettings, get3DPassTokenDecimals, get3DPassTokenDecimalsDisplayMultiplier, getTokenByAddress } = useSettings();
   const [amount, setAmount] = useState('');
   const [imageAmount, setImageAmount] = useState(''); // For ImportWrapper assistants
   const [loading, setLoading] = useState(false);
@@ -154,24 +154,11 @@ const Deposit = ({ assistant, onClose, onSuccess }) => {
     }
     try {
       const networks = getAllNetworksWithSettings();
-      // Check if it's a native token first
-      for (const network of Object.values(networks)) {
-        if (network.tokens) {
-          for (const token of Object.values(network.tokens)) {
-            if (token.isNative && token.address.toLowerCase() === tokenAddress.toLowerCase()) {
-              return token.decimals || 18;
-            }
-          }
-        }
-      }
-      // Check all networks for the token
-      for (const network of Object.values(networks)) {
-        if (network.tokens) {
-          for (const token of Object.values(network.tokens)) {
-            if (token.address.toLowerCase() === tokenAddress.toLowerCase()) {
-              return token.decimals || 18;
-            }
-          }
+      // Use SettingsContext to find token by address across all networks
+      for (const networkKey of Object.keys(networks)) {
+        const token = getTokenByAddress(networkKey, tokenAddress);
+        if (token && token.decimals) {
+          return token.decimals;
         }
       }
       console.warn(`Token decimals not found in settings for: ${tokenAddress}`);
@@ -180,7 +167,7 @@ const Deposit = ({ assistant, onClose, onSuccess }) => {
       console.warn(`Error getting token decimals from settings for ${tokenAddress}:`, error.message);
       return 18; // Default decimals
     }
-  }, [getAllNetworksWithSettings]);
+  }, [getAllNetworksWithSettings, getTokenByAddress]);
 
   // Convert from display amount (with multiplier) to actual amount (for contract)
   const convertDisplayToActual = useCallback((displayAmount, decimals, tokenAddress) => {
@@ -1182,13 +1169,10 @@ const Deposit = ({ assistant, onClose, onSuccess }) => {
           bridgeAddress: assistant.bridgeAddress
         });
         const networks = getAllNetworksWithSettings();
-        const isNativeToken = Object.values(networks).some(network => {
-          if (network.tokens) {
-            return Object.values(network.tokens).some(token => 
-              token.isNative && token.address.toLowerCase() === stakeTokenAddress.toLowerCase()
-            );
-          }
-          return false;
+        // Use SettingsContext to check if token is native
+        const isNativeToken = Object.keys(networks).some(networkKey => {
+          const token = getTokenByAddress(networkKey, stakeTokenAddress);
+          return token && token.isNative && token.address.toLowerCase() === stakeTokenAddress.toLowerCase();
         });
 
         if (isNativeToken) {
@@ -1346,7 +1330,7 @@ const Deposit = ({ assistant, onClose, onSuccess }) => {
     } finally {
       console.log('🔍 loadUserBalances completed');
     }
-  }, [account, provider, stakeTokenAddress, imageTokenAddress, assistant.type, assistant.bridgeAddress, getAllNetworksWithSettings, get3DPassTokenDecimals, network?.chainId, network?.id, assistant.key, getTokenDecimalsFromSettings]);
+  }, [account, provider, stakeTokenAddress, imageTokenAddress, assistant.type, assistant.bridgeAddress, getAllNetworksWithSettings, get3DPassTokenDecimals, network?.chainId, network?.id, assistant.key, getTokenDecimalsFromSettings, getTokenByAddress]);
 
   // Load balances when component mounts
   React.useEffect(() => {

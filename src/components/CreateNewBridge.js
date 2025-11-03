@@ -2,7 +2,6 @@ import React, { useState, useEffect, useCallback } from 'react';
 import PropTypes from 'prop-types';
 import { useWeb3 } from '../contexts/Web3Context';
 import { useSettings } from '../contexts/SettingsContext';
-import { getNetworkWithSettings } from '../utils/settings';
 import { NETWORKS } from '../config/networks';
 import { createFactoryContract } from '../utils/contract-factory';
 import { 
@@ -29,7 +28,7 @@ const GAS_BUFFER_MULTIPLIER = 1.2; // 20% buffer for gas estimation
 
 const CreateNewBridge = ({ networkKey, onClose, onBridgeCreated }) => {
   const { signer, account } = useWeb3();
-  const { settings } = useSettings();
+  const { settings, getNetworkTokens, getNetworkWithSettings, getAssistantContractsWithSettings } = useSettings();
   const [isCreating, setIsCreating] = useState(false);
   const [bridgeType, setBridgeType] = useState('');
   const [homeNetwork, setHomeNetwork] = useState('');
@@ -134,7 +133,7 @@ const CreateNewBridge = ({ networkKey, onClose, onBridgeCreated }) => {
     console.log('🔍 Raw oracles config:', oracles);
     
     return oracleList;
-  }, [networkKey]);
+  }, [networkKey, getNetworkWithSettings]);
 
   // Get available networks (excluding current network)
   const getAvailableNetworks = useCallback(() => {
@@ -162,12 +161,14 @@ const CreateNewBridge = ({ networkKey, onClose, onBridgeCreated }) => {
 
   // Get available tokens for a network (excluding assistant share tokens)
   const getAvailableTokens = useCallback((networkKey) => {
-    const networkConfig = NETWORKS[networkKey];
-    if (!networkConfig?.tokens) return [];
+    // Use SettingsContext to get tokens with settings applied
+    const tokensObj = getNetworkTokens(networkKey);
+    if (!tokensObj || Object.keys(tokensObj).length === 0) return [];
     
-    // Get assistant addresses to exclude
+    // Get assistant addresses to exclude (from config and settings)
     const assistantAddresses = new Set();
-    if (networkConfig.assistants) {
+    const networkConfig = getNetworkWithSettings(networkKey);
+    if (networkConfig?.assistants) {
       Object.values(networkConfig.assistants).forEach(assistant => {
         if (assistant.address) {
           assistantAddresses.add(assistant.address.toLowerCase());
@@ -175,7 +176,15 @@ const CreateNewBridge = ({ networkKey, onClose, onBridgeCreated }) => {
       });
     }
     
-    return Object.entries(networkConfig.tokens)
+    // Also check custom assistants from settings
+    const customAssistants = getAssistantContractsWithSettings();
+    Object.values(customAssistants).forEach(assistant => {
+      if (assistant.address && assistant.networkKey === networkKey) {
+        assistantAddresses.add(assistant.address.toLowerCase());
+      }
+    });
+    
+    return Object.entries(tokensObj)
       .filter(([key, tokenConfig]) => {
         // Exclude tokens that have the same address as an assistant (assistant share tokens)
         return !assistantAddresses.has(tokenConfig.address.toLowerCase());
@@ -189,22 +198,33 @@ const CreateNewBridge = ({ networkKey, onClose, onBridgeCreated }) => {
         isPrecompile: tokenConfig.isPrecompile,
         isNative: tokenConfig.isNative
       }));
-  }, []);
+  }, [getNetworkTokens, getNetworkWithSettings, getAssistantContractsWithSettings]);
 
   // Get available stake tokens for the current network (excluding assistant share tokens)
   const getAvailableStakeTokens = useCallback(() => {
+    // Use SettingsContext to get tokens with settings applied
+    const tokensObj = getNetworkTokens(networkKey);
+    const tokens = tokensObj || {};
+    
     const networkWithSettings = getNetworkWithSettings(networkKey);
-    const tokens = networkWithSettings?.tokens || {};
     
     // Get assistant addresses to exclude
     const assistantAddresses = new Set();
-    if (networkWithSettings.assistants) {
+    if (networkWithSettings?.assistants) {
       Object.values(networkWithSettings.assistants).forEach(assistant => {
         if (assistant.address) {
           assistantAddresses.add(assistant.address.toLowerCase());
         }
       });
     }
+    
+    // Also check custom assistants from settings
+    const customAssistants = getAssistantContractsWithSettings();
+    Object.values(customAssistants).forEach(assistant => {
+      if (assistant.address && assistant.networkKey === networkKey) {
+        assistantAddresses.add(assistant.address.toLowerCase());
+      }
+    });
     
     return Object.entries(tokens)
       .filter(([key, tokenConfig]) => {
@@ -221,22 +241,33 @@ const CreateNewBridge = ({ networkKey, onClose, onBridgeCreated }) => {
         isPrecompile: tokenConfig.isPrecompile,
         isNative: tokenConfig.isNative
       }));
-  }, [networkKey]);
+  }, [networkKey, getNetworkTokens, getNetworkWithSettings, getAssistantContractsWithSettings]);
 
   // Get available non-native precompiles for Import Wrapper bridges (excluding assistant share tokens)
   const getAvailableNonNativePrecompiles = useCallback(() => {
+    // Use SettingsContext to get tokens with settings applied
+    const tokensObj = getNetworkTokens(networkKey);
+    const tokens = tokensObj || {};
+    
     const networkWithSettings = getNetworkWithSettings(networkKey);
-    const tokens = networkWithSettings?.tokens || {};
     
     // Get assistant addresses to exclude
     const assistantAddresses = new Set();
-    if (networkWithSettings.assistants) {
+    if (networkWithSettings?.assistants) {
       Object.values(networkWithSettings.assistants).forEach(assistant => {
         if (assistant.address) {
           assistantAddresses.add(assistant.address.toLowerCase());
         }
       });
     }
+    
+    // Also check custom assistants from settings
+    const customAssistants = getAssistantContractsWithSettings();
+    Object.values(customAssistants).forEach(assistant => {
+      if (assistant.address && assistant.networkKey === networkKey) {
+        assistantAddresses.add(assistant.address.toLowerCase());
+      }
+    });
     
     return Object.entries(tokens)
       .filter(([key, tokenConfig]) => {
@@ -254,7 +285,7 @@ const CreateNewBridge = ({ networkKey, onClose, onBridgeCreated }) => {
         isPrecompile: tokenConfig.isPrecompile,
         isNative: tokenConfig.isNative
       }));
-  }, [networkKey]);
+  }, [networkKey, getNetworkTokens, getNetworkWithSettings, getAssistantContractsWithSettings]);
 
   // Auto-determine bridge type based on network configuration
   useEffect(() => {

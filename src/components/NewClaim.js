@@ -4,14 +4,14 @@ import { useSettings } from '../contexts/SettingsContext';
 import { 
   get3DPassTokenMetadata, 
   get3DPassTokenBalance,
-  get3DPassTokenAllowance,
-  getTokenSymbolFromPrecompile
+  get3DPassTokenAllowance
 } from '../utils/threedpass';
 import { getBlockTimestamp } from '../utils/bridge-contracts';
 import { fetchClaimDetails } from '../utils/claim-details-fetcher.js';
 import { normalizeAmount } from '../utils/data-normalizer.js';
 import { convertActualToDisplay } from '../utils/decimal-converter.js';
 import { addClaimEventToStorage, createClaimEventData } from '../utils/unified-event-cache';
+import { determineClaimBridge } from '../utils/claim-bridge-discriminant.js';
 import { 
   EXPORT_ABI,
   IMPORT_ABI,
@@ -81,6 +81,8 @@ const getNetworkConfig = (networkId) => {
   return Object.values(NETWORKS).find(network => network.id === networkId);
 };
 
+// Note: This function is used outside component context, so it can't use hooks
+// It's kept for backward compatibility but should be replaced with SettingsContext methods in components
 const getTokenDecimals = (networkId, tokenAddress) => {
   const networkConfig = getNetworkConfig(networkId);
   if (!networkConfig || !networkConfig.tokens) return 18; // Default fallback
@@ -293,7 +295,7 @@ const parseError = (error) => {
 
 const NewClaim = ({ isOpen, onClose, selectedToken = null, selectedTransfer = null, onClaimSubmitted = null }) => {
   const { account, provider, network, signer } = useWeb3();
-  const { getBridgeInstancesWithSettings, getNetworkWithSettings, getTokenDecimalsDisplayMultiplier } = useSettings();
+  const { getBridgeInstancesWithSettings, getNetworkWithSettings, getTokenDecimalsDisplayMultiplier, get3DPassTokenBySymbol } = useSettings();
   
   
   // Form state
@@ -411,55 +413,36 @@ const NewClaim = ({ isOpen, onClose, selectedToken = null, selectedTransfer = nu
           let tokenAddress = '';
 
           try {
-            const allBridges = getBridgeInstancesWithSettings();
-            const bridges = Object.values(allBridges || {});
+            // Use the discriminant utility to determine the bridge first
+            // This ensures we use bridgeAddress as the primary source
+            const determinedBridge = determineClaimBridge({
+              tokenAddress: '', // Will be determined from bridge
+              selectedTransfer: selectedTransfer,
+              getBridgeInstancesWithSettings: getBridgeInstancesWithSettings
+            });
 
-            if (selectedTransfer.eventType === 'NewRepatriation') {
-              // Find export bridge on the current network for this token
-              matchedBridge = bridges.find(b =>
-                b.type === 'export' &&
-                b.homeNetwork === network?.name &&
-                (
-                  (selectedTransfer.homeTokenAddress && b.homeTokenAddress?.toLowerCase() === selectedTransfer.homeTokenAddress?.toLowerCase()) ||
-                  (selectedTransfer.homeTokenSymbol && b.homeTokenSymbol === selectedTransfer.homeTokenSymbol)
-                )
-              );
-              tokenAddress = matchedBridge?.homeTokenAddress || '';
-              if (!tokenAddress) {
-                // fallback to any export bridge on this network if symbols/addresses weren't present on event
-                const looseMatch = bridges.find(b => b.type === 'export' && b.homeNetwork === network?.name && b.homeTokenAddress);
-                tokenAddress = looseMatch?.homeTokenAddress || '';
-                matchedBridge = matchedBridge || looseMatch || null;
+            if (determinedBridge) {
+              matchedBridge = determinedBridge;
+              
+              // Determine token address based on bridge type and network
+              if (selectedTransfer.eventType === 'NewRepatriation') {
+                // For repatriation, token is on home network (where we're claiming)
+                tokenAddress = determinedBridge.homeTokenAddress || '';
+              } else if (selectedTransfer.eventType === 'NewExpatriation') {
+                // For expatriation, token is on foreign network (where we're claiming)
+                tokenAddress = determinedBridge.foreignTokenAddress || '';
               }
-            } else if (selectedTransfer.eventType === 'NewExpatriation') {
-              // Find import/import_wrapper bridge on the current (destination) network for this token
-              matchedBridge = bridges.find(b =>
-                (b.type === 'import' || b.type === 'import_wrapper') &&
-                b.foreignNetwork === network?.name &&
-                (
-                  (selectedTransfer.foreignTokenAddress && b.foreignTokenAddress?.toLowerCase() === selectedTransfer.foreignTokenAddress?.toLowerCase()) ||
-                  (selectedTransfer.foreignTokenSymbol && b.foreignTokenSymbol === selectedTransfer.foreignTokenSymbol)
-                )
-              );
-              tokenAddress = matchedBridge?.foreignTokenAddress || '';
-              if (!tokenAddress) {
-                // fallback to any import/import_wrapper bridge on this network if symbols/addresses weren't present on event
-                const looseMatch = bridges.find(b => (b.type === 'import' || b.type === 'import_wrapper') && b.foreignNetwork === network?.name && b.foreignTokenAddress);
-                tokenAddress = looseMatch?.foreignTokenAddress || '';
-                matchedBridge = matchedBridge || looseMatch || null;
-              }
+              
+              // Set the bridge immediately so other logic can use it
+              setSelectedBridge(matchedBridge);
             }
 
-            // Absolute fallback to event fields if still not found
+            // Fallback: If discriminant didn't find a bridge, try to get token address from transfer fields
             if (!tokenAddress) {
               tokenAddress = selectedTransfer.foreignTokenAddress || selectedTransfer.homeTokenAddress || selectedTransfer.toTokenAddress || selectedTransfer.fromTokenAddress || '';
             }
-
-            if (matchedBridge) {
-              setSelectedBridge(matchedBridge);
-            }
           } catch (err) {
-            console.warn('⚠️ Failed to resolve token via settings bridges, falling back to event fields:', err?.message);
+            console.warn('⚠️ Failed to resolve bridge/token via discriminant utility, falling back to event fields:', err?.message);
             tokenAddress = selectedTransfer.foreignTokenAddress || selectedTransfer.homeTokenAddress || selectedTransfer.toTokenAddress || selectedTransfer.fromTokenAddress || '';
           }
 
@@ -1092,204 +1075,27 @@ const NewClaim = ({ isOpen, onClose, selectedToken = null, selectedTransfer = nu
     }
   }, [selectedBridge, provider, account, network?.id]);
 
-  // Determine the correct bridge based on token
+  // Determine the correct bridge based on transfer bridgeAddress
+  // Uses the new discriminant utility that works for all bridge types and transfer directions
   const determineBridge = useCallback(() => {
     if (!formData.tokenAddress) return;
 
-    const allBridges = getBridgeInstancesWithSettings();
-    console.log('🔍 determineBridge called with:', { 
-      tokenAddress: formData.tokenAddress, 
-      currentNetwork: network?.name,
-      currentNetworkId: network?.id,
-      selectedTransfer: selectedTransfer
+    // Use the new claim bridge discriminant utility
+    // This works for all transfer types (NewRepatriation, NewExpatriation) and all bridge types
+    const matchedBridge = determineClaimBridge({
+      tokenAddress: formData.tokenAddress,
+      selectedTransfer: selectedTransfer,
+      getBridgeInstancesWithSettings: getBridgeInstancesWithSettings
     });
-    console.log('📋 All available bridges:', Object.values(allBridges).map(b => ({
-      type: b.type,
-      homeNetwork: b.homeNetwork,
-      foreignNetwork: b.foreignNetwork,
-      homeTokenAddress: b.homeTokenAddress,
-      foreignTokenAddress: b.foreignTokenAddress
-    })));
 
-    // For repatriation claims, prioritize export bridges regardless of current network
-    if (selectedTransfer && selectedTransfer.eventType === 'NewRepatriation') {
-      console.log('🔍 Repatriation detected - looking for export bridge first');
-      
-      // Get foreignTokenAddress from transfer address field
-      // For NewRepatriation, the address field represents the token/bridge address on the foreign network
-      // This is the primary source - foreignTokenAddress is not available in NewRepatriation cases
-      const foreignTokenAddress = selectedTransfer.address;
-      
-      if (!foreignTokenAddress) {
-        console.warn('⚠️ No address available in transfer for NewRepatriation');
-        return;
-      }
-      
-      // Look for export bridge for this token (for repatriation claims)
-      // CRITICAL: Strict match by foreignTokenAddress only - no fallbacks
-      const exportBridge = Object.values(allBridges).find(bridge => {
-        // Strict matching: only bridge.type === 'export' AND foreignTokenAddress matches
-        if (bridge.type !== 'export') {
-          return false;
-        }
-        
-        if (!bridge.foreignTokenAddress) {
-          return false;
-        }
-        
-        const matches = bridge.foreignTokenAddress?.toLowerCase() === foreignTokenAddress?.toLowerCase();
-        
-        console.log('🔍 Checking export bridge for repatriation:', {
-          bridgeType: bridge.type,
-          bridgeForeignTokenAddress: bridge.foreignTokenAddress,
-          bridgeForeignNetwork: bridge.foreignNetwork,
-          transferAddress: foreignTokenAddress,
-          matches
-        });
-        
-        return matches;
-      });
-      
-      if (exportBridge) {
-        console.log('✅ Found export bridge for repatriation:', exportBridge);
-        setSelectedBridge(exportBridge);
-        return;
-      }
+    if (matchedBridge) {
+      console.log('✅ Bridge determined by discriminant:', matchedBridge);
+      setSelectedBridge(matchedBridge);
+    } else {
+      console.log('❌ No bridge found by discriminant for token:', formData.tokenAddress);
+      setSelectedBridge(null);
     }
-
-        // For expatriation claims, look for import bridges on the destination network
-        if (selectedTransfer && selectedTransfer.eventType === 'NewExpatriation') {
-          console.log('🔍 Expatriation detected - looking for import bridge on destination network');
-          
-          // Look for import bridge for this token (for expatriation claims)
-          // The claim should be created on the destination network using an import bridge
-          const importBridge = Object.values(allBridges).find(bridge => {
-            // For non-hybrid networks (like Ethereum), only look for 'import' bridges
-            // Import wrapper bridges cannot be deployed on non-hybrid networks
-            const isImportType = network?.isHybrid ? 
-              (bridge.type === 'import' || bridge.type === 'import_wrapper') : 
-              bridge.type === 'import';
-            
-            const matches = isImportType && 
-              bridge.foreignTokenAddress?.toLowerCase() === formData.tokenAddress.toLowerCase() &&
-              bridge.foreignNetwork === network?.name;
-            
-            console.log('🔍 Checking import bridge for expatriation:', {
-              bridgeType: bridge.type,
-              bridgeHomeTokenAddress: bridge.homeTokenAddress,
-              bridgeForeignTokenAddress: bridge.foreignTokenAddress,
-              bridgeHomeNetwork: bridge.homeNetwork,
-              bridgeForeignNetwork: bridge.foreignNetwork,
-              formDataTokenAddress: formData.tokenAddress,
-              currentNetwork: network?.name,
-              isHybrid: network?.isHybrid,
-              isImportType,
-              matches
-            });
-            
-            return matches;
-          });
-      
-      if (importBridge) {
-        console.log('✅ Found import bridge for expatriation:', importBridge);
-        setSelectedBridge(importBridge);
-        return;
-      }
-    }
-
-    // For 3DPass network (export and import_wrapper bridges)
-    if (network?.id === NETWORKS.THREEDPASS.id) {
-      const tokenSymbol = getTokenSymbolFromPrecompile(formData.tokenAddress);
-      if (!tokenSymbol) return;
-
-      // Check if this is a wrapped token (import_wrapper case)
-      if (tokenSymbol.startsWith('w') && tokenSymbol !== 'wP3D') {
-        console.log('🔍 Looking for import wrapper bridge for wrapped token:', tokenSymbol);
-        
-        // Look for import wrapper bridge for this token
-        // For import wrapper bridges, the token address should match foreignTokenAddress (3DPass side)
-        const importBridge = Object.values(allBridges).find(bridge => {
-          const matches = bridge.type === 'import_wrapper' && 
-            bridge.foreignTokenAddress?.toLowerCase() === formData.tokenAddress.toLowerCase();
-          
-          console.log('🔍 Checking import wrapper bridge:', {
-            bridgeType: bridge.type,
-            bridgeForeignTokenAddress: bridge.foreignTokenAddress,
-            bridgeHomeTokenAddress: bridge.homeTokenAddress,
-            formDataTokenAddress: formData.tokenAddress,
-            matches
-          });
-          
-          return matches;
-        });
-        
-        if (importBridge) {
-          console.log('✅ Found import wrapper bridge:', importBridge);
-          setSelectedBridge(importBridge);
-          return;
-        }
-      }
-
-      // Check if this is a native 3DPass token (export case)
-      if (['P3D', 'FIRE', 'WATER'].includes(tokenSymbol)) {
-        // Look for export bridge for this token
-        // For export bridges, the token address should match homeTokenAddress (3DPass side)
-        const exportBridge = Object.values(allBridges).find(bridge => {
-          const matches = bridge.type === 'export' && 
-            bridge.homeTokenAddress?.toLowerCase() === formData.tokenAddress.toLowerCase();
-          
-          console.log('🔍 Checking export bridge:', {
-            bridgeType: bridge.type,
-            bridgeHomeTokenAddress: bridge.homeTokenAddress,
-            bridgeForeignTokenAddress: bridge.foreignTokenAddress,
-            formDataTokenAddress: formData.tokenAddress,
-            matches
-          });
-          
-          return matches;
-        });
-        
-        if (exportBridge) {
-          console.log('✅ Found export bridge:', exportBridge);
-          setSelectedBridge(exportBridge);
-          return;
-        }
-      }
-    } 
-           // For Ethereum network (export bridges for repatriation claims)
-           else if (network?.id === NETWORKS.ETHEREUM.id) {
-             console.log('🔍 Looking for export bridge for repatriation claim on Ethereum');
-             
-             // Look for export bridge for this token
-             // For repatriation claims on Ethereum, we need an export bridge
-             // The token address should match homeTokenAddress (Ethereum side)
-             const exportBridge = Object.values(allBridges).find(bridge => {
-               const matches = bridge.type === 'export' && 
-                 bridge.homeTokenAddress?.toLowerCase() === formData.tokenAddress.toLowerCase();
-               
-               console.log('🔍 Checking export bridge for repatriation:', {
-                 bridgeType: bridge.type,
-                 bridgeHomeTokenAddress: bridge.homeTokenAddress,
-                 bridgeForeignTokenAddress: bridge.foreignTokenAddress,
-                 bridgeHomeNetwork: bridge.homeNetwork,
-                 bridgeForeignNetwork: bridge.foreignNetwork,
-                 formDataTokenAddress: formData.tokenAddress,
-                 matches
-               });
-               
-               return matches;
-             });
-             
-             if (exportBridge) {
-               console.log('✅ Found export bridge for repatriation:', exportBridge);
-               setSelectedBridge(exportBridge);
-               return;
-             }
-           }
-
-    console.log('❌ No bridge found for token:', formData.tokenAddress, 'on network:', network?.name);
-    setSelectedBridge(null);
-  }, [formData.tokenAddress, getBridgeInstancesWithSettings, network?.id, network?.name, network?.isHybrid, selectedTransfer]);
+  }, [formData.tokenAddress, getBridgeInstancesWithSettings, selectedTransfer]);
 
   // Load required stake with a specific amount
   const loadRequiredStakeWithAmount = useCallback(async (amount) => {
@@ -1650,7 +1456,9 @@ const NewClaim = ({ isOpen, onClose, selectedToken = null, selectedTransfer = nu
       let tokenABI;
       if (network?.id === NETWORKS.THREEDPASS.id) {
         // For 3DPass, use IP3D_ABI for P3D tokens or IPRECOMPILE_ERC20_ABI for other precompile tokens
-        const isP3DToken = selectedBridge.stakeTokenAddress === NETWORKS.THREEDPASS.tokens.P3D.address;
+        // Use SettingsContext to get P3D token address
+        const p3dToken = get3DPassTokenBySymbol('P3D');
+        const isP3DToken = p3dToken && selectedBridge.stakeTokenAddress?.toLowerCase() === p3dToken.address?.toLowerCase();
         tokenABI = isP3DToken ? IP3D_ABI : IPRECOMPILE_ERC20_ABI;
       } else {
         // For other networks (like Ethereum), use standard ERC20 ABI
@@ -1749,7 +1557,9 @@ const NewClaim = ({ isOpen, onClose, selectedToken = null, selectedTransfer = nu
       if (network?.id === NETWORKS.THREEDPASS.id) {
         // For 3DPass network, use 3DPass token approval with two-step process
         // Use IP3D_ABI for P3D tokens or IPRECOMPILE_ERC20_ABI for other precompile tokens
-        const isP3DToken = selectedBridge.stakeTokenAddress === NETWORKS.THREEDPASS.tokens.P3D.address;
+        // Use SettingsContext to get P3D token address
+        const p3dToken = get3DPassTokenBySymbol('P3D');
+        const isP3DToken = p3dToken && selectedBridge.stakeTokenAddress?.toLowerCase() === p3dToken.address?.toLowerCase();
         const tokenABI = isP3DToken ? IP3D_ABI : IPRECOMPILE_ERC20_ABI;
         const tokenContract = new ethers.Contract(selectedBridge.stakeTokenAddress, tokenABI, signer);
         
@@ -3286,10 +3096,40 @@ const NewClaim = ({ isOpen, onClose, selectedToken = null, selectedTransfer = nu
                     <div>
                       <p className="text-secondary-400">Direction</p>
                       <p className="font-medium text-white">
-                        {selectedBridge.type === 'export' ? 
-                          `${network?.name || 'Current Network'} → ${selectedBridge.foreignNetwork || 'External'}` :
-                          `${selectedBridge.homeNetwork || 'External'} → ${network?.name || 'Current Network'}`
-                        }
+                        {(() => {
+                          // Determine direction based on source bridge type (from selectedTransfer.bridgeAddress)
+                          if (!selectedTransfer?.bridgeAddress) {
+                            // Fallback to mapped bridge direction if no source bridge info
+                            return `${selectedBridge.homeNetwork || 'Unknown'} → ${selectedBridge.foreignNetwork || 'Unknown'}`;
+                          }
+                          
+                          // Find the source bridge (the one from selectedTransfer.bridgeAddress)
+                          const allBridges = getBridgeInstancesWithSettings();
+                          const sourceBridge = Object.values(allBridges || {}).find(bridge => 
+                            bridge.address?.toLowerCase() === selectedTransfer.bridgeAddress.toLowerCase()
+                          );
+                          
+                          if (!sourceBridge) {
+                            // Fallback to mapped bridge direction if source bridge not found
+                            return `${selectedBridge.homeNetwork || 'Unknown'} → ${selectedBridge.foreignNetwork || 'Unknown'}`;
+                          }
+                          
+                          const sourceType = sourceBridge.type?.toLowerCase();
+                          
+                          // Logic:
+                          // 1. If source bridge is Import/ImportWrapper → direction is foreignNetwork → homeNetwork
+                          // 2. If source bridge is Export → direction is homeNetwork → foreignNetwork
+                          if (sourceType === 'import' || sourceType === 'import_wrapper') {
+                            // Source is import/import_wrapper → direction is foreignNetwork → homeNetwork
+                            return `${selectedBridge.foreignNetwork || 'Unknown'} → ${selectedBridge.homeNetwork || 'Unknown'}`;
+                          } else if (sourceType === 'export') {
+                            // Source is export → direction is homeNetwork → foreignNetwork
+                            return `${selectedBridge.homeNetwork || 'Unknown'} → ${selectedBridge.foreignNetwork || 'Unknown'}`;
+                          } else {
+                            // Fallback
+                            return `${selectedBridge.homeNetwork || 'Unknown'} → ${selectedBridge.foreignNetwork || 'Unknown'}`;
+                          }
+                        })()}
                       </p>
                     </div>
                     <div>

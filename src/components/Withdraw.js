@@ -14,7 +14,7 @@ import { NETWORKS } from '../config/networks';
 
 const Withdraw = ({ assistant, onClose, onSuccess }) => {
   const { account, provider, signer, network } = useWeb3();
-  const { getAllNetworksWithSettings } = useSettings();
+  const { getAllNetworksWithSettings, getTokenByAddress } = useSettings();
   
   // Debug Web3Context state
   console.log('🔍 Withdraw component Web3Context state:', {
@@ -397,24 +397,11 @@ const Withdraw = ({ assistant, onClose, onSuccess }) => {
     }
     try {
       const networks = getAllNetworksWithSettings();
-      // Check if it's a native token first
-      for (const network of Object.values(networks)) {
-        if (network.tokens) {
-          for (const token of Object.values(network.tokens)) {
-            if (token.isNative && token.address.toLowerCase() === tokenAddress.toLowerCase()) {
-              return token.decimals || 18;
-            }
-          }
-        }
-      }
-      // Check all networks for the token
-      for (const network of Object.values(networks)) {
-        if (network.tokens) {
-          for (const token of Object.values(network.tokens)) {
-            if (token.address.toLowerCase() === tokenAddress.toLowerCase()) {
-              return token.decimals || 18;
-            }
-          }
+      // Use SettingsContext to find token by address across all networks
+      for (const networkKey of Object.keys(networks)) {
+        const token = getTokenByAddress(networkKey, tokenAddress);
+        if (token && token.decimals) {
+          return token.decimals;
         }
       }
       console.warn(`Token decimals not found in settings for: ${tokenAddress}`);
@@ -423,7 +410,7 @@ const Withdraw = ({ assistant, onClose, onSuccess }) => {
       console.warn(`Error getting token decimals from settings for ${tokenAddress}:`, error.message);
       return 18; // Default decimals
     }
-  }, [getAllNetworksWithSettings]);
+  }, [getAllNetworksWithSettings, getTokenByAddress]);
 
   // Load user share token balance
   const loadUserShareBalance = useCallback(async () => {

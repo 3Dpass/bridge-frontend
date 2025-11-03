@@ -12,6 +12,7 @@ import { NETWORKS, ADDRESS_ZERO } from '../config/networks';
 import { getProvider } from './provider-manager';
 import { getNetworkWithSettings } from './settings';
 import { hasBridgesRegistry, getBridgeInfoFromRegistry } from './update-bridge-info';
+import { getNetworkTokens, getTokenByAddress, getTokensBySymbol } from './token-helpers';
 
 // Helper function to get network name from network key
 const getNetworkName = (networkKey) => {
@@ -462,24 +463,14 @@ export const getImportBridgeData = async (provider, bridgeAddress, networkSymbol
  */
 export const getNativeTokenSymbol = (networkKey, settings) => {
   try {
-    // Check in settings first (priority)
-    if (settings && settings[networkKey] && settings[networkKey].tokens) {
-      for (const [tokenSymbol, tokenConfig] of Object.entries(settings[networkKey].tokens)) {
-        if (tokenConfig.isNative === true) {
-          console.log(`✅ Found native token symbol in settings: ${tokenSymbol}`);
-          return tokenSymbol;
-        }
-      }
-    }
+    // Use token-helpers to get all tokens (includes settings)
+    const tokens = getNetworkTokens(networkKey, settings);
     
-    // Check in default config
-    const networkConfig = NETWORKS[networkKey];
-    if (networkConfig && networkConfig.tokens) {
-      for (const [tokenSymbol, tokenConfig] of Object.entries(networkConfig.tokens)) {
-        if (tokenConfig.isNative === true) {
-          console.log(`✅ Found native token symbol in config: ${tokenSymbol}`);
-          return tokenSymbol;
-        }
+    // Find native token
+    for (const [, tokenConfig] of Object.entries(tokens)) {
+      if (tokenConfig.isNative === true) {
+        console.log(`✅ Found native token symbol: ${tokenConfig.symbol}`);
+        return tokenConfig.symbol;
       }
     }
     
@@ -543,41 +534,20 @@ export const discoverTokenSymbol = async (tokenAddress, networkName, settings) =
       }
     }
     
-    // Check if token exists in settings first
-    if (settings && settings[networkKey] && settings[networkKey].tokens) {
-      const tokenKey = Object.keys(settings[networkKey].tokens).find(key => 
-        settings[networkKey].tokens[key].address?.toLowerCase() === tokenAddress.toLowerCase()
-      );
-      
-      if (tokenKey) {
-        const symbol = settings[networkKey].tokens[tokenKey].symbol;
-        console.log(`✅ Found token symbol in settings: ${symbol}`);
-        return symbol;
-      }
-    }
+    // Use token-helpers to find token by address (checks both config and settings)
+    const token = getTokenByAddress(networkKey, tokenAddress, settings);
     
-    // Step 1.5: Check if token exists in default config
-    const networkConfig = NETWORKS[networkKey];
-    if (networkConfig && networkConfig.tokens) {
-      console.log(`🔍 Checking ${Object.keys(networkConfig.tokens).length} tokens in ${networkKey} config`);
-      const tokenKey = Object.keys(networkConfig.tokens).find(key => 
-        networkConfig.tokens[key].address?.toLowerCase() === tokenAddress.toLowerCase()
-      );
-      
-      if (tokenKey) {
-        const symbol = networkConfig.tokens[tokenKey].symbol;
-        console.log(`✅ Found token symbol in config: ${symbol}`);
-        return symbol;
-      } else {
-        console.log(`❌ Token address ${tokenAddress} not found in ${networkKey} config tokens`);
-        console.log(`Available tokens:`, Object.keys(networkConfig.tokens).map(key => ({
-          key,
-          address: networkConfig.tokens[key].address,
-          symbol: networkConfig.tokens[key].symbol
-        })));
-      }
+    if (token) {
+      console.log(`✅ Found token symbol: ${token.symbol}`);
+      return token.symbol;
     } else {
-      console.log(`❌ No tokens configured for network ${networkKey}`);
+      const tokens = getNetworkTokens(networkKey, settings);
+      console.log(`❌ Token address ${tokenAddress} not found in ${networkKey} tokens`);
+      console.log(`Available tokens:`, Object.keys(tokens).map(key => ({
+        key,
+        address: tokens[key].address,
+        symbol: tokens[key].symbol
+      })));
     }
     
     // Step 2: If not found in settings, detect from blockchain
@@ -609,7 +579,8 @@ export const discoverTokenSymbol = async (tokenAddress, networkName, settings) =
             settings[networkKey].tokens = {};
           }
           
-          const tokenKey = `${result.tokenInfo.symbol}_${networkKey}`;
+          // Use address-based key for discovered tokens
+          const tokenKey = tokenAddress.toLowerCase();
           settings[networkKey].tokens[tokenKey] = {
             address: tokenAddress,
             symbol: result.tokenInfo.symbol,
@@ -720,8 +691,10 @@ export const getImportWrapperBridgeData = async (provider, bridgeAddress, networ
       console.log('✅ settings:', settings);
     } catch (error) {
       console.warn('Failed to get settings:', error.message);
-      // Use P3D address from config instead of hardcoding
-      const p3dAddress = NETWORKS[networkSymbol]?.tokens?.P3D?.address || null;
+      // Use token-helpers to get P3D address
+      const p3dTokens = getTokensBySymbol('THREEDPASS', 'P3D', null);
+      const p3dToken = p3dTokens && p3dTokens.length > 0 ? p3dTokens[0] : null;
+      const p3dAddress = p3dToken?.address || null;
       settings = p3dAddress ? { tokenAddress: p3dAddress } : null;
     }
 
@@ -758,9 +731,10 @@ export const getImportWrapperBridgeData = async (provider, bridgeAddress, networ
         stakeTokenSymbol = await discoverTokenSymbol(stakeTokenAddress, currentNetworkName, settings);
       } catch (error) {
         console.warn('Failed to discover stake token symbol:', error);
-        // Get P3D symbol from config instead of hardcoding
-        const p3dSymbol = NETWORKS[networkSymbol]?.tokens?.P3D?.symbol || null;
-        stakeTokenSymbol = p3dSymbol;
+        // Use token-helpers to get P3D symbol
+        const p3dTokens = getTokensBySymbol('THREEDPASS', 'P3D', null);
+        const p3dToken = p3dTokens && p3dTokens.length > 0 ? p3dTokens[0] : null;
+        stakeTokenSymbol = p3dToken?.symbol || null;
       }
     } else if (stakeTokenAddress === ADDRESS_ZERO) {
       // Zero address means native token - get symbol from settings/config
@@ -805,26 +779,9 @@ export const getImportWrapperBridgeData = async (provider, bridgeAddress, networ
 export const getTokenSymbolFromConfig = (tokenAddress, networkSymbol, settings) => {
   if (!tokenAddress) return null;
 
-  // Check in settings first
-  if (settings && settings[networkSymbol] && settings[networkSymbol].tokens) {
-    for (const [symbol, token] of Object.entries(settings[networkSymbol].tokens)) {
-      if (token.address.toLowerCase() === tokenAddress.toLowerCase()) {
-        return symbol;
-      }
-    }
-  }
-
-  // Check in default config
-  const networkConfig = NETWORKS[networkSymbol];
-  if (networkConfig && networkConfig.tokens) {
-    for (const [symbol, token] of Object.entries(networkConfig.tokens)) {
-      if (token.address.toLowerCase() === tokenAddress.toLowerCase()) {
-        return symbol;
-      }
-    }
-  }
-
-  return null;
+  // Use token-helpers to find token by address (checks both config and settings)
+  const token = getTokenByAddress(networkSymbol, tokenAddress, settings);
+  return token ? token.symbol : null;
 };
 
 /**

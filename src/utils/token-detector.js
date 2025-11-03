@@ -6,6 +6,9 @@ import {
   isP3DPrecompile as isP3DPrecompileFromThreedpass,
   getAssetIdFromPrecompile as getAssetIdFromPrecompileFromThreedpass
 } from './threedpass';
+// Note: token-detector.js handles blockchain operations
+// For config access, use token-helpers.js via SettingsContext
+// This separation keeps blockchain dependencies isolated
 
 /**
  * Detect if a token address is a 3DPass precompile

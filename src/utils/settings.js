@@ -482,7 +482,10 @@ export const addCustomToken = (networkKey, tokenSymbol, tokenConfig) => {
       currentSettings[networkKey].tokens = {};
     }
     
-    currentSettings[networkKey].tokens[tokenSymbol] = {
+    // Use address-based key for tokens (tokenSymbol here is the identifier, could be address or symbol)
+    // If tokenConfig has an address, use it as the key, otherwise use tokenSymbol
+    const tokenKey = tokenConfig.address ? tokenConfig.address.toLowerCase() : tokenSymbol;
+    currentSettings[networkKey].tokens[tokenKey] = {
       ...tokenConfig,
       isPrecompile: NETWORKS[networkKey]?.erc20Precompile ? (tokenConfig.isPrecompile || false) : false,
       ...(NETWORKS[networkKey]?.erc20Precompile ? {} : { assetId: undefined }), // Remove assetId for networks without precompile support

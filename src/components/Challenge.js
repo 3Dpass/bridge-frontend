@@ -24,7 +24,7 @@ const getMaxAllowance = () => {
 
 const Challenge = ({ claim, onChallengeSuccess, onClose }) => {
   const { account, provider, network, checkNetwork, switchToRequiredNetwork } = useWeb3();
-  const { getTokenDecimalsDisplayMultiplier, getAllNetworksWithSettings } = useSettings();
+  const { getTokenDecimalsDisplayMultiplier, getAllNetworksWithSettings, getTokenByAddress, getTokenBySymbol, getNetworkTokens } = useSettings();
 
   
   const [loading, setLoading] = useState(false);
@@ -95,7 +95,7 @@ const Challenge = ({ claim, onChallengeSuccess, onClose }) => {
       }
       
       // Find the network that contains this bridge
-      for (const [, networkConfig] of Object.entries(networks)) {
+      for (const [networkKey, networkConfig] of Object.entries(networks)) {
         if (networkConfig && networkConfig.bridges) {
           for (const [, bridge] of Object.entries(networkConfig.bridges)) {
             if (bridge && bridge.address && bridge.address.toLowerCase() === claim.bridgeAddress.toLowerCase()) {
@@ -104,14 +104,12 @@ const Challenge = ({ claim, onChallengeSuccess, onClose }) => {
               const stakeTokenAddress = bridge.stakeTokenAddress;
               const stakeTokenSymbol = bridge.stakeTokenSymbol;
               
-              // Try to find the token in the network's tokens configuration
-              let stakeToken = networkConfig.tokens[stakeTokenAddress];
+              // Use SettingsContext to find the token by address or symbol
+              let stakeToken = getTokenByAddress(networkKey, stakeTokenAddress);
               
               // If not found by address, try to find by symbol
               if (!stakeToken && stakeTokenSymbol) {
-                stakeToken = Object.values(networkConfig.tokens).find(token => 
-                  token.symbol === stakeTokenSymbol
-                );
+                stakeToken = getTokenBySymbol(networkKey, stakeTokenSymbol);
               }
               
               if (stakeToken) {
@@ -124,10 +122,11 @@ const Challenge = ({ claim, onChallengeSuccess, onClose }) => {
                   stakeTokenMultiplier: stakeToken.decimalsDisplayMultiplier || 1
                 };
               } else {
+                const tokens = getNetworkTokens(networkKey);
                 console.error('Stake token not found:', {
                   stakeTokenAddress,
                   stakeTokenSymbol,
-                  availableTokens: Object.keys(networkConfig.tokens)
+                  availableTokens: Object.keys(tokens)
                 });
                 return null;
               }
@@ -149,7 +148,7 @@ const Challenge = ({ claim, onChallengeSuccess, onClose }) => {
       console.error('Error getting required network and stake token:', error);
       return null;
     }
-  }, [claim.bridgeAddress, getAllNetworksWithSettings]);
+  }, [claim.bridgeAddress, getAllNetworksWithSettings, getTokenByAddress, getTokenBySymbol, getNetworkTokens]);
 
   const stakeInfo = getRequiredNetworkAndStakeToken();
   
@@ -662,13 +661,11 @@ const Challenge = ({ claim, onChallengeSuccess, onClose }) => {
     if (tokenAddress) {
       try {
         const networks = getAllNetworksWithSettings();
-        for (const network of Object.values(networks)) {
-          if (network.tokens) {
-            for (const token of Object.values(network.tokens)) {
-              if (token.address?.toLowerCase() === tokenAddress.toLowerCase()) {
-                return token.decimals || 18;
-              }
-            }
+        // Use SettingsContext to find token by address across all networks
+        for (const networkKey of Object.keys(networks)) {
+          const token = getTokenByAddress(networkKey, tokenAddress);
+          if (token && token.decimals) {
+            return token.decimals;
           }
         }
       } catch (error) {

@@ -30,7 +30,7 @@ const compareBalances = (amount, balance, tolerance = 0.000001) => {
 
 const BridgeForm = ({ onNavigateToTransfers }) => {
   const { account, provider, signer, network, isConnected } = useWeb3();
-  const { getNetworkWithSettings, getBridgeInstancesWithSettings, getTokenDecimalsDisplayMultiplier } = useSettings();
+  const { getNetworkWithSettings, getBridgeInstancesWithSettings, getTokenDecimalsDisplayMultiplier, getNetworkTokens } = useSettings();
   
   const [formData, setFormData] = useState({
     sourceNetwork: '',
@@ -66,25 +66,26 @@ const BridgeForm = ({ onNavigateToTransfers }) => {
     const network = getNetworkWithSettings(networkKey);
     if (!network) return [];
     
-    // For 3DPass, all tokens are ERC20 precompiles
-    if (networkName === '3DPass') {
-      return Object.values(network.tokens);
+    // Use SettingsContext to get tokens (includes native currency if configured)
+    const tokensObj = getNetworkTokens(networkKey);
+    const tokens = Object.values(tokensObj);
+    
+    // For non-3DPass networks, ensure native token is included if not already in tokens
+    if (networkName !== '3DPass' && network.nativeCurrency) {
+      const hasNativeToken = tokens.some(t => t.isNative && t.address.toLowerCase() === '0x0000000000000000000000000000000000000000');
+      if (!hasNativeToken) {
+        tokens.unshift({
+          address: '0x0000000000000000000000000000000000000000',
+          symbol: network.nativeCurrency.symbol,
+          name: network.nativeCurrency.name,
+          decimals: network.nativeCurrency.decimals,
+          isNative: true,
+        });
+      }
     }
     
-    // For other networks, include native token
-    const tokens = [
-      {
-        address: '0x0000000000000000000000000000000000000000',
-        symbol: network.nativeCurrency.symbol,
-        name: network.nativeCurrency.name,
-        decimals: network.nativeCurrency.decimals,
-        isNative: true,
-      },
-      ...Object.values(network.tokens),
-    ];
-    
     return tokens;
-  }, [getNetworkWithSettings]);
+  }, [getNetworkWithSettings, getNetworkTokens]);
 
   // Get available source tokens for a network (filtered by export bridges)
   const getAvailableSourceTokens = useCallback((sourceNetwork) => {
@@ -238,50 +239,96 @@ const BridgeForm = ({ onNavigateToTransfers }) => {
     const availableTokenAddresses = new Set();
     
     // Check export bridges (source = home, destination = foreign)
-    Object.values(bridgeInstances).forEach(bridge => {
+    Object.values(bridgeInstances).forEach(exportBridge => {
       console.log('🔍 Checking export bridge for destination tokens:', {
-        bridgeHomeNetwork: bridge.homeNetwork,
-        bridgeHomeTokenAddress: bridge.homeTokenAddress,
-        bridgeForeignNetwork: bridge.foreignNetwork,
-        bridgeForeignTokenAddress: bridge.foreignTokenAddress,
-        bridgeType: bridge.type,
-        matchesSourceNetwork: bridge.homeNetwork === sourceNetwork,
-        matchesSourceToken: bridge.homeTokenAddress?.toLowerCase() === sourceTokenAddress?.toLowerCase(),
-        matchesDestinationNetwork: bridge.foreignNetwork === destinationNetworkName,
-        isExport: bridge.type === 'export'
+        bridgeHomeNetwork: exportBridge.homeNetwork,
+        bridgeHomeTokenAddress: exportBridge.homeTokenAddress,
+        bridgeForeignNetwork: exportBridge.foreignNetwork,
+        bridgeForeignTokenAddress: exportBridge.foreignTokenAddress,
+        bridgeType: exportBridge.type,
+        bridgeId: exportBridge.bridgeId,
+        matchesSourceNetwork: exportBridge.homeNetwork === sourceNetwork,
+        matchesSourceToken: exportBridge.homeTokenAddress?.toLowerCase() === sourceTokenAddress?.toLowerCase(),
+        matchesDestinationNetwork: exportBridge.foreignNetwork === destinationNetworkName,
+        isExport: exportBridge.type === 'export'
       });
       
-      if (bridge.homeNetwork === sourceNetwork && 
-          bridge.homeTokenAddress?.toLowerCase() === sourceTokenAddress?.toLowerCase() &&
-          bridge.foreignNetwork === destinationNetworkName &&
-          bridge.type === 'export') {
-        console.log('✅ Found matching export bridge for destination tokens:', bridge);
-        console.log('🎯 Adding foreign token address to destinations:', bridge.foreignTokenAddress);
-        availableTokenAddresses.add(bridge.foreignTokenAddress);
+      if (exportBridge.homeNetwork === sourceNetwork && 
+          exportBridge.homeTokenAddress?.toLowerCase() === sourceTokenAddress?.toLowerCase() &&
+          exportBridge.foreignNetwork === destinationNetworkName &&
+          exportBridge.type === 'export') {
+        
+        // Verify that a matching import bridge exists with the same bridgeId
+        const matchingImportBridge = Object.values(bridgeInstances).find(importBridge => {
+          const hasMatchingBridgeId = exportBridge.bridgeId && importBridge.bridgeId 
+            ? exportBridge.bridgeId === importBridge.bridgeId 
+            : true; // If either doesn't have bridgeId, allow match (backward compatibility)
+          
+          return (importBridge.type === 'import' || importBridge.type === 'import_wrapper') &&
+                 importBridge.foreignTokenAddress?.toLowerCase() === exportBridge.foreignTokenAddress?.toLowerCase() &&
+                 hasMatchingBridgeId;
+        });
+        
+        if (matchingImportBridge) {
+          console.log('✅ Found matching export bridge with corresponding import bridge (bridgeId match):', {
+            exportBridge: exportBridge.bridgeId,
+            importBridge: matchingImportBridge.bridgeId
+          });
+          console.log('🎯 Adding foreign token address to destinations:', exportBridge.foreignTokenAddress);
+          availableTokenAddresses.add(exportBridge.foreignTokenAddress);
+        } else {
+          console.log('⚠️ Export bridge found but no matching import bridge with same bridgeId:', {
+            exportBridgeId: exportBridge.bridgeId,
+            foreignTokenAddress: exportBridge.foreignTokenAddress
+          });
+        }
       }
     });
     
     // Check import bridges (source = foreign, destination = home)
-    Object.values(bridgeInstances).forEach(bridge => {
+    Object.values(bridgeInstances).forEach(importBridge => {
       console.log('🔍 Checking import bridge for destination tokens:', {
-        bridgeForeignNetwork: bridge.foreignNetwork,
-        bridgeForeignTokenAddress: bridge.foreignTokenAddress,
-        bridgeHomeNetwork: bridge.homeNetwork,
-        bridgeHomeTokenAddress: bridge.homeTokenAddress,
-        bridgeType: bridge.type,
-        matchesSourceNetwork: bridge.foreignNetwork === sourceNetwork,
-        matchesSourceToken: bridge.foreignTokenAddress?.toLowerCase() === sourceTokenAddress?.toLowerCase(),
-        matchesDestinationNetwork: bridge.homeNetwork === destinationNetworkName,
-        isImport: bridge.type === 'import'
+        bridgeForeignNetwork: importBridge.foreignNetwork,
+        bridgeForeignTokenAddress: importBridge.foreignTokenAddress,
+        bridgeHomeNetwork: importBridge.homeNetwork,
+        bridgeHomeTokenAddress: importBridge.homeTokenAddress,
+        bridgeType: importBridge.type,
+        bridgeId: importBridge.bridgeId,
+        matchesSourceNetwork: importBridge.foreignNetwork === sourceNetwork,
+        matchesSourceToken: importBridge.foreignTokenAddress?.toLowerCase() === sourceTokenAddress?.toLowerCase(),
+        matchesDestinationNetwork: importBridge.homeNetwork === destinationNetworkName,
+        isImport: importBridge.type === 'import'
       });
       
-      if (bridge.foreignNetwork === sourceNetwork && 
-          bridge.foreignTokenAddress?.toLowerCase() === sourceTokenAddress?.toLowerCase() &&
-          bridge.homeNetwork === destinationNetworkName &&
-          (bridge.type === 'import' || bridge.type === 'import_wrapper')) {
-        console.log('✅ Found matching import bridge for destination tokens:', bridge);
-        console.log('🎯 Adding home token address to destinations:', bridge.homeTokenAddress);
-        availableTokenAddresses.add(bridge.homeTokenAddress);
+      if (importBridge.foreignNetwork === sourceNetwork && 
+          importBridge.foreignTokenAddress?.toLowerCase() === sourceTokenAddress?.toLowerCase() &&
+          importBridge.homeNetwork === destinationNetworkName &&
+          (importBridge.type === 'import' || importBridge.type === 'import_wrapper')) {
+        
+        // Verify that a matching export bridge exists with the same bridgeId
+        const matchingExportBridge = Object.values(bridgeInstances).find(exportBridge => {
+          const hasMatchingBridgeId = importBridge.bridgeId && exportBridge.bridgeId 
+            ? importBridge.bridgeId === exportBridge.bridgeId 
+            : true; // If either doesn't have bridgeId, allow match (backward compatibility)
+          
+          return exportBridge.type === 'export' &&
+                 exportBridge.foreignTokenAddress?.toLowerCase() === importBridge.foreignTokenAddress?.toLowerCase() &&
+                 hasMatchingBridgeId;
+        });
+        
+        if (matchingExportBridge) {
+          console.log('✅ Found matching import bridge with corresponding export bridge (bridgeId match):', {
+            importBridge: importBridge.bridgeId,
+            exportBridge: matchingExportBridge.bridgeId
+          });
+          console.log('🎯 Adding home token address to destinations:', importBridge.homeTokenAddress);
+          availableTokenAddresses.add(importBridge.homeTokenAddress);
+        } else {
+          console.log('⚠️ Import bridge found but no matching export bridge with same bridgeId:', {
+            importBridgeId: importBridge.bridgeId,
+            foreignTokenAddress: importBridge.foreignTokenAddress
+          });
+        }
       }
     });
     
@@ -343,24 +390,59 @@ const BridgeForm = ({ onNavigateToTransfers }) => {
     console.log('📋 All bridge instances:', bridgeInstances);
     
     // Try to find as expatriation (export bridge: home -> foreign)
-    const expatriationBridge = Object.values(bridgeInstances).find(bridge => {
-      const matches = bridge.homeNetwork === sourceNetwork && 
-        bridge.homeTokenAddress.toLowerCase() === sourceTokenAddress.toLowerCase() &&
-        bridge.foreignNetwork === destinationNetwork && 
-        bridge.foreignTokenAddress.toLowerCase() === destinationTokenAddress.toLowerCase() &&
-        bridge.type === 'export';
+    const expatriationBridge = Object.values(bridgeInstances).find(exportBridge => {
+      const baseMatches = exportBridge.homeNetwork === sourceNetwork && 
+        exportBridge.homeTokenAddress.toLowerCase() === sourceTokenAddress.toLowerCase() &&
+        exportBridge.foreignNetwork === destinationNetwork && 
+        exportBridge.foreignTokenAddress.toLowerCase() === destinationTokenAddress.toLowerCase() &&
+        exportBridge.type === 'export';
+      
+      if (!baseMatches) {
+        console.log('🔍 Checking expatriation bridge:', {
+          bridgeHomeNetwork: exportBridge.homeNetwork,
+          bridgeHomeTokenAddress: exportBridge.homeTokenAddress,
+          bridgeForeignNetwork: exportBridge.foreignNetwork,
+          bridgeForeignTokenAddress: exportBridge.foreignTokenAddress,
+          bridgeType: exportBridge.type,
+          bridgeId: exportBridge.bridgeId,
+          matchesSourceNetwork: exportBridge.homeNetwork === sourceNetwork,
+          matchesSourceToken: exportBridge.homeTokenAddress.toLowerCase() === sourceTokenAddress.toLowerCase(),
+          matchesDestinationNetwork: exportBridge.foreignNetwork === destinationNetwork,
+          matchesDestinationToken: exportBridge.foreignTokenAddress.toLowerCase() === destinationTokenAddress.toLowerCase(),
+          matchesType: exportBridge.type === 'export',
+          baseMatches
+        });
+        return false;
+      }
+      
+      // Verify that a matching import bridge exists with the same bridgeId
+      const matchingImportBridge = Object.values(bridgeInstances).find(importBridge => {
+        const hasMatchingBridgeId = exportBridge.bridgeId && importBridge.bridgeId 
+          ? exportBridge.bridgeId === importBridge.bridgeId 
+          : true; // If either doesn't have bridgeId, allow match (backward compatibility)
+        
+        return (importBridge.type === 'import' || importBridge.type === 'import_wrapper') &&
+               importBridge.foreignTokenAddress?.toLowerCase() === exportBridge.foreignTokenAddress?.toLowerCase() &&
+               hasMatchingBridgeId;
+      });
+      
+      const matches = baseMatches && matchingImportBridge !== undefined;
       
       console.log('🔍 Checking expatriation bridge:', {
-        bridgeHomeNetwork: bridge.homeNetwork,
-        bridgeHomeTokenAddress: bridge.homeTokenAddress,
-        bridgeForeignNetwork: bridge.foreignNetwork,
-        bridgeForeignTokenAddress: bridge.foreignTokenAddress,
-        bridgeType: bridge.type,
-        matchesSourceNetwork: bridge.homeNetwork === sourceNetwork,
-        matchesSourceToken: bridge.homeTokenAddress.toLowerCase() === sourceTokenAddress.toLowerCase(),
-        matchesDestinationNetwork: bridge.foreignNetwork === destinationNetwork,
-        matchesDestinationToken: bridge.foreignTokenAddress.toLowerCase() === destinationTokenAddress.toLowerCase(),
-        matchesType: bridge.type === 'export',
+        bridgeHomeNetwork: exportBridge.homeNetwork,
+        bridgeHomeTokenAddress: exportBridge.homeTokenAddress,
+        bridgeForeignNetwork: exportBridge.foreignNetwork,
+        bridgeForeignTokenAddress: exportBridge.foreignTokenAddress,
+        bridgeType: exportBridge.type,
+        bridgeId: exportBridge.bridgeId,
+        matchingImportBridgeId: matchingImportBridge?.bridgeId,
+        hasMatchingImportBridge: !!matchingImportBridge,
+        matchesSourceNetwork: exportBridge.homeNetwork === sourceNetwork,
+        matchesSourceToken: exportBridge.homeTokenAddress.toLowerCase() === sourceTokenAddress.toLowerCase(),
+        matchesDestinationNetwork: exportBridge.foreignNetwork === destinationNetwork,
+        matchesDestinationToken: exportBridge.foreignTokenAddress.toLowerCase() === destinationTokenAddress.toLowerCase(),
+        matchesType: exportBridge.type === 'export',
+        baseMatches,
         matches
       });
       
@@ -377,24 +459,59 @@ const BridgeForm = ({ onNavigateToTransfers }) => {
     }
     
     // Try to find as repatriation (import bridge: foreign -> home)
-    const repatriationBridge = Object.values(bridgeInstances).find(bridge => {
-      const matches = bridge.foreignNetwork === sourceNetwork && 
-        bridge.foreignTokenAddress.toLowerCase() === sourceTokenAddress.toLowerCase() &&
-        bridge.homeNetwork === destinationNetwork && 
-        bridge.homeTokenAddress.toLowerCase() === destinationTokenAddress.toLowerCase() &&
-        (bridge.type === 'import' || bridge.type === 'import_wrapper');
+    const repatriationBridge = Object.values(bridgeInstances).find(importBridge => {
+      const baseMatches = importBridge.foreignNetwork === sourceNetwork && 
+        importBridge.foreignTokenAddress.toLowerCase() === sourceTokenAddress.toLowerCase() &&
+        importBridge.homeNetwork === destinationNetwork && 
+        importBridge.homeTokenAddress.toLowerCase() === destinationTokenAddress.toLowerCase() &&
+        (importBridge.type === 'import' || importBridge.type === 'import_wrapper');
+      
+      if (!baseMatches) {
+        console.log('🔍 Checking repatriation bridge:', {
+          bridgeForeignNetwork: importBridge.foreignNetwork,
+          bridgeForeignTokenAddress: importBridge.foreignTokenAddress,
+          bridgeHomeNetwork: importBridge.homeNetwork,
+          bridgeHomeTokenAddress: importBridge.homeTokenAddress,
+          bridgeType: importBridge.type,
+          bridgeId: importBridge.bridgeId,
+          matchesSourceNetwork: importBridge.foreignNetwork === sourceNetwork,
+          matchesSourceToken: importBridge.foreignTokenAddress.toLowerCase() === sourceTokenAddress.toLowerCase(),
+          matchesDestinationNetwork: importBridge.homeNetwork === destinationNetwork,
+          matchesDestinationToken: importBridge.homeTokenAddress.toLowerCase() === destinationTokenAddress.toLowerCase(),
+          matchesType: importBridge.type === 'import' || importBridge.type === 'import_wrapper',
+          baseMatches
+        });
+        return false;
+      }
+      
+      // Verify that a matching export bridge exists with the same bridgeId
+      const matchingExportBridge = Object.values(bridgeInstances).find(exportBridge => {
+        const hasMatchingBridgeId = importBridge.bridgeId && exportBridge.bridgeId 
+          ? importBridge.bridgeId === exportBridge.bridgeId 
+          : true; // If either doesn't have bridgeId, allow match (backward compatibility)
+        
+        return exportBridge.type === 'export' &&
+               exportBridge.foreignTokenAddress?.toLowerCase() === importBridge.foreignTokenAddress?.toLowerCase() &&
+               hasMatchingBridgeId;
+      });
+      
+      const matches = baseMatches && matchingExportBridge !== undefined;
       
       console.log('🔍 Checking repatriation bridge:', {
-        bridgeForeignNetwork: bridge.foreignNetwork,
-        bridgeForeignTokenAddress: bridge.foreignTokenAddress,
-        bridgeHomeNetwork: bridge.homeNetwork,
-        bridgeHomeTokenAddress: bridge.homeTokenAddress,
-        bridgeType: bridge.type,
-        matchesSourceNetwork: bridge.foreignNetwork === sourceNetwork,
-        matchesSourceToken: bridge.foreignTokenAddress.toLowerCase() === sourceTokenAddress.toLowerCase(),
-        matchesDestinationNetwork: bridge.homeNetwork === destinationNetwork,
-        matchesDestinationToken: bridge.homeTokenAddress.toLowerCase() === destinationTokenAddress.toLowerCase(),
-        matchesType: bridge.type === 'import' || bridge.type === 'import_wrapper',
+        bridgeForeignNetwork: importBridge.foreignNetwork,
+        bridgeForeignTokenAddress: importBridge.foreignTokenAddress,
+        bridgeHomeNetwork: importBridge.homeNetwork,
+        bridgeHomeTokenAddress: importBridge.homeTokenAddress,
+        bridgeType: importBridge.type,
+        bridgeId: importBridge.bridgeId,
+        matchingExportBridgeId: matchingExportBridge?.bridgeId,
+        hasMatchingExportBridge: !!matchingExportBridge,
+        matchesSourceNetwork: importBridge.foreignNetwork === sourceNetwork,
+        matchesSourceToken: importBridge.foreignTokenAddress.toLowerCase() === sourceTokenAddress.toLowerCase(),
+        matchesDestinationNetwork: importBridge.homeNetwork === destinationNetwork,
+        matchesDestinationToken: importBridge.homeTokenAddress.toLowerCase() === destinationTokenAddress.toLowerCase(),
+        matchesType: importBridge.type === 'import' || importBridge.type === 'import_wrapper',
+        baseMatches,
         matches
       });
       
@@ -1143,7 +1260,7 @@ const BridgeForm = ({ onNavigateToTransfers }) => {
               >
                 <option value="">Select token</option>
                 {sourceTokens.map((token) => (
-                  <option key={token.symbol} value={token.symbol}>
+                  <option key={`${token.address}-${token.symbol}`} value={token.symbol}>
                     {token.symbol} - {token.name}
                   </option>
                 ))}
@@ -1212,7 +1329,7 @@ const BridgeForm = ({ onNavigateToTransfers }) => {
                 <option value="">Select token</option>
                 {destinationTokens.length > 0 ? (
                   destinationTokens.map((token) => (
-                    <option key={token.symbol} value={token.symbol}>
+                    <option key={`${token.address}-${token.symbol}`} value={token.symbol}>
                       {token.symbol} - {token.name}
                     </option>
                   ))

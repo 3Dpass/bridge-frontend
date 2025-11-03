@@ -1,6 +1,7 @@
 import { ethers } from 'ethers';
 import { IP3D_ABI, IPRECOMPILE_ERC20_ABI } from '../contracts/abi';
-import { P3D_PRECOMPILE_ADDRESS, NETWORKS } from '../config/networks';
+import { P3D_PRECOMPILE_ADDRESS } from '../config/networks';
+import { getNetworkTokens } from './token-helpers';
 
 // 3DPass specific utility functions for ERC20 precompile interactions
 
@@ -22,17 +23,8 @@ export const get3DPassTokenABI = (tokenAddress) => {
  * @returns {Object} Object with token addresses as keys and token configs as values
  */
 export const get3DPassTokens = (settings = null) => {
-  const baseTokens = NETWORKS.THREEDPASS.tokens;
-  
-  // If settings are provided and there are custom tokens, merge them
-  if (settings && settings.THREEDPASS && settings.THREEDPASS.tokens) {
-    return {
-      ...baseTokens,
-      ...settings.THREEDPASS.tokens
-    };
-  }
-  
-  return baseTokens;
+  // Use token-helpers to get tokens (includes both config and settings)
+  return getNetworkTokens('THREEDPASS', settings);
 };
 
 /**
@@ -47,14 +39,10 @@ export const get3DPassTokenByAddress = (tokenAddress, settings = null) => {
   const tokens = get3DPassTokens(settings);
   const address = tokenAddress.toLowerCase();
   
-  // Check if it's P3D
-  if (address === P3D_PRECOMPILE_ADDRESS.toLowerCase()) {
-    return tokens.P3D;
-  }
-  
-  // Check other tokens by address
+  // tokens is already an object from getNetworkTokens, with address-based or descriptive keys
+  // Search by address match (works with any key format)
   for (const [, token] of Object.entries(tokens)) {
-    if (token.address.toLowerCase() === address) {
+    if (token.address && token.address.toLowerCase() === address) {
       return token;
     }
   }
@@ -72,7 +60,14 @@ export const get3DPassTokenBySymbol = (symbol, settings = null) => {
   if (!symbol) return null;
   
   const tokens = get3DPassTokens(settings);
-  return tokens[symbol] || null;
+  // Search by symbol (works with any key format)
+  for (const [, token] of Object.entries(tokens)) {
+    if (token.symbol && token.symbol.toUpperCase() === symbol.toUpperCase()) {
+      return token;
+    }
+  }
+  
+  return null;
 };
 
 /**
@@ -495,7 +490,10 @@ export const getAll3DPassTokenAddresses = (settings = null) => {
  */
 export const getAll3DPassTokenSymbols = (settings = null) => {
   const tokens = get3DPassTokens(settings);
-  return Object.keys(tokens);
+  // Return actual token symbols, not keys
+  return Object.values(tokens)
+    .map(token => token.symbol)
+    .filter(symbol => symbol); // Filter out null/undefined
 };
 
 /**

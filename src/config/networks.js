@@ -18,9 +18,11 @@
 
 // Counterstake Bridge configuration
 
+// Native tokens addresses
 export const P3D_PRECOMPILE_ADDRESS = '0x0000000000000000000000000000000000000802'; // native token address on 3dpass
 export const ADDRESS_ZERO = '0x0000000000000000000000000000000000000000'; // native token address on most other networks
 
+// Networks configuration
 export const NETWORKS = {
   // Ethereum network configuration
   ETHEREUM: {
@@ -35,11 +37,6 @@ export const NETWORKS = {
     isEVM: true,
     blockTime: 12, // Average block time in seconds
     claimBlockRatio: 2, // Average claims per block (configurable)
-    nativeCurrency: {
-      name: 'Ether',
-      symbol: 'ETH',
-      decimals: 18,
-    },
     contracts: {
       // CORE Counterstake contracts deployed on Ethereum
       counterstakeFactory: '0x077231Cc83303dF37406C604c9d3F12b9DFcFc3A', // ETHEREUM_COUNTERSTAKE_FACTORY v.1.1
@@ -80,7 +77,7 @@ export const NETWORKS = {
         isNative: false,
         standard: 'ERC20',
       },
-      P3D: {
+      P3D_ON_ETHEREUM: {
         address: '0x4f3a4e37701402C61146071309e45A15843025E1',
         symbol: 'P3D',
         decimals: 18,
@@ -115,7 +112,8 @@ export const NETWORKS = {
         stakeTokenSymbol: 'USDT',
         stakeTokenAddress: '0xdAC17F958D2ee523a2206206994597C13D831ec7', // Stake is required for Claiming USDT on the way back home from 3dpass to Ethereum
         description: 'Ethereum USDT → 3DPass wUSDT Bridge',
-        isIssuerBurner: false // This bridge can only lock and unlock USDT on Ethereum
+        isIssuerBurner: false, // This bridge can only lock and unlock USDT on Ethereum
+        bridgeId: 7
       },
       // Import bridge contracts (3dpass <-> Ethereum)
       P3D_IMPORT: {
@@ -131,7 +129,8 @@ export const NETWORKS = {
         stakeTokenAddress: ADDRESS_ZERO, // Stake is required for Claiming P3D on the way from 3dpass to Ethereum
         oracleAddress: '0xD69cdEF8cD89F1b47d820f4b4d7133DB66E3Fc7F',
         description: 'P3D Import Bridge (3DPass → Ethereum)',
-        isIssuerBurner: true // This bridge is issuer and burner of P3D on Ethereum
+        isIssuerBurner: true, // This bridge is issuer and burner of P3D on Ethereum
+        bridgeId: 19
         }
     },
     // Assistant contracts deployed on Ethereum
@@ -158,6 +157,7 @@ export const NETWORKS = {
       }
     }
   }, 
+
   // BSC network configuration
   BSC: {
     id: 56,
@@ -169,11 +169,6 @@ export const NETWORKS = {
     isEVM: true,
     erc20Precompile: false,
     blockTime: 3, // Average block time in seconds (BSC is ~3 seconds)
-    nativeCurrency: {
-      name: 'BNB',
-      symbol: 'BNB',
-      decimals: 18,
-    },
     contracts: {
       // CORE Counterstake contracts deployed on BSC
       // counterstakeFactory: '0x91C79A253481bAa22E7E481f6509E70e5E6A883F', // v.1.0
@@ -197,7 +192,7 @@ export const NETWORKS = {
         isPrecompile: false,
         isNative: true,
       },
-      P3D: {
+      P3D_ON_BSC: {
         address: '0x078E7A2037b63846836E9d721cf2dabC08b94281',
         symbol: 'P3D',
         decimals: 18,
@@ -233,7 +228,8 @@ export const NETWORKS = {
         stakeTokenAddress: ADDRESS_ZERO, // Stake is required for Claiming P3D on the way from 3dpass to BSC
         oracleAddress: '0xD69cdEF8cD89F1b47d820f4b4d7133DB66E3Fc7F',
         description: 'P3D Import Bridge (3DPass → BSC)',
-        isIssuerBurner: true // This bridge is issuer and burner of P3D on BSC
+        isIssuerBurner: true, // This bridge is issuer and burner of P3D on BSC
+        bridgeId: 20
        }
      },  
         // Assistant contracts deployed on Ethereum
@@ -250,6 +246,7 @@ export const NETWORKS = {
       }
     }  
   },
+  
   // 3DPass network configuration
   THREEDPASS: {
     id: 1333,
@@ -262,12 +259,6 @@ export const NETWORKS = {
     erc20Precompile: true,
     blockTime: 60, // Average block time in seconds (1 minute)
     claimBlockRatio: 0.5, // Average claims per block (configurable) - lower activity
-    nativeCurrency: {
-      name: '3dpass',
-      symbol: 'P3D',
-      decimals: 18,
-      decimalsDisplayMultiplier: 1000000, // Multiplier for displaying decimals in the UI to compensate the differennce between Native P3D (12 decimals) and EVM P3D (18 decimals)
-    },
     contracts: {
       // CORE Counterstake contracts deployed on 3dpass
       bridgesRegistry: '0x9092Fe0755299C57dBC8AbB59678fCc004339a3b', // BridgesRegistry from deployment
@@ -286,7 +277,7 @@ export const NETWORKS = {
         address: P3D_PRECOMPILE_ADDRESS,
         symbol: 'P3D',
         decimals: 18,
-        name: 'P3D Token',
+        name: '3dpass Native Coin on EVM',
         isPrecompile: true,
         isNative: true,
         standard: 'ERC20',
@@ -354,7 +345,8 @@ export const NETWORKS = {
         stakeTokenAddress: P3D_PRECOMPILE_ADDRESS, // Stake is required for Claiming wUSDT on the way from Ethereum to 3dpass
         oracleAddress: '0x237527b4F7bb0030Bd5B7B863839Aa121cefd5fB',
         description: 'USDT Import Wrapper Bridge (Ethereum → 3DPass)',
-        isIssuerBurner: true // This bridge is issuer and burner of wUSDT on 3dpass
+        isIssuerBurner: true, // This bridge is issuer and burner of wUSDT on 3dpass
+        bridgeId: 7
       },
       // Export bridges (3dpass <-> Ethereum)
       P3D_EXPORT: {
@@ -369,7 +361,8 @@ export const NETWORKS = {
         stakeTokenSymbol: 'P3D',
         stakeTokenAddress: P3D_PRECOMPILE_ADDRESS, // Stake is required for Claiming P3D on the way back home from Ethereum to 3dpass
         description: '3DPass P3D → Ethereum P3D Bridge',
-        isIssuerBurner: false // This bridge can only lock and unlock P3D on 3dpass
+        isIssuerBurner: false, // This bridge can only lock and unlock P3D on 3dpass
+        bridgeId: 19
       },
       P3D_EXPORT_2: {
         address: '0x65101a5889F33E303b3753aa7311161F6C708F27', // Not an ERC20 token itself, but a bridge contract that controls locked supply of P3D on 3dpass
@@ -383,7 +376,8 @@ export const NETWORKS = {
         stakeTokenSymbol: 'P3D',
         stakeTokenAddress: P3D_PRECOMPILE_ADDRESS, // Stake is required for Claiming P3D on the way back home from BSC to 3dpass
         description: '3DPass P3D → BSC P3D Bridge',
-        isIssuerBurner: false // This bridge can only lock and unlock P3D on 3dpass
+        isIssuerBurner: false, // This bridge can only lock and unlock P3D on 3dpass
+        bridgeId: 20
       },
     },
     // Assistant contracts deployed on 3DPass

@@ -183,7 +183,7 @@ const getFieldMatchStatus = (claim, field) => {
 
 const ClaimList = ({ activeTab }) => {
   const { account, network, getNetworkWithSettings } = useWeb3();
-  const { getBridgeInstancesWithSettings, getTokenDecimalsDisplayMultiplier, getAllNetworksWithSettings } = useSettings();
+  const { getBridgeInstancesWithSettings, getTokenDecimalsDisplayMultiplier, getNetworkToken } = useSettings();
   const {
     getRequiredNetworkForTransfer,
     getRequiredNetworkForClaim,
@@ -531,9 +531,9 @@ const ClaimList = ({ activeTab }) => {
     
     // Try to get decimals from the target network first (only if targetNetworkSymbol is defined)
     if (targetNetworkSymbol) {
-      const networkConfig = getNetworkWithSettings(targetNetworkSymbol);
-      if (networkConfig && networkConfig.tokens) {
-        const token = networkConfig.tokens[tokenSymbol];
+      const networkKey = Object.keys(NETWORKS).find(key => NETWORKS[key].symbol === targetNetworkSymbol);
+      if (networkKey) {
+        const token = getNetworkToken(networkKey, tokenSymbol);
         if (token && token.decimals) {
           return token.decimals;
         }
@@ -543,12 +543,9 @@ const ClaimList = ({ activeTab }) => {
     
     // Try to get decimals from other networks as fallback
     for (const networkKey of Object.keys(NETWORKS)) {
-      const network = NETWORKS[networkKey];
-      if (network.tokens && network.tokens[tokenSymbol]) {
-        const token = network.tokens[tokenSymbol];
-        if (token && token.decimals) {
-          return token.decimals;
-        }
+      const token = getNetworkToken(networkKey, tokenSymbol);
+      if (token && token.decimals) {
+        return token.decimals;
       }
     }
     
@@ -561,7 +558,7 @@ const ClaimList = ({ activeTab }) => {
     }
     
     return defaultDecimals;
-  }, [network?.symbol, getTransferTokenSymbol, getNetworkWithSettings]);
+  }, [network?.symbol, getTransferTokenSymbol, getNetworkToken]);
 
   const getStakeTokenSymbol = useCallback((claim) => {
     try {
@@ -600,55 +597,53 @@ const ClaimList = ({ activeTab }) => {
     const tokenSymbol = getTransferTokenSymbol(claim);
     
     // Try to get address from current network tokens first
-    const currentNetworkConfig = getNetworkWithSettings(network?.symbol);
-    if (currentNetworkConfig && currentNetworkConfig.tokens) {
-      const token = currentNetworkConfig.tokens[tokenSymbol];
-      if (token && token.address) {
-        return token.address;
-      }
-    }
-    
-    // Try to get address from other networks using settings context
-    const allNetworks = getAllNetworksWithSettings();
-    for (const [, networkConfig] of Object.entries(allNetworks)) {
-      if (networkConfig && networkConfig.tokens && networkConfig.tokens[tokenSymbol]) {
-        const token = networkConfig.tokens[tokenSymbol];
+    if (network?.symbol) {
+      const networkKey = Object.keys(NETWORKS).find(key => NETWORKS[key].symbol === network.symbol);
+      if (networkKey) {
+        const token = getNetworkToken(networkKey, tokenSymbol);
         if (token && token.address) {
           return token.address;
         }
       }
     }
     
+    // Try to get address from other networks using settings context
+    for (const networkKey of Object.keys(NETWORKS)) {
+      const token = getNetworkToken(networkKey, tokenSymbol);
+      if (token && token.address) {
+        return token.address;
+      }
+    }
+    
     return null;
-  }, [network?.symbol, getNetworkWithSettings, getAllNetworksWithSettings, getTransferTokenSymbol]);
+  }, [network?.symbol, getTransferTokenSymbol, getNetworkToken]);
 
   const getStakeTokenDecimals = useCallback((claim) => {
     // Get stake token symbol first
     const stakeTokenSymbol = getStakeTokenSymbol(claim);
     
     // Try to get decimals from current network tokens first
-    const networkConfig = getNetworkWithSettings(network?.symbol);
-    if (networkConfig && networkConfig.tokens) {
-      const token = networkConfig.tokens[stakeTokenSymbol];
-      if (token && token.decimals) {
-        return token.decimals;
-      }
-    }
-    
-    // Try to get decimals from other networks
-    for (const networkKey of Object.keys(NETWORKS)) {
-      const network = NETWORKS[networkKey];
-      if (network.tokens && network.tokens[stakeTokenSymbol]) {
-        const token = network.tokens[stakeTokenSymbol];
+    if (network?.symbol) {
+      const networkKey = Object.keys(NETWORKS).find(key => NETWORKS[key].symbol === network.symbol);
+      if (networkKey) {
+        const token = getNetworkToken(networkKey, stakeTokenSymbol);
         if (token && token.decimals) {
           return token.decimals;
         }
       }
     }
     
+    // Try to get decimals from other networks
+    for (const networkKey of Object.keys(NETWORKS)) {
+      const token = getNetworkToken(networkKey, stakeTokenSymbol);
+      if (token && token.decimals) {
+        return token.decimals;
+      }
+    }
+    
     // If not found in any network config, use a reasonable default
     return 18;
-  }, [network?.symbol, getNetworkWithSettings, getStakeTokenSymbol]);
+  }, [network?.symbol, getStakeTokenSymbol, getNetworkToken]);
 
   // Helper function to check if user has stakes on the current outcome
   const checkUserHasStakesOnCurrentOutcome = useCallback(async (claim, userAddress) => {
