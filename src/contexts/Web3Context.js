@@ -88,26 +88,38 @@ export const Web3Provider = ({ children }) => {
       const providerNetwork = await currentProvider.getNetwork();
       console.log('🔍 Provider network detected:', providerNetwork);
       
+      // Normalize chainId to number (handles BigNumber from ethers v5)
+      let chainId = providerNetwork.chainId;
+      if (chainId && typeof chainId !== 'number') {
+        // Handle BigNumber or string
+        chainId = typeof chainId.toNumber === 'function' ? chainId.toNumber() : parseInt(chainId, 10);
+      }
+      
       // Find network key by chain ID
-      const networkKey = Object.keys(NETWORKS).find(key => NETWORKS[key].id === providerNetwork.chainId);
+      const networkKey = Object.keys(NETWORKS).find(key => NETWORKS[key].id === chainId);
       
       if (networkKey) {
         // Get network with custom settings applied
         const networkWithSettings = getNetworkWithSettings(networkKey);
         if (networkWithSettings) {
+          console.log(`✅ Network matched: ${networkKey} (chainId: ${chainId}) -> ${networkWithSettings.name}`);
           return networkWithSettings;
         }
         
         // Fallback to default network config
-        return NETWORKS[networkKey];
+        const defaultNetwork = NETWORKS[networkKey];
+        console.log(`✅ Network matched: ${networkKey} (chainId: ${chainId}) -> ${defaultNetwork.name}`);
+        return defaultNetwork;
       }
+      
+      console.warn(`⚠️ Network not found in config for chainId: ${chainId}, provider name: ${providerNetwork.name}`);
       
       // If not found in config, return provider network with basic info
       return {
-        id: providerNetwork.chainId,
+        id: chainId,
         name: providerNetwork.name || 'Unknown',
-        symbol: `Chain ${providerNetwork.chainId}`,
-        chainId: providerNetwork.chainId
+        symbol: `Chain ${chainId}`,
+        chainId: chainId
       };
     } catch (error) {
       console.error('Error getting network from provider:', error);
