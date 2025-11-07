@@ -252,6 +252,7 @@ const ClaimList = ({ activeTab }) => {
   // Refs to avoid re-renders/infinite loops during bulk updates
   const bulkProcessedRef = useRef(new Set());
   const bulkRunningRef = useRef(false);
+  const lastProcessedAggregatedDataRef = useRef(null); // Track which aggregatedData we've processed
   // Cache stats removed from UI - cache still works internally for performance
 
   // Helper function to get the correct ABI based on bridge type
@@ -1520,12 +1521,39 @@ const ClaimList = ({ activeTab }) => {
       if (!aggregatedData) return;
       if (bulkRunningRef.current) return;
 
-      // Reset the processed claims set for fresh data
-      // This ensures that when new data is loaded (from discovery), we process all claims again
+      // Create a stable identifier for this aggregatedData based on claim numbers
+      // This helps us detect if this is a genuinely new search or just an update
+      const createDataSignature = (data) => {
+        const allClaimNums = [
+          ...(data.completedTransfers || []),
+          ...(data.suspiciousClaims || [])
+        ]
+          .filter(c => getClaimNumber(c) && c.bridgeAddress)
+          .map(c => {
+            const numStr = getClaimNumber(c) || 'unknown';
+            const addr = (c.bridgeAddress || '').toLowerCase();
+            return `${addr}-${numStr}`;
+          })
+          .sort()
+          .join('|');
+        return allClaimNums;
+      };
+
+      const currentSignature = createDataSignature(aggregatedData);
+      const lastSignature = lastProcessedAggregatedDataRef.current;
+
+      // Only process if this is a genuinely new aggregatedData (different signature)
+      // OR if we haven't processed anything yet
+      const isNewData = lastSignature === null || currentSignature !== lastSignature;
+
+      if (!isNewData) {
+        // This is just an update to existing data, skip bulk processing
+        return;
+      }
+
+      // This is new data from a search - reset the processed claims set
       bulkProcessedRef.current.clear();
-      
-      // Reset the running flag to ensure we can start fresh
-      bulkRunningRef.current = false;
+      lastProcessedAggregatedDataRef.current = currentSignature;
 
       // Gather all claims (completed + suspicious). Pending transfers have no claimNum and should be skipped
       const allClaims = [

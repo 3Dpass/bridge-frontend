@@ -1223,6 +1223,29 @@ const NewClaim = ({ isOpen, onClose, selectedToken = null, selectedTransfer = nu
       // Parse the required stake with correct decimals
       const stakeWei = ethers.utils.parseUnits(stakeAmount, stakeTokenDecimals);
       
+      // For third-party claims, calculate total amount needed (stake + transfer amount)
+      // The bridge needs to transfer both the stake and the transfer amount (amount - reward)
+      let totalRequiredWei = stakeWei;
+      if (isThirdPartyClaim && formData.amount && formData.reward) {
+        // Check if claim token is the same as stake token (Export bridge case)
+        if (formData.tokenAddress.toLowerCase() === selectedBridge.stakeTokenAddress?.toLowerCase()) {
+          // Since claim token = stake token, use the same decimals from contract
+          const amountWei = ethers.BigNumber.from(normalizeAmount(formData.amount));
+          const rewardWei = ethers.BigNumber.from(normalizeAmount(formData.reward));
+          const transferAmountWei = amountWei.sub(rewardWei);
+          
+          // Total required = stake + transfer amount
+          totalRequiredWei = stakeWei.add(transferAmountWei);
+          
+          console.log('🔍 Third-party claim allowance calculation:', {
+            stakeWei: stakeWei.toString(),
+            transferAmountWei: transferAmountWei.toString(),
+            totalRequiredWei: totalRequiredWei.toString(),
+            stakeTokenDecimals
+          });
+        }
+      }
+      
       const allowanceWei = ethers.utils.parseUnits(currentAllowance, stakeTokenDecimals);
       
       // Check if current allowance is at maximum value and display "Max" instead
@@ -1233,9 +1256,11 @@ const NewClaim = ({ isOpen, onClose, selectedToken = null, selectedTransfer = nu
         stakeAmount,
         allowanceWei: allowanceWei.toString(),
         stakeWei: stakeWei.toString(),
+        totalRequiredWei: totalRequiredWei.toString(),
+        isThirdPartyClaim,
         isMaxAllowance,
-        needsApproval: allowanceWei.lt(stakeWei),
-        allowanceComparison: `${allowanceWei.toString()} >= ${stakeWei.toString()} = ${allowanceWei.gte(stakeWei)}`
+        needsApproval: allowanceWei.lt(totalRequiredWei),
+        allowanceComparison: `${allowanceWei.toString()} >= ${totalRequiredWei.toString()} = ${allowanceWei.gte(totalRequiredWei)}`
       });
       
       // Handle max allowance display
@@ -1253,8 +1278,9 @@ const NewClaim = ({ isOpen, onClose, selectedToken = null, selectedTransfer = nu
         // Already has max allowance, no approval needed regardless of user preference
         needsApprovalResult = false;
       } else {
-        // For non-max allowance cases, check if current allowance is sufficient for required stake
-        needsApprovalResult = allowanceWei.lt(stakeWei);
+        // For non-max allowance cases, check if current allowance is sufficient for total required amount
+        // For third-party claims, this includes both stake and transfer amount
+        needsApprovalResult = allowanceWei.lt(totalRequiredWei);
       }
       
       console.log('🔍 Setting needsApproval to:', needsApprovalResult);
@@ -1268,7 +1294,7 @@ const NewClaim = ({ isOpen, onClose, selectedToken = null, selectedTransfer = nu
       }
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedBridge, formData.amount, provider, account, network?.id]);
+  }, [selectedBridge, formData.amount, formData.reward, provider, account, network?.id, isThirdPartyClaim]);
 
   // Check allowance with retry mechanism for post-approval refresh
   const checkAllowanceWithRetry = useCallback(async (maxRetries = 3) => {
@@ -1291,8 +1317,15 @@ const NewClaim = ({ isOpen, onClose, selectedToken = null, selectedTransfer = nu
   }, [checkAllowance]);
 
 
-  // Load available tokens
+  // Load available tokens (only for manual claims without selectedTransfer)
   useEffect(() => {
+    // Skip loading available tokens if selectedTransfer is provided
+    // The token is already determined by the discriminant, and the dropdown is hidden
+    if (selectedTransfer) {
+      console.log('⏭️ Skipping loadAvailableTokens - token already determined by discriminant');
+      return;
+    }
+    
     if (isOpen && (network?.id === NETWORKS.THREEDPASS.id || network?.id === NETWORKS.ETHEREUM.id)) {
       // Add a delay to ensure network switch has completed
       const timer = setTimeout(() => {
@@ -1301,21 +1334,31 @@ const NewClaim = ({ isOpen, onClose, selectedToken = null, selectedTransfer = nu
       
       return () => clearTimeout(timer);
     }
-  }, [isOpen, network, loadAvailableTokens]);
+  }, [isOpen, network, loadAvailableTokens, selectedTransfer]);
 
   // Load token metadata and balance when token address changes
   useEffect(() => {
     if (isOpen && formData.tokenAddress && provider && account) {
-      console.log('🔍 Token address changed, loading metadata and determining bridge:', {
+      console.log('🔍 Token address changed, loading metadata:', {
         tokenAddress: formData.tokenAddress,
-        availableTokensCount: availableTokens.length,
-        availableTokens: availableTokens.map(t => ({ symbol: t.symbol, address: t.address }))
+        selectedBridgeAlreadySet: !!selectedBridge,
+        hasSelectedTransfer: !!selectedTransfer
       });
       loadTokenMetadata();
       loadTokenBalance();
-      determineBridge();
+      
+      // Only determine bridge if selectedTransfer is NOT provided
+      // If selectedTransfer is provided, the form initialization already used the discriminant to set the bridge
+      // We should ONLY use the discriminant, no additional determination
+      if (!selectedTransfer) {
+        console.log('🔍 No selectedTransfer provided, determining bridge...');
+        determineBridge();
+      } else {
+        console.log('⏭️ Skipping bridge determination - using discriminant result from form initialization only');
+      }
     }
-  }, [isOpen, formData.tokenAddress, provider, account, loadTokenMetadata, loadTokenBalance, determineBridge, availableTokens]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isOpen, formData.tokenAddress, provider, account, loadTokenMetadata, loadTokenBalance, determineBridge, selectedTransfer]);
 
   // Load required stake when bridge is determined (even without amount)
   useEffect(() => {
@@ -1564,7 +1607,34 @@ const NewClaim = ({ isOpen, onClose, selectedToken = null, selectedTransfer = nu
         const tokenContract = new ethers.Contract(selectedBridge.stakeTokenAddress, tokenABI, signer);
         
         const decimals = await tokenContract.decimals();
-        const approvalAmount = useMaxAllowance ? getMaxAllowance() : ethers.utils.parseUnits(requiredStake, decimals);
+        
+        // For third-party claims where claim token = stake token, calculate total needed (stake + transfer)
+        let approvalAmount;
+        if (useMaxAllowance) {
+          approvalAmount = getMaxAllowance();
+        } else {
+          const stakeWei = ethers.utils.parseUnits(requiredStake, decimals);
+          
+          // Check if this is a third-party claim with same claim/stake token
+          if (isThirdPartyClaim && formData.tokenAddress && formData.amount && formData.reward &&
+              formData.tokenAddress.toLowerCase() === selectedBridge.stakeTokenAddress?.toLowerCase()) {
+            // Since claim token = stake token, use the same decimals from contract
+            const amountWei = ethers.BigNumber.from(normalizeAmount(formData.amount));
+            const rewardWei = ethers.BigNumber.from(normalizeAmount(formData.reward));
+            const transferAmountWei = amountWei.sub(rewardWei);
+            
+            // Total = stake + transfer amount
+            approvalAmount = stakeWei.add(transferAmountWei);
+            
+            console.log('🔍 3DPass third-party approval calculation:', {
+              stakeWei: stakeWei.toString(),
+              transferAmountWei: transferAmountWei.toString(),
+              totalApprovalAmount: approvalAmount.toString()
+            });
+          } else {
+            approvalAmount = stakeWei;
+          }
+        }
         
         console.log('💰 Parsed amount for 3DPass approval:', ethers.utils.formatUnits(approvalAmount, decimals));
         console.log('🔐 3DPass approval amount:', useMaxAllowance ? 'Max' : ethers.utils.formatUnits(approvalAmount, decimals));
@@ -1659,7 +1729,34 @@ const NewClaim = ({ isOpen, onClose, selectedToken = null, selectedTransfer = nu
         const tokenContract = new ethers.Contract(selectedBridge.stakeTokenAddress, ERC20_ABI, signer);
         
         const decimals = await tokenContract.decimals();
-        const approvalAmount = useMaxAllowance ? getMaxAllowance() : ethers.utils.parseUnits(requiredStake, decimals);
+        
+        // For third-party claims where claim token = stake token, calculate total needed (stake + transfer)
+        let approvalAmount;
+        if (useMaxAllowance) {
+          approvalAmount = getMaxAllowance();
+        } else {
+          const stakeWei = ethers.utils.parseUnits(requiredStake, decimals);
+          
+          // Check if this is a third-party claim with same claim/stake token
+          if (isThirdPartyClaim && formData.tokenAddress && formData.amount && formData.reward &&
+              formData.tokenAddress.toLowerCase() === selectedBridge.stakeTokenAddress?.toLowerCase()) {
+            // Since claim token = stake token, use the same decimals from contract
+            const amountWei = ethers.BigNumber.from(normalizeAmount(formData.amount));
+            const rewardWei = ethers.BigNumber.from(normalizeAmount(formData.reward));
+            const transferAmountWei = amountWei.sub(rewardWei);
+            
+            // Total = stake + transfer amount
+            approvalAmount = stakeWei.add(transferAmountWei);
+            
+            console.log('🔍 Third-party approval calculation:', {
+              stakeWei: stakeWei.toString(),
+              transferAmountWei: transferAmountWei.toString(),
+              totalApprovalAmount: approvalAmount.toString()
+            });
+          } else {
+            approvalAmount = stakeWei;
+          }
+        }
         
         console.log('💰 Parsed amount for approval:', ethers.utils.formatUnits(approvalAmount, decimals));
         console.log('🔐 Approval amount:', useMaxAllowance ? 'Max' : ethers.utils.formatUnits(approvalAmount, decimals));
@@ -3151,16 +3248,36 @@ const NewClaim = ({ isOpen, onClose, selectedToken = null, selectedTransfer = nu
                     <div>
                       <p className="text-secondary-400">Required Stake</p>
                       <p className="font-medium text-white">
-                        {formatHumanReadableForDisplay(
-                          requiredStake,
-                          getStakeTokenDecimals(network?.id, selectedBridge?.stakeTokenAddress),
-                          selectedBridge?.stakeTokenAddress,
-                          getTokenDecimalsDisplayMultiplier
-                        )} {selectedBridge?.stakeTokenSymbol || 'stake'}
+                        {(() => {
+                          // For third-party claims where claim token = stake token, show total needed
+                          if (isThirdPartyClaim && formData.tokenAddress && formData.amount && formData.reward &&
+                              formData.tokenAddress.toLowerCase() === selectedBridge.stakeTokenAddress?.toLowerCase()) {
+                            // Since claim token = stake token, use normalizeAmount and formatAmountForDisplay
+                            const amountWei = ethers.BigNumber.from(normalizeAmount(formData.amount));
+                            const rewardWei = ethers.BigNumber.from(normalizeAmount(formData.reward));
+                            const transferAmountWei = amountWei.sub(rewardWei);
+                            const stakeTokenDecimals = getStakeTokenDecimals(network?.id, selectedBridge?.stakeTokenAddress);
+                            const stakeWei = ethers.utils.parseUnits(requiredStake, stakeTokenDecimals);
+                            const totalWei = stakeWei.add(transferAmountWei);
+                            
+                            return formatAmountForDisplay(
+                              totalWei,
+                              stakeTokenDecimals,
+                              formData.tokenAddress,
+                              getTokenDecimalsDisplayMultiplier
+                            ) + ` ${selectedBridge?.stakeTokenSymbol || 'stake'} (stake + transfer)`;
+                          }
+                          return formatHumanReadableForDisplay(
+                            requiredStake,
+                            getStakeTokenDecimals(network?.id, selectedBridge?.stakeTokenAddress),
+                            selectedBridge?.stakeTokenAddress,
+                            getTokenDecimalsDisplayMultiplier
+                          ) + ` ${selectedBridge?.stakeTokenSymbol || 'stake'}`;
+                        })()}
                         {formData.amount && (
                           <span className="text-xs text-secondary-400 ml-1">
                             (for {formatAmountForDisplay(
-                              ethers.BigNumber.from(toWeiString(formData.amount)),
+                              ethers.BigNumber.from(normalizeAmount(formData.amount)),
                               getTokenDecimals(network?.id, formData.tokenAddress),
                               formData.tokenAddress,
                               getTokenDecimalsDisplayMultiplier
@@ -3625,17 +3742,39 @@ const NewClaim = ({ isOpen, onClose, selectedToken = null, selectedTransfer = nu
                   </div>
                   
                   <p className="text-xs text-secondary-400 mb-2">
-                    The bridge needs permission to spend your {selectedBridge?.stakeTokenSymbol || 'stake'} tokens for staking.
+                    {isThirdPartyClaim && formData.tokenAddress && formData.tokenAddress.toLowerCase() === selectedBridge.stakeTokenAddress?.toLowerCase() 
+                      ? `The bridge needs permission to spend your ${selectedBridge?.stakeTokenSymbol || 'stake'} tokens for both staking and transferring to the recipient (third-party claim).`
+                      : `The bridge needs permission to spend your ${selectedBridge?.stakeTokenSymbol || 'stake'} tokens for staking.`}
                   </p>
                   
                   <div className="bg-warning-900/20 border border-warning-700 rounded-lg p-2 mb-2">
                     <p className="text-xs text-warning-200">
-                      <strong>Required:</strong> {formatHumanReadableForDisplay(
-                        requiredStake,
-                        getStakeTokenDecimals(network?.id, selectedBridge?.stakeTokenAddress),
-                        selectedBridge?.stakeTokenAddress,
-                        getTokenDecimalsDisplayMultiplier
-                      )} {selectedBridge?.stakeTokenSymbol || 'stake'} for staking
+                      <strong>Required:</strong> {(() => {
+                        // For third-party claims where claim token = stake token, show total needed
+                        if (isThirdPartyClaim && formData.tokenAddress && formData.amount && formData.reward &&
+                            formData.tokenAddress.toLowerCase() === selectedBridge.stakeTokenAddress?.toLowerCase()) {
+                          // Since claim token = stake token, use normalizeAmount and formatAmountForDisplay
+                          const amountWei = ethers.BigNumber.from(normalizeAmount(formData.amount));
+                          const rewardWei = ethers.BigNumber.from(normalizeAmount(formData.reward));
+                          const transferAmountWei = amountWei.sub(rewardWei);
+                          const stakeTokenDecimals = getStakeTokenDecimals(network?.id, selectedBridge?.stakeTokenAddress);
+                          const stakeWei = ethers.utils.parseUnits(requiredStake, stakeTokenDecimals);
+                          const totalWei = stakeWei.add(transferAmountWei);
+                          
+                          return formatAmountForDisplay(
+                            totalWei,
+                            stakeTokenDecimals,
+                            formData.tokenAddress,
+                            getTokenDecimalsDisplayMultiplier
+                          ) + ` ${selectedBridge?.stakeTokenSymbol || 'stake'} (stake + transfer for third-party claim)`;
+                        }
+                        return formatHumanReadableForDisplay(
+                          requiredStake,
+                          getStakeTokenDecimals(network?.id, selectedBridge?.stakeTokenAddress),
+                          selectedBridge?.stakeTokenAddress,
+                          getTokenDecimalsDisplayMultiplier
+                        ) + ` ${selectedBridge?.stakeTokenSymbol || 'stake'} for staking`;
+                      })()}
                     </p>
                     <p className="text-xs text-warning-200 mt-1">
                       <strong>Current allowance:</strong> {allowance === 'Max' ? 'Max' : formatHumanReadableForDisplay(
@@ -3729,12 +3868,32 @@ const NewClaim = ({ isOpen, onClose, selectedToken = null, selectedTransfer = nu
                       </div>
                       <div className="flex justify-between">
                         <span className="text-success-300 text-xs">Required for staking:</span>
-                        <span className="text-success-400 font-medium text-xs">{formatHumanReadableForDisplay(
-                          requiredStake,
-                          getStakeTokenDecimals(network?.id, selectedBridge?.stakeTokenAddress),
-                          selectedBridge?.stakeTokenAddress,
-                          getTokenDecimalsDisplayMultiplier
-                        )} {selectedBridge?.stakeTokenSymbol || 'stake'}</span>
+                        <span className="text-success-400 font-medium text-xs">{(() => {
+                          // For third-party claims where claim token = stake token, show total needed
+                          if (isThirdPartyClaim && formData.tokenAddress && formData.amount && formData.reward &&
+                              formData.tokenAddress.toLowerCase() === selectedBridge.stakeTokenAddress?.toLowerCase()) {
+                            // Since claim token = stake token, use normalizeAmount and formatAmountForDisplay
+                            const amountWei = ethers.BigNumber.from(normalizeAmount(formData.amount));
+                            const rewardWei = ethers.BigNumber.from(normalizeAmount(formData.reward));
+                            const transferAmountWei = amountWei.sub(rewardWei);
+                            const stakeTokenDecimals = getStakeTokenDecimals(network?.id, selectedBridge?.stakeTokenAddress);
+                            const stakeWei = ethers.utils.parseUnits(requiredStake, stakeTokenDecimals);
+                            const totalWei = stakeWei.add(transferAmountWei);
+                            
+                            return formatAmountForDisplay(
+                              totalWei,
+                              stakeTokenDecimals,
+                              formData.tokenAddress,
+                              getTokenDecimalsDisplayMultiplier
+                            ) + ` ${selectedBridge?.stakeTokenSymbol || 'stake'} (stake + transfer)`;
+                          }
+                          return formatHumanReadableForDisplay(
+                            requiredStake,
+                            getStakeTokenDecimals(network?.id, selectedBridge?.stakeTokenAddress),
+                            selectedBridge?.stakeTokenAddress,
+                            getTokenDecimalsDisplayMultiplier
+                          ) + ` ${selectedBridge?.stakeTokenSymbol || 'stake'}`;
+                        })()}</span>
                       </div>
                       {allowance === 'Max' && (
                         <div className="text-xs text-success-300 mt-1.5 p-1.5 bg-success-800/30 rounded border border-success-700">

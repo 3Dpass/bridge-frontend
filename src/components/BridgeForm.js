@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { useWeb3 } from '../contexts/Web3Context';
 import { useSettings } from '../contexts/SettingsContext';
 import { NETWORKS } from '../config/networks';
@@ -7,7 +7,7 @@ import { transferToForeignChain, createBridgeContract } from '../utils/bridge-co
 import { getMaxSafeReward } from '../utils/safe-reward-handler';
 import { convertActualToDisplay, convertDisplayToActual } from '../utils/decimal-converter';
 import { switchNetwork } from '../utils/network-switcher';
-import { ArrowDown, ArrowRightLeft, Eye, EyeOff } from 'lucide-react';
+import { ArrowDown, ArrowRightLeft, Eye, EyeOff, Copy, Check } from 'lucide-react';
 import { motion } from 'framer-motion';
 import Expatriation from './Expatriation';
 import Repatriation from './Repatriation';
@@ -51,6 +51,8 @@ const BridgeForm = ({ onNavigateToTransfers }) => {
   const [showRepatriationFlow, setShowRepatriationFlow] = useState(false);
   const [showDestinationAddress, setShowDestinationAddress] = useState(false);
   const [isSwitchingNetwork, setIsSwitchingNetwork] = useState(false);
+  const [bridgeAddressCopied, setBridgeAddressCopied] = useState(false);
+  const previousAccountRef = useRef(account);
 
   // Get available networks (include current network)
   const getAvailableNetworks = () => {
@@ -642,6 +644,61 @@ const BridgeForm = ({ onNavigateToTransfers }) => {
     }
   };
 
+  // Handle bridge address copy
+  const handleCopyBridgeAddress = async () => {
+    if (!selectedBridgeInstance?.address) return;
+    
+    try {
+      await navigator.clipboard.writeText(selectedBridgeInstance.address);
+      setBridgeAddressCopied(true);
+      
+      // Show toast notification
+      toast.success(
+        <div>
+          <h3 className="text-success-400 font-medium">Address Copied</h3>
+          <p className="text-success-300 text-sm mt-1">
+            Bridge contract address copied to clipboard
+          </p>
+        </div>,
+        {
+          duration: 2000,
+          style: {
+            background: '#065f46',
+            border: '1px solid #047857',
+            color: '#fff',
+            padding: '16px',
+            borderRadius: '8px',
+          },
+        }
+      );
+      
+      // Reset copy state after 2 seconds
+      setTimeout(() => {
+        setBridgeAddressCopied(false);
+      }, 2000);
+    } catch (error) {
+      console.error('Failed to copy address:', error);
+      toast.error(
+        <div>
+          <h3 className="text-error-400 font-medium">Copy Failed</h3>
+          <p className="text-error-300 text-sm mt-1">
+            Failed to copy address to clipboard
+          </p>
+        </div>,
+        {
+          duration: 3000,
+          style: {
+            background: '#7f1d1d',
+            border: '1px solid #dc2626',
+            color: '#fff',
+            padding: '16px',
+            borderRadius: '8px',
+          },
+        }
+      );
+    }
+  };
+
   // Handle form changes
   const handleInputChange = (field, value) => {
     console.log('🔄 handleInputChange called:', { field, value });
@@ -1168,11 +1225,27 @@ const BridgeForm = ({ onNavigateToTransfers }) => {
   }, [formData.sourceNetwork, formData.sourceToken, formData.destinationNetwork, sourceTokens, getAvailableDestinationTokens]);
 
   // Auto-fill destination address with current account
+  // Update when account changes to keep it in sync with the signer
   useEffect(() => {
-    if (account && !formData.destinationAddress) {
-      setFormData(prev => ({ ...prev, destinationAddress: account }));
+    if (account) {
+      const previousAccount = previousAccountRef.current;
+      
+      setFormData(prev => {
+        // Update destination address if:
+        // 1. It's empty, OR
+        // 2. It matches the previous account (was auto-filled, so update to new account)
+        if (!prev.destinationAddress || 
+            (previousAccount && prev.destinationAddress.toLowerCase() === previousAccount.toLowerCase())) {
+          return { ...prev, destinationAddress: account };
+        }
+        // If user manually entered a different address, don't overwrite it
+        return prev;
+      });
+      
+      // Update the ref to track the current account for next change
+      previousAccountRef.current = account;
     }
-  }, [account, formData.destinationAddress]);
+  }, [account]);
 
   // Pre-select current network as source network
   useEffect(() => {
@@ -1268,6 +1341,17 @@ const BridgeForm = ({ onNavigateToTransfers }) => {
               {errors.sourceToken && (
                 <p className="text-error-400 text-sm mt-1">{errors.sourceToken}</p>
               )}
+              {formData.sourceToken && (() => {
+                const selectedToken = sourceTokens.find(t => t.symbol === formData.sourceToken);
+                if (selectedToken) {
+                  return (
+                    <p className="text-xs text-secondary-500 mt-1 font-mono">
+                      Contract: {selectedToken.address}
+                    </p>
+                  );
+                }
+                return null;
+              })()}
             </div>
           </div>
 
@@ -1345,6 +1429,17 @@ const BridgeForm = ({ onNavigateToTransfers }) => {
               {errors.destinationToken && (
                 <p className="text-error-400 text-sm mt-1">{errors.destinationToken}</p>
               )}
+              {formData.destinationToken && (() => {
+                const selectedToken = destinationTokens.find(t => t.symbol === formData.destinationToken);
+                if (selectedToken) {
+                  return (
+                    <p className="text-xs text-secondary-500 mt-1 font-mono">
+                     Contract: {selectedToken.address}
+                    </p>
+                  );
+                }
+                return null;
+              })()}
             </div>
           </div>
 
@@ -1522,9 +1617,22 @@ const BridgeForm = ({ onNavigateToTransfers }) => {
                 
                 <div className="flex justify-between items-center">
                   <span className="text-secondary-400 text-sm">Bridge Contract:</span>
-                  <span className="text-white text-sm font-mono">
-                    {selectedBridgeInstance.address.slice(0, 6)}...{selectedBridgeInstance.address.slice(-4)}
-                  </span>
+                  <div className="flex items-center space-x-2">
+                    <button
+                      onClick={handleCopyBridgeAddress}
+                      className="p-1.5 hover:bg-dark-700 rounded transition-colors group"
+                      title="Copy bridge address"
+                    >
+                      {bridgeAddressCopied ? (
+                        <Check className="w-4 h-4 text-success-400" />
+                      ) : (
+                        <Copy className="w-4 h-4 text-secondary-400 group-hover:text-secondary-300" />
+                      )}
+                    </button>
+                    <span className="text-white text-sm font-mono">
+                      {selectedBridgeInstance.address.slice(0, 6)}...{selectedBridgeInstance.address.slice(-4)}
+                    </span>
+                  </div>
                 </div>
               </div>
             </div>
