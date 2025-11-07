@@ -485,15 +485,23 @@ const ClaimList = ({ activeTab }) => {
     const isPending = claim.status === 'pending';
     const isCompletedClaim = claim.status === 'completed';
     
-    
     if (isPending) {
       // For pending transfers, show the original asset (home token)
       const result = claim.homeTokenSymbol || 'Unknown';
       return result;  // Show original token (USDT)
     } else if (isCompletedClaim) {
-      // For completed claims, show the wrapped asset (foreign token)
-      const result = claim.foreignTokenSymbol || 'Unknown';
-      return result;  // Show wrapped token (wUSDT)
+      // For completed claims, the token depends on bridge type:
+      // - Export bridges: claim is for home token (USDT) on home network
+      // - Import bridges: claim is for foreign token (wUSDT) on foreign network
+      if (claim.bridgeType === 'export') {
+        // For export bridges, show the home token (original asset)
+        const result = claim.homeTokenSymbol || 'Unknown';
+        return result;  // Show home token (USDT)
+      } else {
+        // For import bridges, show the foreign token (wrapped asset)
+        const result = claim.foreignTokenSymbol || 'Unknown';
+        return result;  // Show foreign token (wUSDT)
+      }
     } else {
       // Fallback: if we can't determine the type, use the bridge type
       if (claim.bridgeType === 'export') {

@@ -11,7 +11,9 @@ import {
   AlertTriangle, 
   CheckCircle, 
   XCircle,
-  Loader
+  Loader,
+  ChevronDown,
+  ChevronUp
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import toast from 'react-hot-toast';
@@ -34,6 +36,8 @@ const Challenge = ({ claim, onChallengeSuccess, onClose }) => {
   const [userStakeTokenBalance, setUserStakeTokenBalance] = useState(null);
   const [currentAllowance, setCurrentAllowance] = useState(null);
   const [isRevoking, setIsRevoking] = useState(false);
+  const [showClaimDetails, setShowClaimDetails] = useState(false);
+  const [useMaxAllowance, setUseMaxAllowance] = useState(false);
 
   // Helper function to convert BigNumber (live or serialized) to string
   const convertBigNumberToString = (value) => {
@@ -316,6 +320,13 @@ const Challenge = ({ claim, onChallengeSuccess, onClose }) => {
     }
   }, [requiredStake, stakeAmount]);
 
+  // Reset max allowance checkbox when allowance is already at max
+  useEffect(() => {
+    if (currentAllowance === 'Max') {
+      setUseMaxAllowance(false);
+    }
+  }, [currentAllowance]);
+
   const handleChallenge = async () => {
     if (selectedOutcome === null) {
       toast.error('Please select an outcome to challenge');
@@ -392,13 +403,26 @@ const Challenge = ({ claim, onChallengeSuccess, onClose }) => {
         console.log('Current allowance:', currentAllowance.toString());
         console.log('Required amount:', stakeAmountWei.toString());
         
-        // Only approve if current allowance is insufficient and not at maximum
-        if (!currentAllowance.eq(getMaxAllowance()) && currentAllowance.lt(stakeAmountWei)) {
+        // Determine approval amount based on checkbox
+        const approvalAmount = useMaxAllowance ? getMaxAllowance() : stakeAmountWei;
+        
+        // Only approve if current allowance is insufficient
+        // For max allowance: check if not already at max
+        // For specific amount: check if less than required
+        const needsApproval = useMaxAllowance 
+          ? !currentAllowance.eq(getMaxAllowance())
+          : currentAllowance.lt(stakeAmountWei);
+        
+        if (needsApproval) {
           console.log(`Insufficient allowance, approving ${stakeInfo.stakeTokenSymbol} for bridge...`);
+          console.log(`Approval amount: ${useMaxAllowance ? 'MAX' : ethers.utils.formatUnits(stakeAmountWei, stakeDecimals)}`);
           try {
-            const approveTx = await stakeTokenContract.approve(claim.bridgeAddress, stakeAmountWei);
-        await approveTx.wait();
+            const approveTx = await stakeTokenContract.approve(claim.bridgeAddress, approvalAmount);
+            await approveTx.wait();
             console.log(`${stakeInfo.stakeTokenSymbol} approval successful`);
+            
+            // Refresh allowance display after approval
+            await getCurrentAllowance();
           } catch (approveError) {
             console.error(`Error approving ${stakeInfo.stakeTokenSymbol}:`, approveError);
             
@@ -595,10 +619,12 @@ const Challenge = ({ claim, onChallengeSuccess, onClose }) => {
       return claim.bridgeTokenSymbol;
     }
     
-    if (claim.bridgeType === 'import' || claim.bridgeType === 'import_wrapper') {
+    // For export bridges: claim is for home token (USDT) on home network
+    // For import bridges: claim is for foreign token (wUSDT) on foreign network
+    if (claim.bridgeType === 'export') {
       return claim.homeTokenSymbol || 'Unknown';
     }
-    if (claim.bridgeType === 'export') {
+    if (claim.bridgeType === 'import' || claim.bridgeType === 'import_wrapper') {
       return claim.foreignTokenSymbol || 'Unknown';
     }
     
@@ -757,31 +783,53 @@ const Challenge = ({ claim, onChallengeSuccess, onClose }) => {
 
           {/* Claim Information */}
           <div className="bg-dark-800 rounded-lg p-4 mb-6">
-            <h3 className="text-lg font-semibold text-white mb-3">Claim Details</h3>
-            <div className="space-y-2 text-sm">
-              <div className="flex justify-between">
-                <span className="text-secondary-400">Amount:</span>
-                <span className="text-white">
-                  {formatAmount(claim.amount, getTransferTokenDecimals(), getTransferTokenAddress())} {getTransferTokenSymbol()}
-                </span>
-              </div>
-              <div className="flex justify-between">
-                <span className="text-secondary-400">Current Outcome:</span>
-                <span className="text-white font-medium">{getCurrentOutcomeText()}</span>
-              </div>
-              <div className="flex justify-between">
-                <span className="text-secondary-400">YES Stakes:</span>
-                <span className="text-white">
-                  {formatAmount(claim.yesStake || claim.yes_stake, stakeInfo?.stakeTokenDecimals || 18, stakeInfo?.stakeTokenAddress)} {stakeInfo?.stakeTokenSymbol || 'Token'}
-                </span>
-              </div>
-              <div className="flex justify-between">
-                <span className="text-secondary-400">NO Stakes:</span>
-                <span className="text-white">
-                  {formatAmount(claim.noStake || claim.no_stake, stakeInfo?.stakeTokenDecimals || 18, stakeInfo?.stakeTokenAddress)} {stakeInfo?.stakeTokenSymbol || 'Token'}
-                </span>
-              </div>
-            </div>
+            <button
+              onClick={() => setShowClaimDetails(!showClaimDetails)}
+              className="w-full flex items-center justify-between text-left"
+            >
+              <h3 className="text-lg font-semibold text-white">Claim Details</h3>
+              {showClaimDetails ? (
+                <ChevronUp className="w-5 h-5 text-secondary-400" />
+              ) : (
+                <ChevronDown className="w-5 h-5 text-secondary-400" />
+              )}
+            </button>
+            <AnimatePresence>
+              {showClaimDetails && (
+                <motion.div
+                  initial={{ opacity: 0, height: 0 }}
+                  animate={{ opacity: 1, height: 'auto' }}
+                  exit={{ opacity: 0, height: 0 }}
+                  transition={{ duration: 0.2 }}
+                  className="overflow-hidden"
+                >
+                  <div className="space-y-2 text-sm mt-3">
+                    <div className="flex justify-between">
+                      <span className="text-secondary-400">Amount:</span>
+                      <span className="text-white">
+                        {formatAmount(claim.amount, getTransferTokenDecimals(), getTransferTokenAddress())} {getTransferTokenSymbol()}
+                      </span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="text-secondary-400">Current Outcome:</span>
+                      <span className="text-white font-medium">{getCurrentOutcomeText()}</span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="text-secondary-400">YES Stakes:</span>
+                      <span className="text-white">
+                        {formatAmount(claim.yesStake || claim.yes_stake, stakeInfo?.stakeTokenDecimals || 18, stakeInfo?.stakeTokenAddress)} {stakeInfo?.stakeTokenSymbol || 'Token'}
+                      </span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="text-secondary-400">NO Stakes:</span>
+                      <span className="text-white">
+                        {formatAmount(claim.noStake || claim.no_stake, stakeInfo?.stakeTokenDecimals || 18, stakeInfo?.stakeTokenAddress)} {stakeInfo?.stakeTokenSymbol || 'Token'}
+                      </span>
+                    </div>
+                  </div>
+                </motion.div>
+              )}
+            </AnimatePresence>
           </div>
 
           {/* Challenge Outcome Selection */}
@@ -863,6 +911,20 @@ const Challenge = ({ claim, onChallengeSuccess, onClose }) => {
                 {currentAllowance === 'Max' && (
                   <span className="text-success-400 ml-1">(Maximum allowance set)</span>
                 )}
+              </div>
+            )}
+            {currentAllowance !== null && stakeAmount && !isNativeStakeToken() && currentAllowance !== 'Max' && parseFloat(currentAllowance) < parseFloat(stakeAmount) && (
+              <div className="mt-3 flex items-center gap-2">
+                <input
+                  type="checkbox"
+                  id="useMaxAllowance"
+                  checked={useMaxAllowance}
+                  onChange={(e) => setUseMaxAllowance(e.target.checked)}
+                  className="w-4 h-4 text-primary-600 bg-dark-800 border-dark-600 rounded focus:ring-primary-500 focus:ring-2"
+                />
+                <label htmlFor="useMaxAllowance" className="text-sm text-secondary-400 cursor-pointer">
+                  Set Max allowance
+                </label>
               </div>
             )}
           </div>
