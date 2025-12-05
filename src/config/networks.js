@@ -252,7 +252,7 @@ export const NETWORKS = {
     id: 1333,
     name: '3dpass',
     symbol: 'P3D',
-    rpcUrl: 'https://rpc-http.3dpass.org',
+    rpcUrl: 'https://rpc.p3d.top',
     explorer: 'https://3dpscan.xyz',
     isHybrid: true,
     isEVM: true,
